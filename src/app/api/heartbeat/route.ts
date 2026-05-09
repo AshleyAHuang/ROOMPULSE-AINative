@@ -56,7 +56,14 @@ function isHeartbeatPayload(value: unknown): value is CreateHeartbeatInputArgs {
     value.observedSpeakerLabels.every((label) => typeof label === "string") &&
     isFiniteNumber(value.lastHeartbeatAt) &&
     isFiniteNumber(value.now) &&
-    Array.isArray(value.priorInterventions)
+    Array.isArray(value.priorInterventions) &&
+    (value.currentReviewMarkdown === undefined ||
+      typeof value.currentReviewMarkdown === "string") &&
+    (value.reviewVersions === undefined || Array.isArray(value.reviewVersions)) &&
+    (value.meetingStartedAt === undefined ||
+      isFiniteNumber(value.meetingStartedAt)) &&
+    (value.isPaused === undefined || typeof value.isPaused === "boolean") &&
+    (value.heartbeatCount === undefined || isFiniteNumber(value.heartbeatCount))
   );
 }
 

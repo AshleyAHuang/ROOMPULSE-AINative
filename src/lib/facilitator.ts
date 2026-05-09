@@ -57,12 +57,35 @@ export interface TimelineEntry {
   source: FacilitatorOutput["source"];
   cards: FacilitatorCard[];
   summary: string;
+  reviewMarkdown?: string;
+  reminder?: string | null;
 }
 
 export interface AgendaProgress {
   total: number;
   completed: number;
   active: AgendaItem | null;
+}
+
+export interface ReviewVersion {
+  id: string;
+  timestamp: number;
+  source: FacilitatorOutput["source"] | "initial" | "restored";
+  markdown: string;
+  summary: string;
+}
+
+export interface AgendaAction {
+  itemId: string;
+  done: boolean;
+  reason: string;
+}
+
+export interface HeartbeatRuntimeState {
+  meetingStartedAt: number;
+  meetingElapsedSeconds: number;
+  isPaused: boolean;
+  heartbeatCount: number;
 }
 
 export interface HeartbeatInput {
@@ -72,6 +95,9 @@ export interface HeartbeatInput {
   participation: ParticipationStatus;
   agendaProgress: AgendaProgress;
   priorInterventions: TimelineEntry[];
+  currentReviewMarkdown: string;
+  reviewVersions: ReviewVersion[];
+  runtime: HeartbeatRuntimeState;
   now: number;
 }
 
@@ -80,6 +106,9 @@ export interface FacilitatorOutput {
   cards: FacilitatorCard[];
   summary: string;
   nextHeartbeatHint: string;
+  reviewMarkdown: string;
+  agendaActions: AgendaAction[];
+  ephemeralReminder: string | null;
   adapterNotice?: string;
 }
 
@@ -90,6 +119,11 @@ export interface CreateHeartbeatInputArgs {
   lastHeartbeatAt: number;
   now: number;
   priorInterventions: TimelineEntry[];
+  currentReviewMarkdown?: string;
+  reviewVersions?: ReviewVersion[];
+  meetingStartedAt?: number;
+  isPaused?: boolean;
+  heartbeatCount?: number;
 }
 
 export function createHeartbeatInput({
@@ -98,8 +132,15 @@ export function createHeartbeatInput({
   observedSpeakerLabels,
   lastHeartbeatAt,
   now,
-  priorInterventions
+  priorInterventions,
+  currentReviewMarkdown,
+  reviewVersions,
+  meetingStartedAt,
+  isPaused,
+  heartbeatCount
 }: CreateHeartbeatInputArgs): HeartbeatInput {
+  const startedAt = meetingStartedAt ?? now;
+
   return {
     meeting,
     transcript,
@@ -112,269 +153,120 @@ export function createHeartbeatInput({
     ),
     agendaProgress: getAgendaProgress(meeting.agenda),
     priorInterventions,
+    currentReviewMarkdown:
+      currentReviewMarkdown ?? createInitialReviewMarkdown(meeting),
+    reviewVersions: reviewVersions ?? [],
+    runtime: {
+      meetingStartedAt: startedAt,
+      meetingElapsedSeconds: Math.max(0, Math.floor((now - startedAt) / 1000)),
+      isPaused: isPaused ?? false,
+      heartbeatCount: heartbeatCount ?? priorInterventions.length
+    },
     now
   };
 }
 
-interface Signal {
-  kind: FacilitatorCardKind;
-  title: string;
-  body: string;
-  priority: "low" | "medium" | "high";
-  score: number;
-  /** Kinds whose presence in recent pulses should suppress this signal. */
-  decayAgainst?: FacilitatorCardKind[];
-}
-
-const RISK_TERMS: Array<[RegExp, number]> = [
-  [/\b(blocker|blocked|stuck|cannot|can't)\b/i, 3],
-  [/\b(unresolved|open\s+(risk|issue))\b/i, 3],
-  [/\b(risk|concern|issue|problem)\b/i, 2],
-  [/\b(tight|behind|slipping|short(\s+on)?|under(\s+water)?)\b/i, 2],
-  [/\b(deadline|by\s+(eod|friday|monday|tomorrow)|this\s+week)\b/i, 2]
-];
-
-const DECISION_TERMS: Array<[RegExp, number]> = [
-  [/\b(decide|decision|sign\s+off)\b/i, 3],
-  [/\bwho\s+(owns|will|can)\b/i, 3],
-  [/\b(owner|own\s+it|accountable|responsible)\b/i, 2],
-  [/\b(agree|agreed|approved|okay\s+with)\b/i, 1]
-];
-
-const ACTION_TERMS: Array<[RegExp, number]> = [
-  [/\b(i'?ll|i\s+will|i\s+can\s+take)\b/i, 3],
-  [/\b(by\s+(eod|tomorrow|next\s+\w+))\b/i, 2],
-  [/\b(action\s*item|todo|follow\s*up|next\s+step)\b/i, 2]
-];
-
-const DRIFT_TERMS: Array<[RegExp, number]> = [
-  [/\b(parking\s+lot|park\s+(this|that|it))\b/i, 3],
-  [/\b(side\s+topic|off\s+track|tangent|unrelated)\b/i, 2],
-  [/\b(later|next\s+meeting|another\s+time)\b/i, 1],
-  [/\b(swag|merch)\b/i, 1]
-];
-
-const HEDGE_TERMS = /\b(maybe|kinda|sort\s+of|i\s+guess|not\s+sure|might)\b/gi;
-
 export async function runLocalFacilitation(
   input: HeartbeatInput
 ): Promise<FacilitatorOutput> {
-  const recentKinds = new Set<FacilitatorCardKind>(
-    input.priorInterventions
-      .slice(0, 2)
-      .flatMap((entry) => entry.cards.map((card) => card.kind))
-  );
+  const agendaActions = applyAgendaCoverage(input.meeting.agenda, input.transcript)
+    .filter((item, index) => item.done !== input.meeting.agenda[index]?.done)
+    .map((item) => ({
+      itemId: item.id,
+      done: item.done,
+      reason:
+        "Transcript clearly indicates this agenda item was covered. Review and untick if the room disagrees."
+    }));
+  const cards: FacilitatorCard[] = [
+    {
+      id: createCardId(input.now, "heartbeat"),
+      kind: "heartbeat",
+      title: "Heartbeat check",
+      body: buildHeartbeatBody(input),
+      priority: "medium"
+    }
+  ];
 
-  const heartbeatCard: FacilitatorCard = {
-    id: createCardId(input.now, "heartbeat"),
-    kind: "heartbeat",
-    title: "Heartbeat check",
-    body: buildHeartbeatBody(input),
-    priority: "medium"
-  };
-
-  const signals: Signal[] = [];
-
-  // Participation: scales with how many voices are missing.
   if (input.participation.needsNudge && input.participation.reminder) {
-    const missingRatio =
-      input.participation.expected === 0
-        ? 0
-        : input.participation.missingCount / input.participation.expected;
-    signals.push({
+    cards.push({
+      id: createCardId(input.now, "participation"),
       kind: "participation",
       title: "Open the floor",
       body: input.participation.reminder,
-      priority: missingRatio > 0.4 ? "high" : "medium",
-      score: 6 + missingRatio * 4
+      priority: "high"
     });
   }
 
-  // Topic-based signals derived from transcript.
-  const focusLines = input.transcriptDelta.length
-    ? input.transcriptDelta
-    : input.transcript.slice(-6);
+  const transcriptText = input.transcriptDelta
+    .map((line) => line.text)
+    .join(" ")
+    .toLowerCase();
+  const allTranscriptText = input.transcript
+    .map((line) => line.text)
+    .join(" ")
+    .toLowerCase();
+  const combinedText = [transcriptText, allTranscriptText].join(" ");
 
-  const riskScore = scoreLines(focusLines, RISK_TERMS);
-  if (riskScore.total > 0) {
-    const quote = trimQuote(riskScore.bestLine?.text);
-    signals.push({
+  if (/\b(risk|concern|blocked|blocker|tight|unresolved|issue)\b/.test(combinedText)) {
+    cards.push({
+      id: createCardId(input.now, "risk"),
       kind: "risk",
       title: "Name the risk",
-      body: quote
-        ? `Risk surfaced: "${quote}". Clarify owner, impact, and the next concrete mitigation before moving on.`
-        : "A risk or unresolved concern is active in the room. Clarify owner, impact, and the next concrete mitigation.",
-      priority: riskScore.total >= 4 ? "high" : "medium",
-      score: 4 + riskScore.total,
-      decayAgainst: ["risk"]
+      body:
+        "A risk or unresolved concern is active in the room. Clarify owner, impact, and the next concrete mitigation.",
+      priority: "high"
     });
   }
 
-  const decisionScore = scoreLines(focusLines, DECISION_TERMS);
-  if (decisionScore.total > 0) {
-    const quote = trimQuote(decisionScore.bestLine?.text);
-    signals.push({
+  if (/\b(decide|decision|owner|owners|who owns|accountable)\b/.test(combinedText)) {
+    cards.push({
+      id: createCardId(input.now, "decision"),
       kind: "decision",
       title: "Capture the decision",
-      body: quote
-        ? `Decision in motion: "${quote}". Name the proposed owner and ask for explicit agreement.`
-        : "The room is circling a decision. State the proposed owner and ask for explicit agreement.",
-      priority: decisionScore.total >= 4 ? "high" : "medium",
-      score: 3.5 + decisionScore.total,
-      decayAgainst: ["decision"]
+      body:
+        "The room is circling an ownership decision. State the proposed owner and ask for explicit agreement.",
+      priority: "medium"
     });
   }
 
-  const actionScore = scoreLines(focusLines, ACTION_TERMS);
-  if (actionScore.total > 0) {
-    const quote = trimQuote(actionScore.bestLine?.text);
-    const speaker = actionScore.bestLine?.speakerLabel;
-    signals.push({
-      kind: "action",
-      title: "Lock the action",
-      body: quote && speaker
-        ? `${speaker} just committed: "${quote}". Write it down with a due date.`
-        : "Someone just committed to a next step. Capture owner, deliverable, and due date now.",
-      priority: "medium",
-      score: 3 + actionScore.total,
-      decayAgainst: ["action"]
-    });
-  }
-
-  const driftScore = scoreLines(focusLines, DRIFT_TERMS);
-  if (driftScore.total > 0) {
-    signals.push({
+  if (/\b(swag|parking lot|later|side topic|off track|unrelated)\b/.test(combinedText)) {
+    cards.push({
+      id: createCardId(input.now, "drift"),
       kind: "drift",
       title: "Check agenda drift",
       body:
         "A side topic may be pulling attention away from the goal. Park it unless it changes the current decision.",
-      priority: "medium",
-      score: 2.5 + driftScore.total,
-      decayAgainst: ["drift"]
+      priority: "medium"
     });
   }
 
-  // Hedging: when the room hedges a lot, the meeting risks ending without a decision.
-  const hedgeMatches = focusLines
-    .map((line) => line.text.match(HEDGE_TERMS)?.length ?? 0)
-    .reduce((sum, count) => sum + count, 0);
-  if (hedgeMatches >= 2 && !recentKinds.has("decision")) {
-    signals.push({
-      kind: "reminder",
-      title: "Push past hedging",
-      body: `Heard ${hedgeMatches} hedge phrases since last pulse. Restate the question crisply and ask for a yes or no.`,
-      priority: "medium",
-      score: 2.2,
-      decayAgainst: ["reminder"]
-    });
-  }
-
-  // Decision lag: a risk was raised in prior pulses but no decision has been captured.
-  const priorRisk = input.priorInterventions
-    .slice(0, 3)
-    .some((entry) => entry.cards.some((card) => card.kind === "risk"));
-  const priorDecision = input.priorInterventions
-    .slice(0, 3)
-    .some((entry) => entry.cards.some((card) => card.kind === "decision"));
-  if (priorRisk && !priorDecision && riskScore.total === 0) {
-    signals.push({
-      kind: "decision",
-      title: "Still no owner",
-      body: "A risk surfaced earlier but no owner has been captured. Force the decision before the next topic.",
-      priority: "high",
-      score: 5
-    });
-  }
-
-  // Agenda focus: low-priority anchor.
   const activeAgenda = input.agendaProgress.active;
+  const fallbackAgendaActions = inferAgendaActions(input, combinedText);
+  const mergedAgendaActions = mergeAgendaActions([
+    ...agendaActions,
+    ...fallbackAgendaActions
+  ]);
   if (activeAgenda) {
-    signals.push({
+    cards.push({
+      id: createCardId(input.now, "agenda"),
       kind: "agenda",
       title: "Agenda focus",
       body: `Current focus: ${activeAgenda.title}. Keep the room moving toward "${input.meeting.goal}".`,
-      priority: "low",
-      score: 1.2
-    });
-  }
-
-  // Apply decay against recent kinds and rank.
-  const ranked = signals
-    .map((signal) => ({
-      ...signal,
-      score:
-        signal.decayAgainst &&
-        signal.decayAgainst.some((kind) => recentKinds.has(kind))
-          ? signal.score * 0.45
-          : signal.score
-    }))
-    .sort((a, b) => b.score - a.score);
-
-  const cards: FacilitatorCard[] = [heartbeatCard];
-  for (const signal of ranked) {
-    if (cards.length >= 5) break;
-    cards.push({
-      // Suffix with the running index so two signals of the same kind in one
-      // pulse (e.g. a fresh decision signal plus the decision-lag card) get
-      // unique React keys.
-      id: createCardId(input.now, `${signal.kind}-${cards.length}`),
-      kind: signal.kind,
-      title: signal.title,
-      body: signal.body,
-      priority: signal.priority
+      priority: "low"
     });
   }
 
   return {
     source: "local-fallback",
-    cards,
-    summary: `${input.meeting.title}: ${cards.length} facilitator ${
-      cards.length === 1 ? "cue" : "cues"
-    } from ${input.transcriptDelta.length} new transcript ${
-      input.transcriptDelta.length === 1 ? "line" : "lines"
-    }.`,
+    cards: cards.slice(0, 5),
+    summary: `${input.meeting.title}: ${cards.length} facilitator cues generated from ${input.transcriptDelta.length} new transcript ${input.transcriptDelta.length === 1 ? "line" : "lines"}.`,
     nextHeartbeatHint: activeAgenda
       ? `Next check should revisit "${activeAgenda.title}".`
-      : "Next check should confirm whether the meeting goal is complete."
+      : "Next check should confirm whether the meeting goal is complete.",
+    reviewMarkdown: buildReviewMarkdown(input, cards, mergedAgendaActions),
+    agendaActions: mergedAgendaActions,
+    ephemeralReminder: selectEphemeralReminder(input, cards)
   };
-}
-
-interface ScoreResult {
-  total: number;
-  bestLine: TranscriptLine | null;
-  bestLineScore: number;
-}
-
-function scoreLines(
-  lines: TranscriptLine[],
-  terms: Array<[RegExp, number]>
-): ScoreResult {
-  let total = 0;
-  let bestLine: TranscriptLine | null = null;
-  let bestLineScore = 0;
-
-  for (const line of lines) {
-    let lineScore = 0;
-    for (const [pattern, weight] of terms) {
-      if (pattern.test(line.text)) {
-        lineScore += weight;
-      }
-    }
-    total += lineScore;
-    if (lineScore > bestLineScore) {
-      bestLineScore = lineScore;
-      bestLine = line;
-    }
-  }
-
-  return { total, bestLine, bestLineScore };
-}
-
-function trimQuote(text: string | undefined): string | null {
-  if (!text) return null;
-  const cleaned = text.replace(/\s+/g, " ").trim();
-  if (cleaned.length <= 80) return cleaned;
-  return `${cleaned.slice(0, 77).trim()}…`;
 }
 
 export function getAgendaProgress(agenda: AgendaItem[]): AgendaProgress {
@@ -392,14 +284,12 @@ export function getAgendaProgress(agenda: AgendaItem[]): AgendaProgress {
  * Auto-check agenda items that the room has clearly covered.
  *
  * Heuristic:
- * - Tokenize each item's title (drop stopwords, support singular/plural via stems).
+ * - Tokenize each item's title, dropping stopwords and supporting simple
+ *   singular/plural variants.
  * - Mark an item done when coverage language appears near its title terms:
- *   "that covers launch risks", "done with owners", "checked off the goal", etc.
- * - Also track the most recent transcript timestamp where any token from each item
- *   appears, so items can be marked done when the room clearly moves to a later
- *   agenda item or wraps up after that item was discussed.
- *
- * Pure function: returns a new agenda array. Caller decides whether to commit.
+ *   "that covers launch risks", "done with owners", "checked off the goal".
+ * - Also mark prior items done when the room clearly moves to a later item or
+ *   wraps after discussing the current item.
  */
 export function applyAgendaCoverage(
   agenda: AgendaItem[],
@@ -416,39 +306,38 @@ export function applyAgendaCoverage(
 
   for (const line of transcript) {
     const text = line.text;
-    if (AGENDA_WRAPUP_REGEX.test(text)) {
-      if (line.timestamp > wrapupTime) wrapupTime = line.timestamp;
+    if (AGENDA_WRAPUP_REGEX.test(text) && line.timestamp > wrapupTime) {
+      wrapupTime = line.timestamp;
     }
-    for (let i = 0; i < agenda.length; i += 1) {
-      const matched = tokenRegexes[i].some((re) => re.test(text));
-      if (matched) {
-        if (line.timestamp > lastHit[i]) lastHit[i] = line.timestamp;
+
+    for (let index = 0; index < agenda.length; index += 1) {
+      const matched = tokenRegexes[index].some((regex) => regex.test(text));
+      if (matched && line.timestamp > lastHit[index]) {
+        lastHit[index] = line.timestamp;
       }
-      if (matched && isCoverageCueForItem(text, tokenRegexes[i])) {
-        explicitlyCovered[i] = true;
+      if (matched && isCoverageCueForItem(text, tokenRegexes[index])) {
+        explicitlyCovered[index] = true;
       }
     }
   }
 
   let changed = false;
-  const next = agenda.map((item, i) => {
+  const next = agenda.map((item, index) => {
     if (item.done) return item;
-    if (explicitlyCovered[i]) {
+    if (explicitlyCovered[index]) {
       changed = true;
       return { ...item, done: true };
     }
-    if (lastHit[i] === -Infinity) return item;
+    if (lastHit[index] === -Infinity) return item;
 
-    // A later item is more recent — the room has moved on.
-    for (let j = i + 1; j < agenda.length; j += 1) {
-      if (!agenda[j].done && lastHit[j] > lastHit[i]) {
+    for (let laterIndex = index + 1; laterIndex < agenda.length; laterIndex += 1) {
+      if (!agenda[laterIndex].done && lastHit[laterIndex] > lastHit[index]) {
         changed = true;
         return { ...item, done: true };
       }
     }
 
-    // Wrap-up phrase arrived after the last time this item was mentioned.
-    if (wrapupTime > lastHit[i]) {
+    if (wrapupTime > lastHit[index]) {
       changed = true;
       return { ...item, done: true };
     }
@@ -534,7 +423,8 @@ function tokenizeTitle(title: string): RegExp[] {
     .filter((token) => token.length >= 3 && !AGENDA_STOPWORDS.has(token));
 
   for (const token of tokens) {
-    const stem = token.endsWith("s") && token.length > 3 ? token.slice(0, -1) : token;
+    const stem =
+      token.endsWith("s") && token.length > 3 ? token.slice(0, -1) : token;
     if (seen.has(stem)) continue;
     seen.add(stem);
     regexes.push(new RegExp(`\\b${escapeRegex(stem)}s?\\b`, "i"));
@@ -557,4 +447,144 @@ function buildHeartbeatBody(input: HeartbeatInput): string {
 
 function createCardId(timestamp: number, suffix: string): string {
   return `${timestamp}-${suffix}`;
+}
+
+export function createInitialReviewMarkdown(meeting: MeetingConfig): string {
+  const agendaLines = meeting.agenda
+    .map((item) => `- [${item.done ? "x" : " "}] ${item.title}`)
+    .join("\n");
+  const participants =
+    meeting.participants.length > 0
+      ? meeting.participants
+          .map((participant) =>
+            participant.role
+              ? `- ${participant.name} - ${participant.role}`
+              : `- ${participant.name}`
+          )
+          .join("\n")
+      : "- Speaker clusters will appear as people speak.";
+
+  return [
+    `# ${meeting.title}`,
+    "",
+    `**Goal:** ${meeting.goal}`,
+    "",
+    "## Meeting Context",
+    meeting.context || "_No additional context provided._",
+    "",
+    "## Agenda",
+    agendaLines || "- [ ] Open discussion",
+    "",
+    "## Participants",
+    participants,
+    "",
+    "## Live Review",
+    "_RoomPulse will revise this document every heartbeat. Removed or superseded claims should be struck through, not deleted._"
+  ].join("\n");
+}
+
+function buildReviewMarkdown(
+  input: HeartbeatInput,
+  cards: FacilitatorCard[],
+  agendaActions: AgendaAction[]
+): string {
+  const pulseTitle = `### Heartbeat ${input.runtime.heartbeatCount + 1} - ${formatElapsed(input.runtime.meetingElapsedSeconds)}`;
+  const transcriptDigest =
+    input.transcriptDelta.length > 0
+      ? input.transcriptDelta
+          .slice(-4)
+          .map((line) => `- **${line.speakerLabel}:** ${line.text}`)
+          .join("\n")
+      : "- _No new transcript lines since the last heartbeat._";
+  const cueLines = cards
+    .map((card) => `- **${card.title}:** ${card.body}`)
+    .join("\n");
+  const agendaLines =
+    agendaActions.length > 0
+      ? agendaActions
+          .map(
+            (action) =>
+              `- ${action.done ? "Checked" : "Unchecked"} agenda item \`${action.itemId}\`: ${action.reason}`
+          )
+          .join("\n")
+      : "- No agenda status changes proposed.";
+
+  return [
+    input.currentReviewMarkdown,
+    "",
+    pulseTitle,
+    "",
+    "#### Transcript Delta",
+    transcriptDigest,
+    "",
+    "#### Facilitation Review",
+    cueLines,
+    "",
+    "#### Agenda Updates",
+    agendaLines
+  ].join("\n");
+}
+
+function inferAgendaActions(
+  input: HeartbeatInput,
+  combinedText: string
+): AgendaAction[] {
+  const active = input.agendaProgress.active;
+  if (!active) {
+    return [];
+  }
+
+  const completionSignal =
+    /\b(done|finished|complete|completed|resolved|settled|agreed|decided)\b/.test(
+      combinedText
+    );
+  if (!completionSignal) {
+    return [];
+  }
+
+  return [
+    {
+      itemId: active.id,
+      done: true,
+      reason:
+        "Transcript suggests the active agenda item reached a conclusion. Review and untick if the room disagrees."
+    }
+  ];
+}
+
+function mergeAgendaActions(actions: AgendaAction[]): AgendaAction[] {
+  const byItem = new Map<string, AgendaAction>();
+  for (const action of actions) {
+    byItem.set(action.itemId, action);
+  }
+  return Array.from(byItem.values());
+}
+
+function selectEphemeralReminder(
+  input: HeartbeatInput,
+  cards: FacilitatorCard[]
+): string | null {
+  const highPriority = cards.find((card) => card.priority === "high");
+  if (highPriority) {
+    return highPriority.body;
+  }
+
+  if (input.participation.needsNudge && input.participation.reminder) {
+    return input.participation.reminder;
+  }
+
+  if (
+    input.runtime.meetingElapsedSeconds > 0 &&
+    input.runtime.meetingElapsedSeconds % 900 < input.meeting.heartbeatIntervalSeconds
+  ) {
+    return "Time check: if this item is still open, try to reach a conclusion before the next pulse.";
+  }
+
+  return null;
+}
+
+function formatElapsed(totalSeconds: number): string {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }

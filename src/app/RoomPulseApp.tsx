@@ -1,23 +1,27 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode
+} from "react";
 import {
   applyAgendaCoverage,
   createHeartbeatInput,
+  createInitialReviewMarkdown,
   getAgendaProgress,
-  runLocalFacilitation,
   type AgendaItem,
   type FacilitatorOutput,
-  type HeartbeatInput,
   type MeetingConfig,
+  type ReviewVersion,
   type TimelineEntry,
   type TranscriptLine
 } from "@/lib/facilitator";
-import {
-  SpeakerTracker,
-  createParticipationStatus,
-  extractVoiceFeaturesFromFrequencyData
-} from "@/lib/speaker-tracker";
+import { createParticipationStatus } from "@/lib/speaker-tracker";
+import { LocalTranscriptionClient } from "@/lib/local-transcription-client";
 import { TranscriptStore } from "@/lib/transcript-store";
 import {
   DEMO_AGENDA,
@@ -30,47 +34,6 @@ import {
 
 type Phase = "setup" | "meeting";
 type TranscriptMode = "demo" | "mic";
-
-interface SpeechRecognitionAlternative {
-  transcript: string;
-  confidence: number;
-}
-
-interface SpeechRecognitionResult {
-  isFinal: boolean;
-  0: SpeechRecognitionAlternative;
-}
-
-interface SpeechRecognitionResultList {
-  length: number;
-  [index: number]: SpeechRecognitionResult;
-}
-
-interface SpeechRecognitionEvent {
-  resultIndex: number;
-  results: SpeechRecognitionResultList;
-}
-
-interface SpeechRecognitionInstance {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  onresult: ((event: SpeechRecognitionEvent) => void) | null;
-  onerror: ((event: { error: string }) => void) | null;
-  onend: (() => void) | null;
-  start: () => void;
-  stop: () => void;
-}
-
-interface SpeechRecognitionConstructor {
-  new (): SpeechRecognitionInstance;
-}
-
-type SpeechWindow = Window &
-  typeof globalThis & {
-    SpeechRecognition?: SpeechRecognitionConstructor;
-    webkitSpeechRecognition?: SpeechRecognitionConstructor;
-  };
 
 const defaultMeeting: MeetingConfig = {
   title: "Product readiness review",
@@ -125,28 +88,41 @@ export default function RoomPulseApp() {
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   const [lastHeartbeatAt, setLastHeartbeatAt] = useState(0);
   const [nextHeartbeatAt, setNextHeartbeatAt] = useState(0);
-  const [countdownSeconds, setCountdownSeconds] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
   const [isHeartbeatRunning, setIsHeartbeatRunning] = useState(false);
   const [heartbeatError, setHeartbeatError] = useState<string | null>(null);
-  const [pulseTick, setPulseTick] = useState(0);
-  const [micStatus, setMicStatus] = useState("Mic idle");
+  const [micStatus, setMicStatus] = useState("Local transcription idle");
+  const [micPermissionStatus, setMicPermissionStatus] =
+    useState("permission unknown");
   const [currentMicSpeaker, setCurrentMicSpeaker] = useState("Speaker 1");
   const [isMicRunning, setIsMicRunning] = useState(false);
   const [isDemoRunning, setIsDemoRunning] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [meetingStartedAt, setMeetingStartedAt] = useState(0);
+  const [heartbeatCount, setHeartbeatCount] = useState(0);
+  const [reviewMarkdown, setReviewMarkdown] = useState(
+    createInitialReviewMarkdown(defaultMeeting)
+  );
+  const [reviewVersions, setReviewVersions] = useState<ReviewVersion[]>([
+    {
+      id: "initial-review",
+      timestamp: Date.now(),
+      source: "initial",
+      markdown: createInitialReviewMarkdown(defaultMeeting),
+      summary: "Initial meeting review document."
+    }
+  ]);
+  const [currentReviewVersionId, setCurrentReviewVersionId] =
+    useState("initial-review");
+  const [ephemeralReminder, setEphemeralReminder] = useState<string | null>(null);
 
   const transcriptStoreRef = useRef(new TranscriptStore());
-  const speakerTrackerRef = useRef(new SpeakerTracker());
-  const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  const featureTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const transcriptionClientRef = useRef<LocalTranscriptionClient | null>(null);
   const currentMicSpeakerRef = useRef("Speaker 1");
   const isHeartbeatRunningRef = useRef(false);
   const transcriptFeedRef = useRef<HTMLDivElement | null>(null);
-  const heartbeatTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const runHeartbeatRef = useRef<(() => Promise<void>) | null>(null);
   const demoTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
-  const heartbeatIntervalRef = useRef(meetingDraft.heartbeatIntervalSeconds);
 
   const observedSpeakerLabels = useMemo(
     () => Array.from(new Set(transcript.map((line) => line.speakerLabel))),
@@ -164,11 +140,14 @@ export default function RoomPulseApp() {
     () => getAgendaProgress(meeting.agenda),
     [meeting.agenda]
   );
-  const intervalSeconds = meeting.heartbeatIntervalSeconds;
-  const countdownProgress =
-    intervalSeconds <= 0
-      ? 0
-      : Math.min(1, Math.max(0, 1 - countdownSeconds / intervalSeconds));
+  const countdownSeconds = Math.max(
+    0,
+    Math.ceil((nextHeartbeatAt - now) / 1000)
+  );
+  const meetingElapsedSeconds = Math.max(
+    0,
+    Math.floor((now - (meetingStartedAt || now)) / 1000)
+  );
   const progressPercent =
     agendaProgress.total === 0
       ? 0
@@ -202,13 +181,31 @@ export default function RoomPulseApp() {
   const applyHeartbeatOutput = useCallback(
     (output: FacilitatorOutput, heartbeatNow: number) => {
       setCurrentOutput(output);
+      setReviewMarkdown(output.reviewMarkdown);
+      setCurrentReviewVersionId(`${heartbeatNow}-review`);
+      setReviewVersions((versions) => [
+        {
+          id: `${heartbeatNow}-review`,
+          timestamp: heartbeatNow,
+          source: output.source,
+          markdown: output.reviewMarkdown,
+          summary: output.summary
+        },
+        ...versions
+      ]);
+      setEphemeralReminder(output.ephemeralReminder);
+      if (output.agendaActions.length > 0) {
+        applyAgendaActions(output.agendaActions);
+      }
       setTimeline((entries) => [
         {
           id: `${heartbeatNow}-${entries.length + 1}`,
           timestamp: heartbeatNow,
           source: output.source,
           cards: output.cards,
-          summary: output.summary
+          summary: output.summary,
+          reviewMarkdown: output.reviewMarkdown,
+          reminder: output.ephemeralReminder
         },
         ...entries
       ]);
@@ -216,20 +213,8 @@ export default function RoomPulseApp() {
     []
   );
 
-  const scheduleNextHeartbeat = useCallback((delayMs: number) => {
-    if (heartbeatTimeoutRef.current) {
-      clearTimeout(heartbeatTimeoutRef.current);
-    }
-    const fireAt = Date.now() + Math.max(0, delayMs);
-    setNextHeartbeatAt(fireAt);
-    heartbeatTimeoutRef.current = setTimeout(() => {
-      heartbeatTimeoutRef.current = null;
-      void runHeartbeatRef.current?.();
-    }, Math.max(0, delayMs));
-  }, []);
-
   const runHeartbeat = useCallback(async () => {
-    if (isHeartbeatRunningRef.current || phase !== "meeting") {
+    if (isHeartbeatRunningRef.current || phase !== "meeting" || isPaused) {
       return;
     }
 
@@ -240,13 +225,17 @@ export default function RoomPulseApp() {
       observedSpeakerLabels,
       lastHeartbeatAt,
       now: heartbeatNow,
-      priorInterventions: timeline
+      priorInterventions: timeline,
+      currentReviewMarkdown: reviewMarkdown,
+      reviewVersions,
+      meetingStartedAt,
+      isPaused,
+      heartbeatCount
     });
 
     setIsHeartbeatRunning(true);
     isHeartbeatRunningRef.current = true;
     setHeartbeatError(null);
-    setPulseTick((tick) => tick + 1);
 
     try {
       const response = await fetch("/api/heartbeat", {
@@ -260,117 +249,63 @@ export default function RoomPulseApp() {
           observedSpeakerLabels,
           lastHeartbeatAt,
           now: heartbeatNow,
-          priorInterventions: timeline
+          priorInterventions: timeline,
+          currentReviewMarkdown: reviewMarkdown,
+          reviewVersions,
+          meetingStartedAt,
+          isPaused,
+          heartbeatCount
         })
       });
 
       if (!response.ok) {
-        throw new Error(`Heartbeat route returned ${response.status}`);
+        const errorBody = (await response.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        throw new Error(
+          errorBody?.error ?? `Heartbeat route returned ${response.status}`
+        );
       }
 
       const output = (await response.json()) as FacilitatorOutput;
       applyHeartbeatOutput(output, heartbeatNow);
+      setHeartbeatCount((count) => count + 1);
       setLastHeartbeatAt(heartbeatNow);
+      setNextHeartbeatAt(
+        Date.now() + meeting.heartbeatIntervalSeconds * 1000
+      );
     } catch (error) {
-      setHeartbeatError(error instanceof Error ? error.message : String(error));
-      const fallbackOutput = await runLocalFacilitationInBrowser(input);
+      const message = error instanceof Error ? error.message : String(error);
+      setHeartbeatError(message);
+      if (process.env.NEXT_PUBLIC_ROOMPULSE_REQUIRE_PI === "1") {
+        return;
+      }
+
+      const fallbackOutput = await runLocalHeartbeatInBrowser(input);
       applyHeartbeatOutput(fallbackOutput, heartbeatNow);
+      setHeartbeatCount((count) => count + 1);
       setLastHeartbeatAt(heartbeatNow);
+      setNextHeartbeatAt(
+        Date.now() + meeting.heartbeatIntervalSeconds * 1000
+      );
     } finally {
       setIsHeartbeatRunning(false);
       isHeartbeatRunningRef.current = false;
-      scheduleNextHeartbeat(heartbeatIntervalRef.current * 1000);
     }
   }, [
     applyHeartbeatOutput,
     lastHeartbeatAt,
     meeting,
+    meetingStartedAt,
     observedSpeakerLabels,
     phase,
-    scheduleNextHeartbeat,
+    isPaused,
     timeline,
-    transcript
+    transcript,
+    reviewMarkdown,
+    reviewVersions,
+    heartbeatCount
   ]);
-
-  // Keep a ref to the latest runHeartbeat so the self-scheduling timeout
-  // always invokes the current closure rather than a stale one.
-  useEffect(() => {
-    runHeartbeatRef.current = runHeartbeat;
-  }, [runHeartbeat]);
-
-  useEffect(() => {
-    heartbeatIntervalRef.current = meeting.heartbeatIntervalSeconds;
-  }, [meeting.heartbeatIntervalSeconds]);
-
-  // Lightweight 1Hz tick that only updates the visible countdown.
-  useEffect(() => {
-    if (phase !== "meeting") {
-      setCountdownSeconds(0);
-      return;
-    }
-
-    const update = () => {
-      const remaining = Math.max(
-        0,
-        Math.ceil((nextHeartbeatAt - Date.now()) / 1000)
-      );
-      setCountdownSeconds(remaining);
-    };
-    update();
-    const timer = setInterval(update, 250);
-    return () => clearInterval(timer);
-  }, [nextHeartbeatAt, phase]);
-
-  // Clear the heartbeat timeout on unmount.
-  useEffect(() => {
-    return () => {
-      if (heartbeatTimeoutRef.current) {
-        clearTimeout(heartbeatTimeoutRef.current);
-        heartbeatTimeoutRef.current = null;
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      cleanupMicResources();
-    };
-  }, []);
-
-  useEffect(() => {
-    const feed = transcriptFeedRef.current;
-    if (!feed) {
-      return;
-    }
-
-    // Only auto-scroll if the user is already near the bottom; otherwise let
-    // them keep reading history without being yanked.
-    const distanceFromBottom =
-      feed.scrollHeight - feed.scrollTop - feed.clientHeight;
-    if (distanceFromBottom < 96) {
-      feed.scrollTop = feed.scrollHeight;
-    }
-  }, [transcript.length]);
-
-  // Auto-check agenda items the room has clearly covered.
-  useEffect(() => {
-    if (phase !== "meeting") return;
-    setMeeting((current) => {
-      const updated = applyAgendaCoverage(current.agenda, transcript);
-      if (updated === current.agenda) return current;
-      return { ...current, agenda: updated };
-    });
-  }, [phase, transcript]);
-
-  const stopMicSafe = useCallback(() => {
-    if (recognitionRef.current || mediaStreamRef.current) {
-      cleanupMicResources();
-      currentMicSpeakerRef.current = "Speaker 1";
-      setCurrentMicSpeaker("Speaker 1");
-      setIsMicRunning(false);
-      setMicStatus("Mic idle");
-    }
-  }, []);
 
   const stopScriptedDemo = useCallback(() => {
     for (const timer of demoTimeoutsRef.current) {
@@ -382,34 +317,20 @@ export default function RoomPulseApp() {
 
   const startScriptedDemo = useCallback(() => {
     stopScriptedDemo();
-    stopMicSafe();
+    stopMic();
     setTranscriptMode("demo");
     setIsDemoRunning(true);
 
-    // Reset transcript and timeline so the arc tells a clean story.
     transcriptStoreRef.current.clear();
     setTranscript([]);
     setTimeline([]);
-    setCurrentOutput({
-      source: "local-fallback",
-      cards: [
-        {
-          id: "demo-armed",
-          kind: "heartbeat",
-          title: "Scripted demo running",
-          body:
-            "Transcript will start streaming in seconds. First pulse arrives at the heartbeat interval.",
-          priority: "medium"
-        }
-      ],
-      summary: "Scripted demo armed.",
-      nextHeartbeatHint: "Watch the room cues swap in at every pulse."
-    });
+    setHeartbeatCount(0);
+    setHeartbeatError(null);
+    setEphemeralReminder(null);
 
-    // Restart the heartbeat clock fresh so the first pulse lands cleanly.
     const startedAt = Date.now();
     setLastHeartbeatAt(startedAt);
-    scheduleNextHeartbeat(heartbeatIntervalRef.current * 1000);
+    setNextHeartbeatAt(startedAt + meeting.heartbeatIntervalSeconds * 1000);
 
     for (const beat of DEMO_SCRIPT) {
       const timer = setTimeout(() => {
@@ -418,16 +339,14 @@ export default function RoomPulseApp() {
       demoTimeoutsRef.current.push(timer);
     }
 
-    // Auto-clear the running flag after the script finishes plus one heartbeat.
     const finalTimer = setTimeout(() => {
       setIsDemoRunning(false);
       demoTimeoutsRef.current = [];
-    }, DEMO_DURATION_MS + heartbeatIntervalRef.current * 1000);
+    }, DEMO_DURATION_MS + meeting.heartbeatIntervalSeconds * 1000);
     demoTimeoutsRef.current.push(finalTimer);
   }, [
     addTranscriptLine,
-    scheduleNextHeartbeat,
-    stopMicSafe,
+    meeting.heartbeatIntervalSeconds,
     stopScriptedDemo
   ]);
 
@@ -446,10 +365,25 @@ export default function RoomPulseApp() {
       participants: [...DEMO_PARTICIPANTS],
       heartbeatIntervalSeconds: DEMO_HEARTBEAT_INTERVAL_SECONDS
     };
+    const startedAt = Date.now();
+    const initialReview = createInitialReviewMarkdown(demoMeeting);
+    const initialVersion: ReviewVersion = {
+      id: `${startedAt}-initial-review`,
+      timestamp: startedAt,
+      source: "initial",
+      markdown: initialReview,
+      summary: "Initial meeting review document."
+    };
 
     setMeeting(demoMeeting);
-    heartbeatIntervalRef.current = demoMeeting.heartbeatIntervalSeconds;
     setPhase("meeting");
+    setMeetingStartedAt(startedAt);
+    setHeartbeatCount(0);
+    setIsPaused(false);
+    setReviewMarkdown(initialReview);
+    setReviewVersions([initialVersion]);
+    setCurrentReviewVersionId(initialVersion.id);
+    setEphemeralReminder(null);
     setCurrentOutput({
       source: "local-fallback",
       cards: [
@@ -458,36 +392,106 @@ export default function RoomPulseApp() {
           kind: "heartbeat",
           title: "Demo armed",
           body:
-            "First scripted line lands in moments. Heartbeat fires every 15 seconds — watch the cards swap in.",
+            "Scripted transcript starts in moments. Watch heartbeat reviews and agenda checks update live.",
           priority: "medium"
         }
       ],
       summary: "Scripted demo armed.",
-      nextHeartbeatHint: "First pulse will arrive at 15 seconds."
+      nextHeartbeatHint: "First pulse will arrive at 15 seconds.",
+      reviewMarkdown: initialReview,
+      agendaActions: [],
+      ephemeralReminder: null
     });
     transcriptStoreRef.current.clear();
     setTranscript([]);
     setTimeline([]);
-    const startedAt = Date.now();
     setLastHeartbeatAt(startedAt);
-    scheduleNextHeartbeat(demoMeeting.heartbeatIntervalSeconds * 1000);
-
-    // Kick off the script after a short tick so React commits the phase swap.
+    setNextHeartbeatAt(startedAt + demoMeeting.heartbeatIntervalSeconds * 1000);
     setTimeout(() => startScriptedDemo(), 120);
-  }, [scheduleNextHeartbeat, startScriptedDemo]);
+  }, [startScriptedDemo]);
 
-  // Stop demo timers when leaving the meeting view.
   useEffect(() => {
-    if (phase !== "meeting") {
-      stopScriptedDemo();
+    const timer = setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+
+    return () => {
+      clearInterval(timer);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (
+      phase === "meeting" &&
+      !isPaused &&
+      nextHeartbeatAt > 0 &&
+      now >= nextHeartbeatAt &&
+      !isHeartbeatRunningRef.current
+    ) {
+      void runHeartbeat();
     }
-  }, [phase, stopScriptedDemo]);
+  }, [isPaused, nextHeartbeatAt, now, phase, runHeartbeat]);
+
+  useEffect(() => {
+    return () => {
+      cleanupMicResources();
+    };
+  }, []);
 
   useEffect(() => {
     return () => {
       stopScriptedDemo();
     };
   }, [stopScriptedDemo]);
+
+  useEffect(() => {
+    let permissionStatus: PermissionStatus | null = null;
+
+    async function readMicPermission() {
+      if (!navigator.permissions?.query) {
+        setMicPermissionStatus("permission API unavailable");
+        return;
+      }
+
+      try {
+        permissionStatus = await navigator.permissions.query({
+          name: "microphone" as PermissionName
+        });
+        const update = () => {
+          setMicPermissionStatus(permissionStatus?.state ?? "permission unknown");
+        };
+        update();
+        permissionStatus.onchange = update;
+      } catch {
+        setMicPermissionStatus("permission API unavailable");
+      }
+    }
+
+    void readMicPermission();
+
+    return () => {
+      if (permissionStatus) {
+        permissionStatus.onchange = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!transcriptFeedRef.current) {
+      return;
+    }
+
+    transcriptFeedRef.current.scrollTop = transcriptFeedRef.current.scrollHeight;
+  }, [transcript.length]);
+
+  useEffect(() => {
+    if (phase !== "meeting") return;
+    setMeeting((current) => {
+      const updated = applyAgendaCoverage(current.agenda, transcript);
+      if (updated === current.agenda) return current;
+      return { ...current, agenda: updated };
+    });
+  }, [phase, transcript]);
 
   function startMeeting() {
     const expectedParticipants = clampFiniteNumber(
@@ -512,8 +516,23 @@ export default function RoomPulseApp() {
     };
 
     setMeeting(configuredMeeting);
-    heartbeatIntervalRef.current = configuredMeeting.heartbeatIntervalSeconds;
     setPhase("meeting");
+    const startedAt = Date.now();
+    const initialReview = createInitialReviewMarkdown(configuredMeeting);
+    const initialVersion: ReviewVersion = {
+      id: `${startedAt}-initial-review`,
+      timestamp: startedAt,
+      source: "initial",
+      markdown: initialReview,
+      summary: "Initial meeting review document."
+    };
+    setMeetingStartedAt(startedAt);
+    setHeartbeatCount(0);
+    setIsPaused(false);
+    setReviewMarkdown(initialReview);
+    setReviewVersions([initialVersion]);
+    setCurrentReviewVersionId(initialVersion.id);
+    setEphemeralReminder(null);
     setCurrentOutput({
       source: "local-fallback",
       cards: [
@@ -527,12 +546,14 @@ export default function RoomPulseApp() {
         }
       ],
       summary: "Waiting for the first heartbeat.",
-      nextHeartbeatHint: "Use Run heartbeat now for a live demo check."
+      nextHeartbeatHint: "Use Run heartbeat now for a live check.",
+      reviewMarkdown: initialReview,
+      agendaActions: [],
+      ephemeralReminder: null
     });
-    const startedAt = Date.now();
     setLastHeartbeatAt(startedAt);
-    scheduleNextHeartbeat(
-      configuredMeeting.heartbeatIntervalSeconds * 1000
+    setNextHeartbeatAt(
+      startedAt + configuredMeeting.heartbeatIntervalSeconds * 1000
     );
   }
 
@@ -545,82 +566,43 @@ export default function RoomPulseApp() {
   async function startMic() {
     setTranscriptMode("mic");
 
-    if (
-      isMicRunning ||
-      recognitionRef.current ||
-      mediaStreamRef.current ||
-      featureTimerRef.current
-    ) {
-      return;
-    }
-
-    const speechWindow = window as SpeechWindow;
-    const SpeechRecognition =
-      speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition;
-
-    if (!SpeechRecognition) {
-      setMicStatus("Web Speech API is not available in this browser");
+    if (isMicRunning || transcriptionClientRef.current) {
       return;
     }
 
     try {
-      setMicStatus("Requesting mic access");
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const audioContext = new AudioContext();
-      audioContextRef.current = audioContext;
-      mediaStreamRef.current = stream;
-
-      const analyser = audioContext.createAnalyser();
-      analyser.fftSize = 2048;
-      const source = audioContext.createMediaStreamSource(stream);
-      source.connect(analyser);
-
-      const frequencyData = new Uint8Array(analyser.frequencyBinCount);
-      const timeDomainData = new Uint8Array(analyser.fftSize);
-
-      featureTimerRef.current = setInterval(() => {
-        analyser.getByteFrequencyData(frequencyData);
-        analyser.getByteTimeDomainData(timeDomainData);
-        const features = extractVoiceFeaturesFromFrequencyData(
-          frequencyData,
-          timeDomainData,
-          audioContext.sampleRate
-        );
-        const cluster = speakerTrackerRef.current.assignSpeaker(features);
-        currentMicSpeakerRef.current = cluster.label;
-        setCurrentMicSpeaker(cluster.label);
-      }, 900);
-
-      const recognition = new SpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = "en-US";
-      recognition.onresult = (event) => {
-        for (let index = event.resultIndex; index < event.results.length; index += 1) {
-          const result = event.results[index];
-          if (!result.isFinal) {
-            continue;
-          }
-
+      setMicStatus("Requesting browser microphone permission");
+      const client = new LocalTranscriptionClient({
+        onSegment: (segment) => {
+          currentMicSpeakerRef.current = segment.speakerLabel;
+          setCurrentMicSpeaker(segment.speakerLabel);
           addTranscriptLine(
-            result[0].transcript,
-            currentMicSpeakerRef.current,
+            segment.text,
+            segment.speakerLabel,
             "speech",
-            result[0].confidence
+            segment.confidence
           );
+        },
+        onStatus: (status) => {
+          const observed = status.observedSpeakerLabels;
+          if (observed && observed.length > 0) {
+            const latest = observed[observed.length - 1];
+            currentMicSpeakerRef.current = latest;
+            setCurrentMicSpeaker(latest);
+          }
+          if (status.status === "closed") {
+            setIsMicRunning(false);
+            transcriptionClientRef.current = null;
+          }
+          setMicStatus(status.message);
+        },
+        onError: (message) => {
+          setMicStatus(`Local transcription error: ${message}`);
         }
-      };
-      recognition.onerror = (event) => {
-        setMicStatus(`Mic transcription error: ${event.error}`);
-      };
-      recognition.onend = () => {
-        setMicStatus("Mic transcription stopped");
-      };
-
-      recognition.start();
-      recognitionRef.current = recognition;
+      });
+      transcriptionClientRef.current = client;
+      await client.start();
       setIsMicRunning(true);
-      setMicStatus("Mic transcription running");
     } catch (error) {
       cleanupMicResources();
       setIsMicRunning(false);
@@ -633,25 +615,12 @@ export default function RoomPulseApp() {
     currentMicSpeakerRef.current = "Speaker 1";
     setCurrentMicSpeaker("Speaker 1");
     setIsMicRunning(false);
-    setMicStatus("Mic idle");
+    setMicStatus("Local transcription idle");
   }
 
   function cleanupMicResources() {
-    recognitionRef.current?.stop();
-    recognitionRef.current = null;
-
-    if (featureTimerRef.current) {
-      clearInterval(featureTimerRef.current);
-      featureTimerRef.current = null;
-    }
-
-    mediaStreamRef.current?.getTracks().forEach((track) => {
-      track.stop();
-    });
-    mediaStreamRef.current = null;
-
-    void audioContextRef.current?.close();
-    audioContextRef.current = null;
+    transcriptionClientRef.current?.stop();
+    transcriptionClientRef.current = null;
   }
 
   function updateAgendaItem(id: string, done: boolean) {
@@ -663,23 +632,83 @@ export default function RoomPulseApp() {
     }));
   }
 
+  function applyAgendaActions(actions: FacilitatorOutput["agendaActions"]) {
+    setMeeting((current) => ({
+      ...current,
+      agenda: current.agenda.map((item) => {
+        const action = actions.find((candidate) => candidate.itemId === item.id);
+        return action ? { ...item, done: action.done } : item;
+      })
+    }));
+  }
+
+  function restoreReviewVersion(version: ReviewVersion) {
+    const restoredAt = Date.now();
+    const restoredVersion: ReviewVersion = {
+      id: `${restoredAt}-restored-review`,
+      timestamp: restoredAt,
+      source: "restored",
+      markdown: version.markdown,
+      summary: `Restored review from ${formatClock(version.timestamp)}.`
+    };
+    setReviewMarkdown(version.markdown);
+    setCurrentReviewVersionId(restoredVersion.id);
+    setReviewVersions((versions) => [restoredVersion, ...versions]);
+  }
+
+  function togglePause() {
+    const nextPaused = !isPaused;
+    setIsPaused(nextPaused);
+    if (!nextPaused) {
+      setNextHeartbeatAt(Date.now() + meeting.heartbeatIntervalSeconds * 1000);
+    }
+  }
+
   if (phase === "setup") {
     return (
       <main className="app-shell setup-shell">
-        <section className="setup-hero" aria-labelledby="setup-title">
-          <div className="brand-row">
-            <span className="status-dot" />
-            <span>Mode 2 shared room display</span>
+        <header className="app-topbar setup-topbar">
+          <BrandMark />
+          <div className="topbar-title">
+            <span>Prepare the shared display</span>
+            <h1 id="setup-title">RoomPulse setup</h1>
           </div>
-          <h1 id="setup-title">RoomPulse</h1>
-          <p>
-            Feed the room context, then put this on a shared monitor. The
-            heartbeat loop wakes the facilitator and keeps raw transcript,
-            agenda, and participation visible.
-          </p>
-        </section>
+          <div className="topbar-pills" aria-label="Setup readiness">
+            <StatusPill tone="good">Local-first</StatusPill>
+            <StatusPill>{meetingDraft.heartbeatIntervalSeconds}s pulse</StatusPill>
+          </div>
+        </header>
 
-        <section className="setup-grid" aria-label="Meeting setup">
+        <section className="setup-workspace" aria-labelledby="setup-title">
+          <aside className="setup-brief" aria-label="RoomPulse brief">
+            <div className="setup-brief-copy">
+              <div className="section-kicker">Mode 2 shared room display</div>
+              <h2>Initialize the room before anyone starts talking.</h2>
+              <p>
+                RoomPulse needs the meeting goal, agenda, expected voices, and
+                participant context up front so each heartbeat can nudge the
+                room instead of writing private notes.
+              </p>
+            </div>
+            <div className="setup-flow">
+              <div>
+                <span>1</span>
+                <strong>Context</strong>
+                <p>Goal, stakes, and background the facilitator should remember.</p>
+              </div>
+              <div>
+                <span>2</span>
+                <strong>Room shape</strong>
+                <p>Expected voices and optional names for participation nudges.</p>
+              </div>
+              <div>
+                <span>3</span>
+                <strong>Heartbeat</strong>
+                <p>How often the Pi adapter reviews transcript deltas.</p>
+              </div>
+            </div>
+          </aside>
+
           <form
             className="setup-panel"
             noValidate
@@ -774,19 +803,20 @@ export default function RoomPulseApp() {
               />
             </label>
             <button className="primary-action" type="submit">
-              <span>Start meeting</span>
-              <span aria-hidden="true">{"->"}</span>
+              Start meeting
             </button>
           </form>
 
           <aside className="preview-panel">
-            <div className="demo-launch">
-              <div className="section-kicker">One-click demo</div>
-              <h2>Launch the live demo</h2>
+            <section className="setup-card demo-launch">
+              <div className="setup-card-title">
+                <span className="status-dot live" />
+                <strong>One-click demo</strong>
+              </div>
               <p>
-                Skip the form, project the room display, and watch a 75-second
-                meeting fire risk, drift, decision, action, and participation
-                cards on cue.
+                Jump straight to a 75-second launch-readiness meeting with
+                transcript, reviews, participation, and agenda checks already
+                choreographed for judging.
               </p>
               <button
                 type="button"
@@ -794,181 +824,152 @@ export default function RoomPulseApp() {
                 onClick={launchLiveDemo}
               >
                 Launch live demo
-                <span aria-hidden="true">{"->"}</span>
               </button>
+            </section>
+            <div className="section-kicker">Launch check</div>
+            <div className="setup-metrics">
+              <div>
+                <strong>{meetingDraft.heartbeatIntervalSeconds}s</strong>
+                <span>heartbeat</span>
+              </div>
+              <div>
+                <strong>{meetingDraft.expectedParticipants}</strong>
+                <span>voices</span>
+              </div>
             </div>
-            <div className="section-kicker">Display preview</div>
-            <div className="preview-metric">
-              <strong>{meetingDraft.heartbeatIntervalSeconds}s</strong>
-              <span>heartbeat interval</span>
-            </div>
-            <div className="preview-metric">
-              <strong>{meetingDraft.expectedParticipants}</strong>
-              <span>expected voices</span>
-            </div>
-            <div className="preview-copy">
-              <span>Pi adapter</span>
+            <section className="setup-card">
+              <div className="setup-card-title">
+                <span className="status-dot live" />
+                <strong>Facilitator adapter</strong>
+              </div>
               <p>
-                The server route calls <code>runPiHeartbeat(input)</code> on every
-                pulse and falls back locally when Pi auth or runtime is missing.
+                Every pulse calls <code>runPiHeartbeat(input)</code>. Strict mode
+                surfaces missing Pi auth; normal mode keeps a deterministic
+                local fallback.
               </p>
-            </div>
-            <div className="preview-copy">
-              <span>Diarization MVP</span>
+            </section>
+            <section className="setup-card">
+              <div className="setup-card-title">
+                <span className="status-dot" />
+                <strong>Microphone path</strong>
+              </div>
               <p>
-                Browser audio features cluster approximate voices into Speaker N
-                labels. Demo mode can add transcript lines without mic access.
+                Browser audio streams to local Whisper and returns live
+                transcript lines with Speaker N clustering.
               </p>
-            </div>
+            </section>
+            <section className="setup-card agenda-preview">
+              <div className="setup-card-title">
+                <strong>Agenda preview</strong>
+                <span>{agendaText.split("\n").filter(Boolean).length} items</span>
+              </div>
+              <ol>
+                {agendaText
+                  .split("\n")
+                  .map((item) => item.trim())
+                  .filter(Boolean)
+                  .slice(0, 4)
+                  .map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+              </ol>
+            </section>
           </aside>
         </section>
       </main>
     );
   }
 
-  const cardSource = currentOutput?.source ?? "pending";
-  const sourceLabel =
-    cardSource === "pi"
-      ? "Powered by Pi"
-      : cardSource === "local-fallback"
-        ? "Local fallback"
-        : "Awaiting first pulse";
-
-  // Stroke dash for the countdown ring (circumference ~= 276 at r=44).
-  const RING_CIRCUMFERENCE = 276.46;
-  const ringOffset = RING_CIRCUMFERENCE * countdownProgress;
-
   return (
     <main className="app-shell room-shell">
-      <header className="room-header">
-        <div className="room-headline">
+      <header className="meeting-topbar">
+        <BrandMark />
+        <div className="meeting-controls">
+          <button type="button" onClick={togglePause}>
+            <span className="pause-bars" aria-hidden="true" />
+            {isPaused ? "Resume" : "Pause"}
+          </button>
+          <button type="button" onClick={() => void runHeartbeat()}>
+            {isHeartbeatRunning ? "Reviewing..." : "Run heartbeat now"}
+          </button>
+          <button
+            type="button"
+            className={isDemoRunning ? "demo-running" : ""}
+            onClick={isDemoRunning ? stopScriptedDemo : startScriptedDemo}
+          >
+            {isDemoRunning ? "Stop demo" : "Script demo"}
+          </button>
+        </div>
+        <div className="meeting-title-block">
           <div className="brand-row">
-            <span className="status-dot live" />
-            <span>Heartbeat facilitator live</span>
-            {isDemoRunning ? (
-              <span className="demo-pill">Scripted demo running</span>
-            ) : null}
+            <span className={`status-dot ${isPaused ? "" : "live"}`} />
+            <span>{isPaused ? "Meeting paused" : "Meeting live"}</span>
+            {isDemoRunning ? <span className="demo-pill">Demo running</span> : null}
           </div>
           <h1>{meeting.title}</h1>
           <p>{meeting.goal}</p>
         </div>
-        <div className="heartbeat-console" aria-label="Heartbeat status">
-          <div
-            className={`heartbeat-ring ${isHeartbeatRunning ? "is-pulsing" : ""}`}
-            aria-hidden="true"
-          >
-            <svg viewBox="0 0 100 100">
-              <circle className="ring-track" cx="50" cy="50" r="44" />
-              <circle
-                className="ring-progress"
-                cx="50"
-                cy="50"
-                r="44"
-                style={{
-                  strokeDasharray: RING_CIRCUMFERENCE,
-                  strokeDashoffset: ringOffset
-                }}
-              />
-            </svg>
-            <span className="ring-flash" key={pulseTick} aria-hidden="true" />
-            <div className="ring-label">
-              <span>{isHeartbeatRunning ? "Pulsing" : "Next pulse"}</span>
-              <strong>{isHeartbeatRunning ? "…" : `${countdownSeconds}s`}</strong>
-            </div>
-          </div>
-          <div className="heartbeat-actions">
-            <button
-              type="button"
-              className="primary-action"
-              onClick={() => void runHeartbeat()}
-              disabled={isHeartbeatRunning}
-            >
-              Run heartbeat now
-            </button>
-            <button
-              type="button"
-              className={`demo-action ${isDemoRunning ? "is-running" : ""}`}
-              onClick={isDemoRunning ? stopScriptedDemo : startScriptedDemo}
-            >
-              {isDemoRunning ? "Stop scripted demo" : "Run scripted demo"}
-            </button>
-          </div>
+        <div className="meeting-status">
+          <StatusPill tone={isMicRunning ? "good" : "neutral"}>
+            {isMicRunning ? "Microphone live" : "Microphone not live"}
+          </StatusPill>
+          <StatusPill>{isPaused ? "Paused" : `${countdownSeconds}s`}</StatusPill>
+          <button type="button" onClick={() => setShowSettings((value) => !value)}>
+            Settings
+          </button>
         </div>
+        {showSettings ? (
+          <aside className="settings-popover" aria-label="Meeting settings">
+            <label>
+              <span>Heartbeat interval</span>
+              <input
+                min={15}
+                step={5}
+                type="number"
+                value={meeting.heartbeatIntervalSeconds}
+                onChange={(event) =>
+                  setMeeting((current) => ({
+                    ...current,
+                    heartbeatIntervalSeconds: clampFiniteNumber(
+                      Number(event.target.value),
+                      current.heartbeatIntervalSeconds,
+                      15
+                    )
+                  }))
+                }
+              />
+            </label>
+            <label>
+              <span>Expected participants</span>
+              <input
+                min={1}
+                type="number"
+                value={meeting.expectedParticipants}
+                onChange={(event) =>
+                  setMeeting((current) => ({
+                    ...current,
+                    expectedParticipants: clampFiniteNumber(
+                      Number(event.target.value),
+                      current.expectedParticipants,
+                      1
+                    )
+                  }))
+                }
+              />
+            </label>
+          </aside>
+        ) : null}
       </header>
 
-      <section className="display-grid">
-        <section className="facilitator-stage" aria-label="Current facilitator cards">
-          <div className="stage-heading">
-            <div>
-              <div className="section-kicker">Current facilitator cards</div>
-              <h2>Room cues</h2>
-            </div>
-            <span className={`source-badge source-${cardSource}`}>
-              {cardSource === "pi" ? <span className="source-dot" /> : null}
-              {sourceLabel}
-            </span>
-          </div>
-
-          <div className="card-stack" key={`pulse-${pulseTick}`}>
-            {(currentOutput?.cards ?? []).map((card, index) => (
-              <article
-                className={`facilitator-card priority-${card.priority}`}
-                key={card.id}
-                style={{ animationDelay: `${index * 80}ms` }}
-              >
-                <span>{card.kind}</span>
-                <h3>{card.title}</h3>
-                <p>{card.body}</p>
-              </article>
-            ))}
-          </div>
-
-          {currentOutput?.adapterNotice ? (
-            <p className="adapter-notice">{currentOutput.adapterNotice}</p>
-          ) : null}
-          {heartbeatError ? (
-            <p className="adapter-notice">Browser fallback used: {heartbeatError}</p>
-          ) : null}
-        </section>
-
-        <aside className="side-panel participation-panel">
-          <div className="section-kicker">Participation</div>
-          <strong>
-            {participation.observed} of {participation.expected} heard
-          </strong>
-          <div className="meter">
-            <span
-              style={{
-                width: `${Math.min(
-                  100,
-                  (participation.observed / Math.max(1, participation.expected)) *
-                    100
-                )}%`
-              }}
-            />
-          </div>
-          <p>
-            {participation.reminder ??
-              "Every expected voice has appeared in the speaker clusters."}
-          </p>
-          <div className="speaker-list">
-            {observedSpeakerLabels.length === 0 ? (
-              <span>No speakers observed yet</span>
-            ) : (
-              observedSpeakerLabels.map((label) => <span key={label}>{label}</span>)
-            )}
-          </div>
-        </aside>
-
-        <section className="transcript-panel" aria-label="Live raw transcript">
+      <section className="meeting-grid">
+        <section className="transcript-panel room-column" aria-label="Live raw transcript">
           <div className="panel-toolbar">
             <div>
               <div className="section-kicker">Live raw transcript</div>
-              <h2>Transcript stream</h2>
+              <h2>Transcript</h2>
             </div>
-            <div className="mode-switch" role="group" aria-label="Transcript mode">
+            <div className="mode-switch" aria-label="Transcript mode">
               <button
-                aria-pressed={transcriptMode === "demo"}
                 className={transcriptMode === "demo" ? "active" : ""}
                 type="button"
                 onClick={() => {
@@ -979,7 +980,6 @@ export default function RoomPulseApp() {
                 Demo
               </button>
               <button
-                aria-pressed={transcriptMode === "mic"}
                 className={transcriptMode === "mic" ? "active" : ""}
                 disabled={isMicRunning}
                 type="button"
@@ -998,8 +998,13 @@ export default function RoomPulseApp() {
             ) : (
               transcript.map((line) => (
                 <article className="transcript-line" key={line.id}>
-                  <span>{line.speakerLabel}</span>
-                  <p>{line.text}</p>
+                  <div className={`speaker-badge speaker-${speakerNumber(line.speakerLabel)}`}>
+                    S{speakerNumber(line.speakerLabel)}
+                  </div>
+                  <div>
+                    <span>{line.speakerLabel}</span>
+                    <p>{line.text}</p>
+                  </div>
                   <time>{formatClock(line.timestamp)}</time>
                 </article>
               ))
@@ -1035,7 +1040,9 @@ export default function RoomPulseApp() {
           </div>
           {transcriptMode === "mic" ? (
             <p className="mic-status">
-              {micStatus}. Current audio cluster: {currentMicSpeaker}
+              {isMicRunning ? "Microphone active. " : ""}
+              Browser mic: {micPermissionStatus}. {micStatus}. Current audio
+              cluster: {currentMicSpeaker}
               {isMicRunning ? (
                 <button type="button" onClick={stopMic}>
                   Stop mic
@@ -1045,54 +1052,216 @@ export default function RoomPulseApp() {
           ) : null}
         </section>
 
-        <aside className="side-panel agenda-panel">
-          <div className="section-kicker">Agenda</div>
-          <strong>{progressPercent}% complete</strong>
-          <div className="agenda-list">
-            {meeting.agenda.map((item) => (
-              <label className="agenda-item" key={item.id}>
-                <input
-                  checked={item.done}
-                  type="checkbox"
-                  onChange={(event) => updateAgendaItem(item.id, event.target.checked)}
-                />
-                <span>{item.title}</span>
-              </label>
-            ))}
-          </div>
-        </aside>
-
-        <section className="timeline-panel" aria-label="Prior interventions">
+        <section className="review-panel room-column" aria-label="AI reviews">
           <div className="panel-toolbar">
             <div>
-              <div className="section-kicker">Timeline</div>
-              <h2>Prior interventions</h2>
+              <div className="section-kicker">AI reviews</div>
+              <h2>Live review document</h2>
             </div>
-            <span>{timeline.length} pulses</span>
+            <span>{currentOutput?.source === "pi" ? "GPT-5.5 fast" : "Local"}</span>
           </div>
-          <div className="timeline-list">
-            {timeline.length === 0 ? (
-              <p className="empty-state">Heartbeat history will collect here.</p>
-            ) : (
-              timeline.map((entry) => (
-                <article className="timeline-entry" key={entry.id}>
-                  <time>{formatClock(entry.timestamp)}</time>
-                  <strong>{entry.source === "pi" ? "Pi" : "Local fallback"}</strong>
-                  <p>{entry.summary}</p>
-                </article>
-              ))
-            )}
+          <div className="review-meta">
+            <span>{reviewVersions.length} versions</span>
+            <span>{formatElapsed(meetingElapsedSeconds)} elapsed</span>
+            {currentOutput?.adapterNotice ? <span>{currentOutput.adapterNotice}</span> : null}
+            {heartbeatError ? <span>{heartbeatError}</span> : null}
+          </div>
+          <article className="markdown-document">
+            <MarkdownDocument markdown={reviewMarkdown} />
+          </article>
+          <div className="version-bar" aria-label="Review document version control">
+            <button
+              disabled={reviewVersions.length < 2}
+              type="button"
+              onClick={() => {
+                const previous = reviewVersions.find(
+                  (version) => version.id !== currentReviewVersionId
+                );
+                if (previous) {
+                  restoreReviewVersion(previous);
+                }
+              }}
+            >
+              Revert one version
+            </button>
+            <select
+              aria-label="Review versions"
+              value={currentReviewVersionId}
+              onChange={(event) => {
+                const version = reviewVersions.find(
+                  (candidate) => candidate.id === event.target.value
+                );
+                if (version) {
+                  restoreReviewVersion(version);
+                }
+              }}
+            >
+              {reviewVersions.map((version) => (
+                <option key={version.id} value={version.id}>
+                  {formatClock(version.timestamp)} - {version.summary}
+                </option>
+              ))}
+            </select>
           </div>
         </section>
+
+        <aside className="right-rail room-column">
+          <section className="agenda-card" aria-label="Agenda">
+            <div className="rail-card-heading">
+              <h2>Agenda</h2>
+              <span>{progressPercent}% complete</span>
+            </div>
+            <div className="meter agenda-meter">
+              <span style={{ width: `${progressPercent}%` }} />
+            </div>
+            <div className="agenda-list">
+              {meeting.agenda.map((item) => (
+                <label className="agenda-item" key={item.id}>
+                  <input
+                    checked={item.done}
+                    type="checkbox"
+                    onChange={(event) => updateAgendaItem(item.id, event.target.checked)}
+                  />
+                  <span>{item.title}</span>
+                </label>
+              ))}
+            </div>
+          </section>
+
+          <section className="participation-card" aria-label="Participation">
+            <div className="rail-card-heading">
+              <h2>Participation</h2>
+              <span>
+                {participation.observed} of {participation.expected} heard
+              </span>
+            </div>
+            <div className="meter">
+              <span
+                style={{
+                  width: `${Math.min(
+                    100,
+                    (participation.observed / Math.max(1, participation.expected)) *
+                      100
+                  )}%`
+                }}
+              />
+            </div>
+            <div className="speaker-list">
+              {observedSpeakerLabels.length === 0 ? (
+                <span>No speakers observed yet</span>
+              ) : (
+                observedSpeakerLabels.map((label) => <span key={label}>{label}</span>)
+              )}
+            </div>
+          </section>
+
+          <section className="reminder-dock" aria-label="Heartbeat reminder">
+            <div className="section-kicker">Reminder</div>
+            {ephemeralReminder ? (
+              <p>{ephemeralReminder}</p>
+            ) : (
+              <p className="quiet-reminder">
+                No room-facing reminder on this heartbeat.
+              </p>
+            )}
+          </section>
+        </aside>
       </section>
     </main>
   );
 }
 
-async function runLocalFacilitationInBrowser(
-  input: HeartbeatInput
-): Promise<FacilitatorOutput> {
+function BrandMark() {
+  return (
+    <div className="brand-mark" aria-label="RoomPulse">
+      <span className="wave-mark" aria-hidden="true">
+        <i />
+        <i />
+        <i />
+        <i />
+        <i />
+      </span>
+      <span>RoomPulse</span>
+    </div>
+  );
+}
+
+function StatusPill({
+  children,
+  tone = "neutral"
+}: {
+  children: ReactNode;
+  tone?: "good" | "neutral";
+}) {
+  return (
+    <span className={`status-pill ${tone}`}>
+      {tone === "good" ? <span className="status-dot" aria-hidden="true" /> : null}
+      {children}
+    </span>
+  );
+}
+
+async function runLocalHeartbeatInBrowser(input: ReturnType<typeof createHeartbeatInput>) {
+  const { runLocalFacilitation } = await import("@/lib/facilitator");
   return runLocalFacilitation(input);
+}
+
+function MarkdownDocument({ markdown }: { markdown: string }) {
+  return (
+    <>
+      {markdown.split("\n").map((line, index) => {
+        const key = `${index}-${line.slice(0, 12)}`;
+        if (line.startsWith("# ")) {
+          return <h1 key={key}>{renderInlineMarkdown(line.slice(2))}</h1>;
+        }
+        if (line.startsWith("## ")) {
+          return <h2 key={key}>{renderInlineMarkdown(line.slice(3))}</h2>;
+        }
+        if (line.startsWith("### ")) {
+          return <h3 key={key}>{renderInlineMarkdown(line.slice(4))}</h3>;
+        }
+        if (line.startsWith("#### ")) {
+          return <h4 key={key}>{renderInlineMarkdown(line.slice(5))}</h4>;
+        }
+        if (line.startsWith("- [x] ") || line.startsWith("- [ ] ")) {
+          const checked = line.startsWith("- [x] ");
+          return (
+            <p className="markdown-check" key={key}>
+              <input checked={checked} readOnly type="checkbox" />
+              <span>{renderInlineMarkdown(line.slice(6))}</span>
+            </p>
+          );
+        }
+        if (line.startsWith("- ")) {
+          return <li key={key}>{renderInlineMarkdown(line.slice(2))}</li>;
+        }
+        if (!line.trim()) {
+          return <div className="markdown-gap" key={key} />;
+        }
+        return <p key={key}>{renderInlineMarkdown(line)}</p>;
+      })}
+    </>
+  );
+}
+
+function renderInlineMarkdown(text: string): ReactNode[] {
+  const parts = text.split(/(\*\*[^*]+\*\*|~~[^~]+~~|`[^`]+`)/g);
+  return parts.map((part, index) => {
+    const key = `${index}-${part}`;
+    if (part.startsWith("**") && part.endsWith("**")) {
+      return <strong key={key}>{part.slice(2, -2)}</strong>;
+    }
+    if (part.startsWith("~~") && part.endsWith("~~")) {
+      return <s key={key}>{part.slice(2, -2)}</s>;
+    }
+    if (part.startsWith("`") && part.endsWith("`")) {
+      return <code key={key}>{part.slice(1, -1)}</code>;
+    }
+    if (part.startsWith("_") && part.endsWith("_") && part.length > 1) {
+      return <em key={key}>{part.slice(1, -1)}</em>;
+    }
+    return <span key={key}>{part}</span>;
+  });
 }
 
 function parseAgenda(value: string): AgendaItem[] {
@@ -1133,4 +1302,15 @@ function formatClock(timestamp: number): string {
     minute: "2-digit",
     second: "2-digit"
   }).format(new Date(timestamp));
+}
+
+function formatElapsed(totalSeconds: number): string {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
+function speakerNumber(label: string): number {
+  const match = label.match(/\d+/);
+  return match ? Number(match[0]) : 1;
 }

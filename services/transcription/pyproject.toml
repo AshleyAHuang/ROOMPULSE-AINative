@@ -1,0 +1,14 @@
+[project]
+name = "roompulse-transcription"
+version = "0.1.0"
+description = "Local real-time transcription and speaker clustering service for RoomPulse."
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115.0",
+  "faster-whisper>=1.1.0",
+  "numpy>=1.26.0",
+  "uvicorn[standard]>=0.30.0",
+]
+
+[tool.uv]
+package = false

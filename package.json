@@ -6,6 +6,8 @@
   "type": "module",
   "scripts": {
     "dev": "next dev",
+    "dev:strict": "ROOMPULSE_REQUIRE_PI=1 NEXT_PUBLIC_ROOMPULSE_REQUIRE_PI=1 next dev",
+    "transcription": "cd services/transcription && uv run uvicorn server:app --host 127.0.0.1 --port 8765",
     "build": "next build",
     "start": "next start",
     "test": "vitest run",

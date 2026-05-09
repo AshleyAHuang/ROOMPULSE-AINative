@@ -19,7 +19,10 @@ const output: FacilitatorOutput = {
     }
   ],
   summary: "One cue generated.",
-  nextHeartbeatHint: "Keep listening."
+  nextHeartbeatHint: "Keep listening.",
+  reviewMarkdown: "# Demo\n\nOne cue generated.",
+  agendaActions: [],
+  ephemeralReminder: null
 };
 
 const validPayload = {
