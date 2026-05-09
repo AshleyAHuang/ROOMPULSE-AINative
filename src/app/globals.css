@@ -107,7 +107,7 @@ code {
 }
 
 .meeting-topbar {
-  grid-template-columns: 220px 340px minmax(360px, 1fr) 340px;
+  grid-template-columns: 220px 440px minmax(360px, 1fr) 340px;
 }
 
 .brand-mark {
@@ -465,6 +465,42 @@ select:focus {
   color: var(--text);
 }
 
+.demo-launch {
+  background:
+    radial-gradient(circle at 30% 0%, rgba(22, 163, 74, 0.12), transparent 56%),
+    var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 18px;
+}
+
+.demo-launch-button {
+  align-items: center;
+  background: var(--green);
+  border-radius: 8px;
+  color: #ffffff;
+  display: inline-flex;
+  font-weight: 750;
+  justify-content: center;
+  min-height: 46px;
+  padding: 12px 16px;
+}
+
+.demo-launch-button:hover {
+  background: #12813d;
+}
+
+.demo-pill {
+  background: var(--green-soft);
+  border: 1px solid rgba(22, 163, 74, 0.2);
+  border-radius: 999px;
+  color: var(--green);
+  font-size: 11px;
+  font-weight: 800;
+  padding: 4px 8px;
+  text-transform: uppercase;
+}
+
 .agenda-preview ol {
   color: var(--muted);
   display: grid;
@@ -482,7 +518,7 @@ select:focus {
   align-items: center;
   display: grid;
   gap: 12px;
-  grid-template-columns: 120px 1fr;
+  grid-template-columns: 110px 1fr 1fr;
 }
 
 .meeting-controls button:first-child {
@@ -495,6 +531,14 @@ select:focus {
 .meeting-controls button:first-child:hover {
   background: var(--surface-soft);
   box-shadow: var(--shadow-soft);
+}
+
+.meeting-controls .demo-running {
+  background: var(--orange);
+}
+
+.meeting-controls .demo-running:hover {
+  background: #cf4816;
 }
 
 .pause-bars {
@@ -1013,7 +1057,7 @@ select:focus {
   }
 
   .meeting-controls {
-    grid-template-columns: repeat(2, minmax(0, 170px));
+    grid-template-columns: repeat(3, minmax(0, 170px));
   }
 
   .setup-brief,

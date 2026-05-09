@@ -9,6 +9,7 @@ import {
   type ReactNode
 } from "react";
 import {
+  applyAgendaCoverage,
   createHeartbeatInput,
   createInitialReviewMarkdown,
   getAgendaProgress,
@@ -22,6 +23,14 @@ import {
 import { createParticipationStatus } from "@/lib/speaker-tracker";
 import { LocalTranscriptionClient } from "@/lib/local-transcription-client";
 import { TranscriptStore } from "@/lib/transcript-store";
+import {
+  DEMO_AGENDA,
+  DEMO_DURATION_MS,
+  DEMO_EXPECTED_PARTICIPANTS,
+  DEMO_HEARTBEAT_INTERVAL_SECONDS,
+  DEMO_PARTICIPANTS,
+  DEMO_SCRIPT
+} from "@/lib/demo-script";
 
 type Phase = "setup" | "meeting";
 type TranscriptMode = "demo" | "mic";
@@ -87,6 +96,7 @@ export default function RoomPulseApp() {
     useState("permission unknown");
   const [currentMicSpeaker, setCurrentMicSpeaker] = useState("Speaker 1");
   const [isMicRunning, setIsMicRunning] = useState(false);
+  const [isDemoRunning, setIsDemoRunning] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [meetingStartedAt, setMeetingStartedAt] = useState(0);
@@ -112,6 +122,7 @@ export default function RoomPulseApp() {
   const currentMicSpeakerRef = useRef("Speaker 1");
   const isHeartbeatRunningRef = useRef(false);
   const transcriptFeedRef = useRef<HTMLDivElement | null>(null);
+  const demoTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   const observedSpeakerLabels = useMemo(
     () => Array.from(new Set(transcript.map((line) => line.speakerLabel))),
@@ -296,6 +307,109 @@ export default function RoomPulseApp() {
     heartbeatCount
   ]);
 
+  const stopScriptedDemo = useCallback(() => {
+    for (const timer of demoTimeoutsRef.current) {
+      clearTimeout(timer);
+    }
+    demoTimeoutsRef.current = [];
+    setIsDemoRunning(false);
+  }, []);
+
+  const startScriptedDemo = useCallback(() => {
+    stopScriptedDemo();
+    stopMic();
+    setTranscriptMode("demo");
+    setIsDemoRunning(true);
+
+    transcriptStoreRef.current.clear();
+    setTranscript([]);
+    setTimeline([]);
+    setHeartbeatCount(0);
+    setHeartbeatError(null);
+    setEphemeralReminder(null);
+
+    const startedAt = Date.now();
+    setLastHeartbeatAt(startedAt);
+    setNextHeartbeatAt(startedAt + meeting.heartbeatIntervalSeconds * 1000);
+
+    for (const beat of DEMO_SCRIPT) {
+      const timer = setTimeout(() => {
+        addTranscriptLine(beat.text, beat.speaker, "simulated");
+      }, beat.delayMs);
+      demoTimeoutsRef.current.push(timer);
+    }
+
+    const finalTimer = setTimeout(() => {
+      setIsDemoRunning(false);
+      demoTimeoutsRef.current = [];
+    }, DEMO_DURATION_MS + meeting.heartbeatIntervalSeconds * 1000);
+    demoTimeoutsRef.current.push(finalTimer);
+  }, [
+    addTranscriptLine,
+    meeting.heartbeatIntervalSeconds,
+    stopScriptedDemo
+  ]);
+
+  const launchLiveDemo = useCallback(() => {
+    const demoMeeting: MeetingConfig = {
+      title: "Launch readiness review",
+      goal: "Leave with owners for every open launch risk.",
+      context:
+        "RoomPulse should surface risks, drift, and missing voices on the shared display.",
+      agenda: DEMO_AGENDA.map((title, index) => ({
+        id: `agenda-${index + 1}`,
+        title,
+        done: false
+      })),
+      expectedParticipants: DEMO_EXPECTED_PARTICIPANTS,
+      participants: [...DEMO_PARTICIPANTS],
+      heartbeatIntervalSeconds: DEMO_HEARTBEAT_INTERVAL_SECONDS
+    };
+    const startedAt = Date.now();
+    const initialReview = createInitialReviewMarkdown(demoMeeting);
+    const initialVersion: ReviewVersion = {
+      id: `${startedAt}-initial-review`,
+      timestamp: startedAt,
+      source: "initial",
+      markdown: initialReview,
+      summary: "Initial meeting review document."
+    };
+
+    setMeeting(demoMeeting);
+    setPhase("meeting");
+    setMeetingStartedAt(startedAt);
+    setHeartbeatCount(0);
+    setIsPaused(false);
+    setReviewMarkdown(initialReview);
+    setReviewVersions([initialVersion]);
+    setCurrentReviewVersionId(initialVersion.id);
+    setEphemeralReminder(null);
+    setCurrentOutput({
+      source: "local-fallback",
+      cards: [
+        {
+          id: "demo-armed",
+          kind: "heartbeat",
+          title: "Demo armed",
+          body:
+            "Scripted transcript starts in moments. Watch heartbeat reviews and agenda checks update live.",
+          priority: "medium"
+        }
+      ],
+      summary: "Scripted demo armed.",
+      nextHeartbeatHint: "First pulse will arrive at 15 seconds.",
+      reviewMarkdown: initialReview,
+      agendaActions: [],
+      ephemeralReminder: null
+    });
+    transcriptStoreRef.current.clear();
+    setTranscript([]);
+    setTimeline([]);
+    setLastHeartbeatAt(startedAt);
+    setNextHeartbeatAt(startedAt + demoMeeting.heartbeatIntervalSeconds * 1000);
+    setTimeout(() => startScriptedDemo(), 120);
+  }, [startScriptedDemo]);
+
   useEffect(() => {
     const timer = setInterval(() => {
       setNow(Date.now());
@@ -323,6 +437,12 @@ export default function RoomPulseApp() {
       cleanupMicResources();
     };
   }, []);
+
+  useEffect(() => {
+    return () => {
+      stopScriptedDemo();
+    };
+  }, [stopScriptedDemo]);
 
   useEffect(() => {
     let permissionStatus: PermissionStatus | null = null;
@@ -363,6 +483,15 @@ export default function RoomPulseApp() {
 
     transcriptFeedRef.current.scrollTop = transcriptFeedRef.current.scrollHeight;
   }, [transcript.length]);
+
+  useEffect(() => {
+    if (phase !== "meeting") return;
+    setMeeting((current) => {
+      const updated = applyAgendaCoverage(current.agenda, transcript);
+      if (updated === current.agenda) return current;
+      return { ...current, agenda: updated };
+    });
+  }, [phase, transcript]);
 
   function startMeeting() {
     const expectedParticipants = clampFiniteNumber(
@@ -679,6 +808,24 @@ export default function RoomPulseApp() {
           </form>
 
           <aside className="preview-panel">
+            <section className="setup-card demo-launch">
+              <div className="setup-card-title">
+                <span className="status-dot live" />
+                <strong>One-click demo</strong>
+              </div>
+              <p>
+                Jump straight to a 75-second launch-readiness meeting with
+                transcript, reviews, participation, and agenda checks already
+                choreographed for judging.
+              </p>
+              <button
+                type="button"
+                className="demo-launch-button"
+                onClick={launchLiveDemo}
+              >
+                Launch live demo
+              </button>
+            </section>
             <div className="section-kicker">Launch check</div>
             <div className="setup-metrics">
               <div>
@@ -743,13 +890,21 @@ export default function RoomPulseApp() {
             {isPaused ? "Resume" : "Pause"}
           </button>
           <button type="button" onClick={() => void runHeartbeat()}>
-            {isHeartbeatRunning ? "Reviewing..." : "Run heartbeat"}
+            {isHeartbeatRunning ? "Reviewing..." : "Run heartbeat now"}
+          </button>
+          <button
+            type="button"
+            className={isDemoRunning ? "demo-running" : ""}
+            onClick={isDemoRunning ? stopScriptedDemo : startScriptedDemo}
+          >
+            {isDemoRunning ? "Stop demo" : "Script demo"}
           </button>
         </div>
         <div className="meeting-title-block">
           <div className="brand-row">
             <span className={`status-dot ${isPaused ? "" : "live"}`} />
             <span>{isPaused ? "Meeting paused" : "Meeting live"}</span>
+            {isDemoRunning ? <span className="demo-pill">Demo running</span> : null}
           </div>
           <h1>{meeting.title}</h1>
           <p>{meeting.goal}</p>

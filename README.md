@@ -17,6 +17,13 @@ npm run dev
 
 Open `http://localhost:3000`.
 
+### Hackathon demo
+
+The fastest path is the **Launch live demo** button on the setup screen. It
+loads a pre-baked launch-readiness meeting, jumps straight to the room display,
+and runs a 75-second scripted scenario that exercises transcript, review,
+participation, reminder, and agenda-progress behavior without mic setup.
+
 Local run flow:
 
 1. Fill the setup/context feeder with title, goal, context, agenda, expected participant count, optional names/roles, and heartbeat interval.
@@ -27,6 +34,10 @@ Local run flow:
    - left: live raw transcript
    - center: a versioned AI review markdown document
    - right: agenda, participation, and a quiet one-heartbeat reminder
+
+Agenda checkboxes remain manually editable, and RoomPulse also auto-checks
+items when the transcript clearly indicates they were covered, such as “that
+covers launch risks” or “done with owners.”
 
 ## Pi Integration
 
