@@ -27,6 +27,7 @@ DEFAULT_MODEL = "base.en"
 DEFAULT_DEVICE = "cpu"
 DEFAULT_COMPUTE_TYPE = "int8"
 DEFAULT_LANGUAGE = "en"
+DEFAULT_SPEAKER_DISTANCE_THRESHOLD = 0.18
 
 
 app = FastAPI(title="RoomPulse Local Transcription")
@@ -143,16 +144,23 @@ class SpeakerCluster:
 
 
 class SpeakerClusterer:
-    def __init__(self, threshold: float = 0.33) -> None:
+    def __init__(self, threshold: float | None = None) -> None:
+        if threshold is None:
+            threshold = float(
+                os.getenv(
+                    "ROOMPULSE_SPEAKER_DISTANCE_THRESHOLD",
+                    str(DEFAULT_SPEAKER_DISTANCE_THRESHOLD),
+                )
+            )
         self.threshold = threshold
         self.clusters: list[SpeakerCluster] = []
 
     def assign(self, audio: np.ndarray) -> SpeakerCluster:
-        embedding = build_voice_embedding(audio)
+        embedding = build_voice_embedding(trim_silence(audio))
         best: tuple[float, SpeakerCluster] | None = None
 
         for cluster in self.clusters:
-            distance = cosine_distance(cluster.centroid, embedding)
+            distance = voice_distance(cluster.centroid, embedding)
             if best is None or distance < best[0]:
                 best = (distance, cluster)
 
@@ -166,9 +174,12 @@ class SpeakerClusterer:
             return cluster
 
         cluster = best[1]
+        # Adapt slowly so one mixed/noisy segment does not drag the centroid
+        # into every future voice and collapse diarization into Speaker 1.
+        update_weight = min(0.35, 1.0 / float(cluster.samples + 1))
         cluster.centroid = (
-            cluster.centroid * cluster.samples + embedding
-        ) / float(cluster.samples + 1)
+            cluster.centroid * (1.0 - update_weight) + embedding * update_weight
+        )
         cluster.samples += 1
         cluster.last_seen_at = time.time()
         return cluster
@@ -315,6 +326,11 @@ def build_voice_embedding(audio: np.ndarray) -> np.ndarray:
     if audio.size < 256:
         return np.zeros(20, dtype=np.float32)
 
+    audio = audio.astype(np.float32)
+    audio = audio - float(np.mean(audio))
+    peak = float(np.max(np.abs(audio))) or 1.0
+    audio = audio / peak
+
     windowed = audio * np.hanning(audio.size)
     spectrum = np.abs(np.fft.rfft(windowed))
     freqs = np.fft.rfftfreq(audio.size, 1.0 / SAMPLE_RATE)
@@ -333,12 +349,18 @@ def build_voice_embedding(audio: np.ndarray) -> np.ndarray:
     rms = float(np.sqrt(np.mean(np.square(audio))))
     pitch = estimate_pitch(audio) / 320.0
     bands = log_frequency_bands(spectrum, freqs, count=14)
-    embedding = np.array(
-        [centroid, bandwidth, rolloff, zcr, rms, pitch, *bands],
+    return np.array(
+        [
+            clamp01(centroid),
+            clamp01(bandwidth),
+            clamp01(rolloff),
+            clamp01(zcr / 0.35),
+            clamp01(rms),
+            clamp01(pitch),
+            *bands,
+        ],
         dtype=np.float32,
     )
-    norm = float(np.linalg.norm(embedding))
-    return embedding / norm if norm > 0 else embedding
 
 
 def log_frequency_bands(
@@ -349,8 +371,42 @@ def log_frequency_bands(
     total = float(np.sum(spectrum)) or 1.0
     for left, right in zip(edges[:-1], edges[1:]):
         mask = (freqs >= left) & (freqs < right)
-        values.append(float(np.sum(spectrum[mask]) / total))
+        ratio = float(np.sum(spectrum[mask]) / total)
+        values.append(clamp01(math.log1p(ratio * 100.0) / math.log1p(100.0)))
     return values
+
+
+def trim_silence(audio: np.ndarray) -> np.ndarray:
+    if audio.size < 512:
+        return audio
+
+    frame_size = int(SAMPLE_RATE * 0.03)
+    hop = int(SAMPLE_RATE * 0.01)
+    rms_values: list[float] = []
+    starts: list[int] = []
+
+    for start in range(0, max(1, audio.size - frame_size + 1), hop):
+        frame = audio[start : start + frame_size]
+        rms_values.append(float(np.sqrt(np.mean(np.square(frame)))))
+        starts.append(start)
+
+    if not rms_values:
+        return audio
+
+    rms = np.array(rms_values, dtype=np.float32)
+    threshold = max(
+        0.012,
+        float(np.percentile(rms, 35)) * 2.2,
+        float(np.max(rms)) * 0.12,
+    )
+    voiced = np.where(rms >= threshold)[0]
+    if voiced.size == 0:
+        return audio
+
+    padding = int(SAMPLE_RATE * 0.08)
+    first = max(0, starts[int(voiced[0])] - padding)
+    last = min(audio.size, starts[int(voiced[-1])] + frame_size + padding)
+    return audio[first:last]
 
 
 def zero_crossing_rate(audio: np.ndarray) -> float:
@@ -376,9 +432,19 @@ def estimate_pitch(audio: np.ndarray) -> float:
     return float(SAMPLE_RATE / lag)
 
 
-def cosine_distance(left: np.ndarray, right: np.ndarray) -> float:
-    denominator = float(np.linalg.norm(left) * np.linalg.norm(right))
-    if denominator == 0:
+VOICE_DISTANCE_WEIGHTS = np.array(
+    [1.2, 0.8, 1.0, 0.8, 0.2, 3.6, *([0.35] * 14)],
+    dtype=np.float32,
+)
+
+
+def voice_distance(left: np.ndarray, right: np.ndarray) -> float:
+    if left.size != right.size or left.size == 0:
         return 1.0
-    similarity = float(np.dot(left, right) / denominator)
-    return 1.0 - max(-1.0, min(1.0, similarity))
+
+    delta = np.abs(left - right) * VOICE_DISTANCE_WEIGHTS
+    return float(np.sqrt(np.mean(np.square(delta))))
+
+
+def clamp01(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))

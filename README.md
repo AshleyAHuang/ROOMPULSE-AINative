@@ -139,6 +139,13 @@ permissions. The local transcription service must be reachable from the browser
 at `NEXT_PUBLIC_ROOMPULSE_TRANSCRIPTION_WS` or the default
 `ws://127.0.0.1:8765/ws`.
 
+Speaker clustering sensitivity can be tuned without code changes. Lower values
+split voices more aggressively; higher values merge more aggressively:
+
+```bash
+ROOMPULSE_SPEAKER_DISTANCE_THRESHOLD=0.18 npm run transcription
+```
+
 ## Speaker Recognition Limitations
 
 The MVP diarization is approximate and not biometric identity. The local service
