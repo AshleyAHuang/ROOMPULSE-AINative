@@ -39,6 +39,26 @@ Agenda checkboxes remain manually editable, and RoomPulse also auto-checks
 items when the transcript clearly indicates they were covered, such as “that
 covers launch risks” or “done with owners.”
 
+## Local Meeting Logs
+
+RoomPulse stores meeting logs locally on the Next.js server under
+`.roompulse/meetings/`. This directory is git-ignored. Each meeting gets:
+
+- `metadata.json`: title, goal, start time, current event count, and setup context.
+- `events.jsonl`: append-only event stream for meeting start, transcript lines,
+  heartbeat outputs, agenda changes, review restores, pause toggles, and demo
+  events.
+
+The setup screen includes a **Past meetings** panel that lists local logs and
+opens a compact event preview. Backend endpoints:
+
+```text
+GET  /api/meetings
+POST /api/meetings
+GET  /api/meetings/{meetingId}
+POST /api/meetings/{meetingId}/events
+```
+
 ## Pi Integration
 
 The explicit integration boundary is:
@@ -156,6 +176,10 @@ npm run dev:strict
 
 - `src/app/RoomPulseApp.tsx`: setup feeder, room display, heartbeat loop, demo transcript, and mic controls.
 - `src/app/api/heartbeat/route.ts`: server heartbeat endpoint.
+- `src/app/api/meetings/route.ts`: local meeting log list/create endpoint.
+- `src/app/api/meetings/[meetingId]/route.ts`: local meeting log read endpoint.
+- `src/app/api/meetings/[meetingId]/events/route.ts`: append-only meeting event endpoint.
+- `src/lib/meeting-log-store.ts`: filesystem-backed meeting log writer/reader.
 - `src/lib/local-transcription-client.ts`: browser mic capture, downsampling, PCM streaming, and transcript event handling.
 - `src/lib/pi-adapter.ts`: Pi SDK adapter with deterministic fallback.
 - `src/lib/facilitator.ts`: heartbeat input shaping and local facilitator output.

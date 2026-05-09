@@ -35,6 +35,33 @@ import {
 type Phase = "setup" | "meeting";
 type TranscriptMode = "demo" | "mic";
 
+interface ClientMeetingLogMetadata {
+  id: string;
+  title: string;
+  goal: string;
+  startedAt: number;
+  updatedAt: number;
+  eventCount: number;
+}
+
+interface ClientMeetingLogEvent {
+  id: string;
+  type: string;
+  timestamp: number;
+  payload: unknown;
+}
+
+interface ClientMeetingLogSnapshot {
+  metadata: ClientMeetingLogMetadata;
+  events: ClientMeetingLogEvent[];
+}
+
+interface PendingMeetingLogEvent {
+  type: string;
+  timestamp: number;
+  payload: unknown;
+}
+
 const defaultMeeting: MeetingConfig = {
   title: "Product readiness review",
   goal: "Leave with owners for the open launch risks.",
@@ -116,6 +143,11 @@ export default function RoomPulseApp() {
   const [currentReviewVersionId, setCurrentReviewVersionId] =
     useState("initial-review");
   const [ephemeralReminder, setEphemeralReminder] = useState<string | null>(null);
+  const [meetingLogId, setMeetingLogId] = useState<string | null>(null);
+  const [logStatus, setLogStatus] = useState("Logs idle");
+  const [pastMeetings, setPastMeetings] = useState<ClientMeetingLogMetadata[]>([]);
+  const [selectedMeetingLog, setSelectedMeetingLog] =
+    useState<ClientMeetingLogSnapshot | null>(null);
 
   const transcriptStoreRef = useRef(new TranscriptStore());
   const transcriptionClientRef = useRef<LocalTranscriptionClient | null>(null);
@@ -123,6 +155,8 @@ export default function RoomPulseApp() {
   const isHeartbeatRunningRef = useRef(false);
   const transcriptFeedRef = useRef<HTMLDivElement | null>(null);
   const demoTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const meetingLogIdRef = useRef<string | null>(null);
+  const pendingLogEventsRef = useRef<PendingMeetingLogEvent[]>([]);
 
   const observedSpeakerLabels = useMemo(
     () => Array.from(new Set(transcript.map((line) => line.speakerLabel))),
@@ -153,6 +187,111 @@ export default function RoomPulseApp() {
       ? 0
       : Math.round((agendaProgress.completed / agendaProgress.total) * 100);
 
+  const logMeetingEvent = useCallback(
+    (type: string, payload: unknown, timestamp = Date.now()) => {
+      const event = { type, timestamp, payload };
+      const currentMeetingLogId = meetingLogIdRef.current;
+
+      if (!currentMeetingLogId) {
+        pendingLogEventsRef.current.push(event);
+        return;
+      }
+
+      void sendMeetingLogEvent(currentMeetingLogId, event).catch((error) => {
+        setLogStatus(
+          `Log write failed: ${error instanceof Error ? error.message : String(error)}`
+        );
+      });
+    },
+    []
+  );
+
+  const refreshPastMeetings = useCallback(async () => {
+    try {
+      const response = await fetch("/api/meetings");
+      if (!response.ok) {
+        throw new Error(`Meeting list returned ${response.status}`);
+      }
+      const payload = (await response.json()) as {
+        meetings?: ClientMeetingLogMetadata[];
+      };
+      setPastMeetings(payload.meetings ?? []);
+    } catch {
+      setPastMeetings([]);
+    }
+  }, []);
+
+  const loadPastMeetingLog = useCallback(async (id: string) => {
+    try {
+      const response = await fetch(`/api/meetings/${encodeURIComponent(id)}`);
+      if (!response.ok) {
+        throw new Error(`Meeting log returned ${response.status}`);
+      }
+      setSelectedMeetingLog((await response.json()) as ClientMeetingLogSnapshot);
+    } catch (error) {
+      setSelectedMeetingLog({
+        metadata: {
+          id,
+          title: "Unable to load meeting",
+          goal: error instanceof Error ? error.message : String(error),
+          startedAt: Date.now(),
+          updatedAt: Date.now(),
+          eventCount: 0
+        },
+        events: []
+      });
+    }
+  }, []);
+
+  const createMeetingLogFor = useCallback(
+    async (
+      configuredMeeting: MeetingConfig,
+      startedAt: number,
+      initialEvents: PendingMeetingLogEvent[]
+    ) => {
+      meetingLogIdRef.current = null;
+      pendingLogEventsRef.current = [...initialEvents];
+      setMeetingLogId(null);
+      setLogStatus("Creating local meeting log...");
+
+      try {
+        const response = await fetch("/api/meetings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            meeting: configuredMeeting,
+            startedAt
+          })
+        });
+
+        if (!response.ok) {
+          throw new Error(`Meeting log route returned ${response.status}`);
+        }
+
+        const metadata = (await response.json()) as ClientMeetingLogMetadata;
+        meetingLogIdRef.current = metadata.id;
+        setMeetingLogId(metadata.id);
+        setLogStatus(`Logging locally: ${metadata.id}`);
+
+        const queued = pendingLogEventsRef.current.splice(0);
+        await Promise.all(
+          queued.map((event) => sendMeetingLogEvent(metadata.id, event))
+        );
+        void refreshPastMeetings();
+      } catch (error) {
+        pendingLogEventsRef.current = [];
+        setLogStatus(
+          `Meeting logging unavailable: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      }
+    },
+    [refreshPastMeetings]
+  );
+
   const addTranscriptLine = useCallback(
     (
       text: string,
@@ -166,7 +305,7 @@ export default function RoomPulseApp() {
       }
 
       const speakerId = speakerLabel.toLowerCase().replace(/\s+/g, "-");
-      transcriptStoreRef.current.addLine({
+      const line = transcriptStoreRef.current.addLine({
         speakerId,
         speakerLabel,
         text: trimmed,
@@ -174,8 +313,9 @@ export default function RoomPulseApp() {
         confidence
       });
       setTranscript(transcriptStoreRef.current.getLines());
+      logMeetingEvent("transcript_line", { line }, line.timestamp);
     },
-    []
+    [logMeetingEvent]
   );
 
   const applyHeartbeatOutput = useCallback(
@@ -209,8 +349,16 @@ export default function RoomPulseApp() {
         },
         ...entries
       ]);
+      logMeetingEvent(
+        "heartbeat_output",
+        {
+          output,
+          reviewVersionId: `${heartbeatNow}-review`
+        },
+        heartbeatNow
+      );
     },
-    []
+    [logMeetingEvent]
   );
 
   const runHeartbeat = useCallback(async () => {
@@ -327,6 +475,10 @@ export default function RoomPulseApp() {
     setHeartbeatCount(0);
     setHeartbeatError(null);
     setEphemeralReminder(null);
+    logMeetingEvent("scripted_demo_started", {
+      durationMs: DEMO_DURATION_MS,
+      beats: DEMO_SCRIPT.length
+    });
 
     const startedAt = Date.now();
     setLastHeartbeatAt(startedAt);
@@ -346,6 +498,7 @@ export default function RoomPulseApp() {
     demoTimeoutsRef.current.push(finalTimer);
   }, [
     addTranscriptLine,
+    logMeetingEvent,
     meeting.heartbeatIntervalSeconds,
     stopScriptedDemo
   ]);
@@ -407,8 +560,15 @@ export default function RoomPulseApp() {
     setTimeline([]);
     setLastHeartbeatAt(startedAt);
     setNextHeartbeatAt(startedAt + demoMeeting.heartbeatIntervalSeconds * 1000);
+    void createMeetingLogFor(demoMeeting, startedAt, [
+      {
+        type: "meeting_started",
+        timestamp: startedAt,
+        payload: { meeting: demoMeeting, mode: "scripted-demo" }
+      }
+    ]);
     setTimeout(() => startScriptedDemo(), 120);
-  }, [startScriptedDemo]);
+  }, [createMeetingLogFor, startScriptedDemo]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -489,9 +649,19 @@ export default function RoomPulseApp() {
     setMeeting((current) => {
       const updated = applyAgendaCoverage(current.agenda, transcript);
       if (updated === current.agenda) return current;
+      logMeetingEvent("agenda_auto_checked", {
+        previousAgenda: current.agenda,
+        nextAgenda: updated
+      });
       return { ...current, agenda: updated };
     });
-  }, [phase, transcript]);
+  }, [logMeetingEvent, phase, transcript]);
+
+  useEffect(() => {
+    if (phase === "setup") {
+      void refreshPastMeetings();
+    }
+  }, [phase, refreshPastMeetings]);
 
   function startMeeting() {
     const expectedParticipants = clampFiniteNumber(
@@ -555,6 +725,13 @@ export default function RoomPulseApp() {
     setNextHeartbeatAt(
       startedAt + configuredMeeting.heartbeatIntervalSeconds * 1000
     );
+    void createMeetingLogFor(configuredMeeting, startedAt, [
+      {
+        type: "meeting_started",
+        timestamp: startedAt,
+        payload: { meeting: configuredMeeting, mode: "manual" }
+      }
+    ]);
   }
 
   function addDemoLine() {
@@ -630,6 +807,7 @@ export default function RoomPulseApp() {
         item.id === id ? { ...item, done } : item
       )
     }));
+    logMeetingEvent("agenda_manual_update", { itemId: id, done });
   }
 
   function applyAgendaActions(actions: FacilitatorOutput["agendaActions"]) {
@@ -654,11 +832,16 @@ export default function RoomPulseApp() {
     setReviewMarkdown(version.markdown);
     setCurrentReviewVersionId(restoredVersion.id);
     setReviewVersions((versions) => [restoredVersion, ...versions]);
+    logMeetingEvent("review_restored", {
+      restoredVersion,
+      sourceVersionId: version.id
+    }, restoredAt);
   }
 
   function togglePause() {
     const nextPaused = !isPaused;
     setIsPaused(nextPaused);
+    logMeetingEvent("meeting_pause_toggled", { paused: nextPaused });
     if (!nextPaused) {
       setNextHeartbeatAt(Date.now() + meeting.heartbeatIntervalSeconds * 1000);
     }
@@ -874,6 +1057,47 @@ export default function RoomPulseApp() {
                   ))}
               </ol>
             </section>
+            <section className="setup-card past-meetings">
+              <div className="setup-card-title">
+                <strong>Past meetings</strong>
+                <button type="button" onClick={() => void refreshPastMeetings()}>
+                  Refresh
+                </button>
+              </div>
+              {pastMeetings.length === 0 ? (
+                <p>No local meeting logs yet.</p>
+              ) : (
+                <div className="past-meeting-list">
+                  {pastMeetings.slice(0, 5).map((pastMeeting) => (
+                    <button
+                      key={pastMeeting.id}
+                      type="button"
+                      onClick={() => void loadPastMeetingLog(pastMeeting.id)}
+                    >
+                      <strong>{pastMeeting.title}</strong>
+                      <span>
+                        {pastMeeting.eventCount} events -{" "}
+                        {formatClock(pastMeeting.startedAt)}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {selectedMeetingLog ? (
+                <div className="meeting-log-preview">
+                  <div>
+                    <strong>{selectedMeetingLog.metadata.title}</strong>
+                    <span>{selectedMeetingLog.events.length} logged events</span>
+                  </div>
+                  {selectedMeetingLog.events.slice(-6).map((event) => (
+                    <p key={event.id}>
+                      <span>{formatClock(event.timestamp)}</span>
+                      {event.type.replaceAll("_", " ")}
+                    </p>
+                  ))}
+                </div>
+              ) : null}
+            </section>
           </aside>
         </section>
       </main>
@@ -957,6 +1181,10 @@ export default function RoomPulseApp() {
                 }
               />
             </label>
+            <p className="log-status">
+              {logStatus}
+              {meetingLogId ? ` (${meetingLogId})` : ""}
+            </p>
           </aside>
         ) : null}
       </header>
@@ -1199,6 +1427,26 @@ function StatusPill({
       {children}
     </span>
   );
+}
+
+async function sendMeetingLogEvent(
+  meetingLogId: string,
+  event: PendingMeetingLogEvent
+) {
+  const response = await fetch(
+    `/api/meetings/${encodeURIComponent(meetingLogId)}/events`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(event)
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(`Meeting event log returned ${response.status}`);
+  }
 }
 
 async function runLocalHeartbeatInBrowser(input: ReturnType<typeof createHeartbeatInput>) {
