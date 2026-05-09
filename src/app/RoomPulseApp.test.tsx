@@ -7,6 +7,17 @@ describe("RoomPulseApp", () => {
     vi.unstubAllGlobals();
   });
 
+  beforeEach(() => {
+    vi.stubGlobal("navigator", {
+      permissions: {
+        query: vi.fn().mockResolvedValue({
+          state: "prompt",
+          onchange: null
+        })
+      }
+    });
+  });
+
   it("moves from setup feeder to room display with demo transcript controls", async () => {
     render(<RoomPulseApp />);
 
@@ -23,10 +34,11 @@ describe("RoomPulseApp", () => {
     fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
 
     expect(
-      await screen.findByRole("button", { name: /run heartbeat now/i })
+      await screen.findByRole("button", { name: /run heartbeat/i })
     ).toBeInTheDocument();
     expect(screen.getByText(/live raw transcript/i)).toBeInTheDocument();
     expect(screen.getByText(/0 of 3 heard/i)).toBeInTheDocument();
+    expect(screen.getByText(/live review document/i)).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText(/demo line/i), {
       target: { value: "We have not made a decision yet." }
@@ -37,7 +49,7 @@ describe("RoomPulseApp", () => {
     expect(screen.getByText(/1 of 3 heard/i)).toBeVisible();
   });
 
-  it("records browser fallback heartbeat pulses in the intervention timeline", async () => {
+  it("records browser fallback heartbeat pulses as review document versions", async () => {
     const fetchMock = vi.fn().mockRejectedValue(new Error("network down"));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -45,11 +57,11 @@ describe("RoomPulseApp", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
     fireEvent.click(
-      await screen.findByRole("button", { name: /run heartbeat now/i })
+      await screen.findByRole("button", { name: /run heartbeat/i })
     );
 
-    expect(await screen.findByText(/browser fallback used: network down/i)).toBeVisible();
-    expect(screen.getByText(/1 pulses/i)).toBeVisible();
+    expect(await screen.findByText(/network down/i)).toBeVisible();
+    expect(screen.getByText(/2 versions/i)).toBeVisible();
   });
 
   it("clamps invalid numeric setup values before starting the room display", async () => {
@@ -73,7 +85,7 @@ describe("RoomPulseApp", () => {
     fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
 
     expect(
-      await screen.findByRole("button", { name: /run heartbeat now/i })
+      await screen.findByRole("button", { name: /run heartbeat/i })
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: /stop mic/i })

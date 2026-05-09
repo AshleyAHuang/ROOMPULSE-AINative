@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
+  createInitialReviewMarkdown,
   runLocalFacilitation,
   type FacilitatorOutput,
   type HeartbeatInput
@@ -77,6 +78,10 @@ export async function runPiHeartbeat(
     const output = await withTimeout(runPiSession(input), getPiTimeoutMs());
     return output;
   } catch (error) {
+    if (process.env.ROOMPULSE_REQUIRE_PI === "1") {
+      throw new Error(`Pi adapter required but unavailable: ${errorToMessage(error)}`);
+    }
+
     const fallback = await runLocalFacilitation(input);
     return {
       ...fallback,
@@ -321,30 +326,55 @@ Return strict JSON only, matching:
 {
   "cards": [{"kind":"heartbeat|participation|risk|agenda|decision|action|drift|reminder","title":"short","body":"one room-visible sentence","priority":"low|medium|high"}],
   "summary": "one sentence",
-  "nextHeartbeatHint": "one sentence"
+  "nextHeartbeatHint": "one sentence",
+  "reviewMarkdown": "complete updated markdown document",
+  "agendaActions": [{"itemId":"agenda item id","done":true,"reason":"why"}],
+  "ephemeralReminder": "one quiet room-facing reminder for this heartbeat, or null"
 }
 
 Meeting context:
 ${JSON.stringify(input, null, 2)}
 
+Update reviewMarkdown non-destructively: do not delete or rewrite away prior useful lines; when superseding or removing a claim, use Markdown strikethrough and add the replacement nearby.
+Only include agendaActions when the transcript clearly supports checking or unchecking an agenda item.
 Keep cards concise. Prefer reminders, concerns, agenda drift, open decisions, action items, and participation nudges.`;
 }
 
 function parsePiOutput(text: string): FacilitatorOutput {
   const jsonText = extractJsonObject(text);
   const parsed = JSON.parse(jsonText) as Omit<FacilitatorOutput, "source">;
+  const now = Date.now();
 
   return {
     source: "pi",
-    cards: parsed.cards.map((card, index) => ({
-      id: `${Date.now()}-pi-${index + 1}`,
+    cards: (parsed.cards ?? []).map((card, index) => ({
+      id: `${now}-pi-${index + 1}`,
       kind: card.kind,
       title: card.title,
       body: card.body,
       priority: card.priority
     })),
     summary: parsed.summary,
-    nextHeartbeatHint: parsed.nextHeartbeatHint
+    nextHeartbeatHint: parsed.nextHeartbeatHint,
+    reviewMarkdown:
+      typeof parsed.reviewMarkdown === "string"
+        ? parsed.reviewMarkdown
+        : createInitialReviewMarkdown({
+            title: "RoomPulse",
+            goal: parsed.summary,
+            context: "",
+            agenda: [],
+            expectedParticipants: 0,
+            participants: [],
+            heartbeatIntervalSeconds: 60
+          }),
+    agendaActions: Array.isArray(parsed.agendaActions)
+      ? parsed.agendaActions
+      : [],
+    ephemeralReminder:
+      typeof parsed.ephemeralReminder === "string"
+        ? parsed.ephemeralReminder
+        : null
   };
 }
 

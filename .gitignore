@@ -3,6 +3,9 @@ node_modules
 out
 coverage
 *.tsbuildinfo
+__pycache__/
+*.pyc
+.venv/
 .env*.local
 npm-debug.log*
 yarn-debug.log*

@@ -57,12 +57,35 @@ export interface TimelineEntry {
   source: FacilitatorOutput["source"];
   cards: FacilitatorCard[];
   summary: string;
+  reviewMarkdown?: string;
+  reminder?: string | null;
 }
 
 export interface AgendaProgress {
   total: number;
   completed: number;
   active: AgendaItem | null;
+}
+
+export interface ReviewVersion {
+  id: string;
+  timestamp: number;
+  source: FacilitatorOutput["source"] | "initial" | "restored";
+  markdown: string;
+  summary: string;
+}
+
+export interface AgendaAction {
+  itemId: string;
+  done: boolean;
+  reason: string;
+}
+
+export interface HeartbeatRuntimeState {
+  meetingStartedAt: number;
+  meetingElapsedSeconds: number;
+  isPaused: boolean;
+  heartbeatCount: number;
 }
 
 export interface HeartbeatInput {
@@ -72,6 +95,9 @@ export interface HeartbeatInput {
   participation: ParticipationStatus;
   agendaProgress: AgendaProgress;
   priorInterventions: TimelineEntry[];
+  currentReviewMarkdown: string;
+  reviewVersions: ReviewVersion[];
+  runtime: HeartbeatRuntimeState;
   now: number;
 }
 
@@ -80,6 +106,9 @@ export interface FacilitatorOutput {
   cards: FacilitatorCard[];
   summary: string;
   nextHeartbeatHint: string;
+  reviewMarkdown: string;
+  agendaActions: AgendaAction[];
+  ephemeralReminder: string | null;
   adapterNotice?: string;
 }
 
@@ -90,6 +119,11 @@ export interface CreateHeartbeatInputArgs {
   lastHeartbeatAt: number;
   now: number;
   priorInterventions: TimelineEntry[];
+  currentReviewMarkdown?: string;
+  reviewVersions?: ReviewVersion[];
+  meetingStartedAt?: number;
+  isPaused?: boolean;
+  heartbeatCount?: number;
 }
 
 export function createHeartbeatInput({
@@ -98,8 +132,15 @@ export function createHeartbeatInput({
   observedSpeakerLabels,
   lastHeartbeatAt,
   now,
-  priorInterventions
+  priorInterventions,
+  currentReviewMarkdown,
+  reviewVersions,
+  meetingStartedAt,
+  isPaused,
+  heartbeatCount
 }: CreateHeartbeatInputArgs): HeartbeatInput {
+  const startedAt = meetingStartedAt ?? now;
+
   return {
     meeting,
     transcript,
@@ -112,6 +153,15 @@ export function createHeartbeatInput({
     ),
     agendaProgress: getAgendaProgress(meeting.agenda),
     priorInterventions,
+    currentReviewMarkdown:
+      currentReviewMarkdown ?? createInitialReviewMarkdown(meeting),
+    reviewVersions: reviewVersions ?? [],
+    runtime: {
+      meetingStartedAt: startedAt,
+      meetingElapsedSeconds: Math.max(0, Math.floor((now - startedAt) / 1000)),
+      isPaused: isPaused ?? false,
+      heartbeatCount: heartbeatCount ?? priorInterventions.length
+    },
     now
   };
 }
@@ -183,6 +233,7 @@ export async function runLocalFacilitation(
   }
 
   const activeAgenda = input.agendaProgress.active;
+  const agendaActions = inferAgendaActions(input, combinedText);
   if (activeAgenda) {
     cards.push({
       id: createCardId(input.now, "agenda"),
@@ -199,7 +250,10 @@ export async function runLocalFacilitation(
     summary: `${input.meeting.title}: ${cards.length} facilitator cues generated from ${input.transcriptDelta.length} new transcript ${input.transcriptDelta.length === 1 ? "line" : "lines"}.`,
     nextHeartbeatHint: activeAgenda
       ? `Next check should revisit ${activeAgenda.title}.`
-      : "Next check should confirm whether the meeting goal is complete."
+      : "Next check should confirm whether the meeting goal is complete.",
+    reviewMarkdown: buildReviewMarkdown(input, cards, agendaActions),
+    agendaActions,
+    ephemeralReminder: selectEphemeralReminder(input, cards)
   };
 }
 
@@ -224,4 +278,136 @@ function buildHeartbeatBody(input: HeartbeatInput): string {
 
 function createCardId(timestamp: number, suffix: string): string {
   return `${timestamp}-${suffix}`;
+}
+
+export function createInitialReviewMarkdown(meeting: MeetingConfig): string {
+  const agendaLines = meeting.agenda
+    .map((item) => `- [${item.done ? "x" : " "}] ${item.title}`)
+    .join("\n");
+  const participants =
+    meeting.participants.length > 0
+      ? meeting.participants
+          .map((participant) =>
+            participant.role
+              ? `- ${participant.name} - ${participant.role}`
+              : `- ${participant.name}`
+          )
+          .join("\n")
+      : "- Speaker clusters will appear as people speak.";
+
+  return [
+    `# ${meeting.title}`,
+    "",
+    `**Goal:** ${meeting.goal}`,
+    "",
+    "## Meeting Context",
+    meeting.context || "_No additional context provided._",
+    "",
+    "## Agenda",
+    agendaLines || "- [ ] Open discussion",
+    "",
+    "## Participants",
+    participants,
+    "",
+    "## Live Review",
+    "_RoomPulse will revise this document every heartbeat. Removed or superseded claims should be struck through, not deleted._"
+  ].join("\n");
+}
+
+function buildReviewMarkdown(
+  input: HeartbeatInput,
+  cards: FacilitatorCard[],
+  agendaActions: AgendaAction[]
+): string {
+  const pulseTitle = `### Heartbeat ${input.runtime.heartbeatCount + 1} - ${formatElapsed(input.runtime.meetingElapsedSeconds)}`;
+  const transcriptDigest =
+    input.transcriptDelta.length > 0
+      ? input.transcriptDelta
+          .slice(-4)
+          .map((line) => `- **${line.speakerLabel}:** ${line.text}`)
+          .join("\n")
+      : "- _No new transcript lines since the last heartbeat._";
+  const cueLines = cards
+    .map((card) => `- **${card.title}:** ${card.body}`)
+    .join("\n");
+  const agendaLines =
+    agendaActions.length > 0
+      ? agendaActions
+          .map(
+            (action) =>
+              `- ${action.done ? "Checked" : "Unchecked"} agenda item \`${action.itemId}\`: ${action.reason}`
+          )
+          .join("\n")
+      : "- No agenda status changes proposed.";
+
+  return [
+    input.currentReviewMarkdown,
+    "",
+    pulseTitle,
+    "",
+    "#### Transcript Delta",
+    transcriptDigest,
+    "",
+    "#### Facilitation Review",
+    cueLines,
+    "",
+    "#### Agenda Updates",
+    agendaLines
+  ].join("\n");
+}
+
+function inferAgendaActions(
+  input: HeartbeatInput,
+  combinedText: string
+): AgendaAction[] {
+  const active = input.agendaProgress.active;
+  if (!active) {
+    return [];
+  }
+
+  const completionSignal =
+    /\b(done|finished|complete|completed|resolved|settled|agreed|decided)\b/.test(
+      combinedText
+    );
+  if (!completionSignal) {
+    return [];
+  }
+
+  return [
+    {
+      itemId: active.id,
+      done: true,
+      reason:
+        "Transcript suggests the active agenda item reached a conclusion. Review and untick if the room disagrees."
+    }
+  ];
+}
+
+function selectEphemeralReminder(
+  input: HeartbeatInput,
+  cards: FacilitatorCard[]
+): string | null {
+  const highPriority = cards.find((card) => card.priority === "high");
+  if (highPriority) {
+    return highPriority.body;
+  }
+
+  if (input.participation.needsNudge && input.participation.reminder) {
+    return input.participation.reminder;
+  }
+
+  if (
+    input.runtime.meetingElapsedSeconds > 0 &&
+    input.runtime.meetingElapsedSeconds % 900 < input.meeting.heartbeatIntervalSeconds
+  ) {
+    return "Time check: if this item is still open, try to reach a conclusion before the next pulse.";
+  }
+
+  return null;
+}
+
+function formatElapsed(totalSeconds: number): string {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }

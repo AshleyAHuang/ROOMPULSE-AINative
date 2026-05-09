@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runPiHeartbeat } from "./pi-adapter";
-import type { HeartbeatInput, MeetingConfig } from "./facilitator";
+import {
+  createInitialReviewMarkdown,
+  type HeartbeatInput,
+  type MeetingConfig
+} from "./facilitator";
 
 const authStorage = {
   hasAuth: vi.fn(),
@@ -68,6 +72,14 @@ const heartbeatInput: HeartbeatInput = {
     active: meeting.agenda[0]
   },
   priorInterventions: [],
+  currentReviewMarkdown: createInitialReviewMarkdown(meeting),
+  reviewVersions: [],
+  runtime: {
+    meetingStartedAt: 1_700_000_000_000,
+    meetingElapsedSeconds: 0,
+    isPaused: false,
+    heartbeatCount: 0
+  },
   now: 1_700_000_000_000
 };
 
@@ -81,6 +93,7 @@ describe("Pi adapter", () => {
     delete process.env.ROOMPULSE_PI_PROVIDER;
     delete process.env.ROOMPULSE_PI_MODEL;
     delete process.env.ROOMPULSE_PI_THINKING_LEVEL;
+    delete process.env.ROOMPULSE_REQUIRE_PI;
     process.env.ROOMPULSE_CODEX_AUTH_PATH = join(tempDir, "codex-auth.json");
 
     let configured = false;
@@ -113,7 +126,10 @@ describe("Pi adapter", () => {
               }
             ],
             summary: "One Pi cue generated.",
-            nextHeartbeatHint: "Revisit the open risk owner."
+            nextHeartbeatHint: "Revisit the open risk owner.",
+            reviewMarkdown: "# Launch check\n\n### Heartbeat 1\n- Stay focused.",
+            agendaActions: [],
+            ephemeralReminder: "Keep the room on the risk owner decision."
           })
         }
       });
@@ -124,6 +140,7 @@ describe("Pi adapter", () => {
 
   afterEach(() => {
     delete process.env.ROOMPULSE_CODEX_AUTH_PATH;
+    delete process.env.ROOMPULSE_REQUIRE_PI;
     rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -173,6 +190,16 @@ describe("Pi adapter", () => {
 
     expect(output.source).toBe("local-fallback");
     expect(output.adapterNotice).toContain("OpenAI Codex auth is not configured");
+    expect(createAgentSession).not.toHaveBeenCalled();
+  });
+
+  it("throws instead of falling back when Pi is required", async () => {
+    process.env.ROOMPULSE_REQUIRE_PI = "1";
+    modelRegistry.hasConfiguredAuth.mockReturnValue(false);
+
+    await expect(runPiHeartbeat(heartbeatInput)).rejects.toThrow(
+      "Pi adapter required but unavailable"
+    );
     expect(createAgentSession).not.toHaveBeenCalled();
   });
 });
