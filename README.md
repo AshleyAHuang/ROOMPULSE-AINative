@@ -128,7 +128,8 @@ npm run transcription
 ```
 
 The first run downloads the configured Whisper model into the local Hugging Face
-cache. The default model is `base.en`; for lower latency on CPU, use:
+cache. The default model is `small.en` for better meeting accuracy; for lower
+latency on CPU, use:
 
 ```bash
 ROOMPULSE_WHISPER_MODEL=tiny.en npm run transcription
@@ -143,8 +144,14 @@ Speaker clustering sensitivity can be tuned without code changes. Lower values
 split voices more aggressively; higher values merge more aggressively:
 
 ```bash
-ROOMPULSE_SPEAKER_DISTANCE_THRESHOLD=0.18 npm run transcription
+ROOMPULSE_SPEAKER_DISTANCE_THRESHOLD=0.14 npm run transcription
 ```
+
+The service also applies local background-noise cleanup before transcription:
+high-pass filtering, low-energy noise suppression, silence trimming, Whisper VAD,
+and RMS normalization. You can trade speed for accuracy with
+`ROOMPULSE_WHISPER_MODEL`, `ROOMPULSE_WHISPER_BEAM_SIZE`, and
+`ROOMPULSE_WHISPER_BEST_OF`.
 
 ## Speaker Recognition Limitations
 

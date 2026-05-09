@@ -107,7 +107,7 @@ export default function RoomPulseApp() {
   );
   const [meeting, setMeeting] = useState(defaultMeeting);
   const [transcript, setTranscript] = useState<TranscriptLine[]>([]);
-  const [transcriptMode, setTranscriptMode] = useState<TranscriptMode>("demo");
+  const [transcriptMode, setTranscriptMode] = useState<TranscriptMode>("mic");
   const [demoLine, setDemoLine] = useState("");
   const [demoSpeaker, setDemoSpeaker] = useState("Speaker 1");
   const [currentOutput, setCurrentOutput] = useState<FacilitatorOutput | null>(
@@ -764,6 +764,8 @@ export default function RoomPulseApp() {
     setNextHeartbeatAt(
       startedAt + configuredMeeting.heartbeatIntervalSeconds * 1000
     );
+    setTranscriptMode("mic");
+    void startMic();
     void createMeetingLogFor(configuredMeeting, startedAt, [
       {
         type: "meeting_started",
@@ -1322,6 +1324,8 @@ export default function RoomPulseApp() {
           onSelect={(id) => void loadPastMeetingLog(id)}
           onNewMeeting={() => {
             setIsPastMeetingsOpen(false);
+            stopMic();
+            stopScriptedDemo();
             setPhase("setup");
           }}
         />
@@ -1412,33 +1416,35 @@ export default function RoomPulseApp() {
             )}
           </div>
 
-          <div className="demo-controls">
-            <label>
-              <span>Demo speaker</span>
-              <select
-                value={demoSpeaker}
-                onChange={(event) => setDemoSpeaker(event.target.value)}
-              >
-                {Array.from(
-                  { length: Math.max(6, meeting.expectedParticipants) },
-                  (_, index) => (
-                    <option key={index + 1}>Speaker {index + 1}</option>
-                  )
-                )}
-              </select>
-            </label>
-            <label className="demo-line-field">
-              <span>Demo line</span>
-              <input
-                value={demoLine}
-                onChange={(event) => setDemoLine(event.target.value)}
-                placeholder={demoSnippets[transcript.length % demoSnippets.length]}
-              />
-            </label>
-            <button type="button" onClick={addDemoLine}>
-              Add demo line
-            </button>
-          </div>
+          {transcriptMode === "demo" ? (
+            <div className="demo-controls">
+              <label>
+                <span>Demo speaker</span>
+                <select
+                  value={demoSpeaker}
+                  onChange={(event) => setDemoSpeaker(event.target.value)}
+                >
+                  {Array.from(
+                    { length: Math.max(6, meeting.expectedParticipants) },
+                    (_, index) => (
+                      <option key={index + 1}>Speaker {index + 1}</option>
+                    )
+                  )}
+                </select>
+              </label>
+              <label className="demo-line-field">
+                <span>Demo line</span>
+                <input
+                  value={demoLine}
+                  onChange={(event) => setDemoLine(event.target.value)}
+                  placeholder={demoSnippets[transcript.length % demoSnippets.length]}
+                />
+              </label>
+              <button type="button" onClick={addDemoLine}>
+                Add line
+              </button>
+            </div>
+          ) : null}
           {transcriptMode === "mic" ? (
             <p className="mic-status">
               {isMicRunning ? "Microphone active. " : ""}
@@ -1622,7 +1628,11 @@ export default function RoomPulseApp() {
         <button
           className="pill-btn danger"
           type="button"
-          onClick={() => setPhase("setup")}
+          onClick={() => {
+            stopMic();
+            stopScriptedDemo();
+            setPhase("setup");
+          }}
         >
           <MaterialIcon name="call_end" filled />
           End

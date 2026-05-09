@@ -23,11 +23,14 @@ else:
 
 SAMPLE_RATE = 16_000
 BYTES_PER_SAMPLE = 2
-DEFAULT_MODEL = "base.en"
+DEFAULT_MODEL = "small.en"
 DEFAULT_DEVICE = "cpu"
 DEFAULT_COMPUTE_TYPE = "int8"
 DEFAULT_LANGUAGE = "en"
-DEFAULT_SPEAKER_DISTANCE_THRESHOLD = 0.18
+DEFAULT_SPEAKER_DISTANCE_THRESHOLD = 0.14
+DEFAULT_BEAM_SIZE = 5
+DEFAULT_BEST_OF = 5
+DEFAULT_NO_SPEECH_THRESHOLD = 0.55
 
 
 app = FastAPI(title="RoomPulse Local Transcription")
@@ -158,11 +161,15 @@ class SpeakerClusterer:
     def assign(self, audio: np.ndarray) -> SpeakerCluster:
         embedding = build_voice_embedding(trim_silence(audio))
         best: tuple[float, SpeakerCluster] | None = None
+        second_best_distance: float | None = None
 
         for cluster in self.clusters:
             distance = voice_distance(cluster.centroid, embedding)
             if best is None or distance < best[0]:
+                second_best_distance = best[0] if best is not None else None
                 best = (distance, cluster)
+            elif second_best_distance is None or distance < second_best_distance:
+                second_best_distance = distance
 
         if best is None or best[0] > self.threshold:
             cluster = SpeakerCluster(
@@ -174,12 +181,17 @@ class SpeakerClusterer:
             return cluster
 
         cluster = best[1]
-        # Adapt slowly so one mixed/noisy segment does not drag the centroid
-        # into every future voice and collapse diarization into Speaker 1.
-        update_weight = min(0.35, 1.0 / float(cluster.samples + 1))
-        cluster.centroid = (
-            cluster.centroid * (1.0 - update_weight) + embedding * update_weight
+        is_ambiguous = (
+            second_best_distance is not None
+            and abs(second_best_distance - best[0]) < self.threshold * 0.18
         )
+        # Adapt only on confident matches. Updating centroids on borderline or
+        # mixed-room audio is what makes future voices collapse into Speaker 1.
+        if best[0] < self.threshold * 0.72 and not is_ambiguous:
+            update_weight = min(0.18, 1.0 / float(cluster.samples + 2))
+            cluster.centroid = (
+                cluster.centroid * (1.0 - update_weight) + embedding * update_weight
+            )
         cluster.samples += 1
         cluster.last_seen_at = time.time()
         return cluster
@@ -243,7 +255,7 @@ class TranscriptionSession:
             raw = bytes(self.buffer[:take])
             del self.buffer[:take]
 
-        audio = pcm16_to_float32(raw)
+        audio = prepare_speech_audio(pcm16_to_float32(raw))
         if not has_speech(audio):
             return
 
@@ -291,12 +303,26 @@ async def transcribe_audio(
         segments, _info = local_model.transcribe(
             audio,
             language=language,
-            beam_size=1,
-            best_of=1,
+            beam_size=int(os.getenv("ROOMPULSE_WHISPER_BEAM_SIZE", DEFAULT_BEAM_SIZE)),
+            best_of=int(os.getenv("ROOMPULSE_WHISPER_BEST_OF", DEFAULT_BEST_OF)),
             temperature=0,
-            vad_filter=False,
+            vad_filter=os.getenv("ROOMPULSE_WHISPER_VAD", "1") != "0",
+            vad_parameters={
+                "min_speech_duration_ms": 180,
+                "min_silence_duration_ms": 350,
+                "speech_pad_ms": 120,
+            },
             condition_on_previous_text=False,
-            no_speech_threshold=0.45,
+            no_speech_threshold=float(
+                os.getenv(
+                    "ROOMPULSE_WHISPER_NO_SPEECH_THRESHOLD",
+                    str(DEFAULT_NO_SPEECH_THRESHOLD),
+                )
+            ),
+            initial_prompt=(
+                "This is a business meeting transcript. Use ordinary punctuation. "
+                "Ignore background noise, repeated apologies from noise, and room hum."
+            ),
         )
         return " ".join(segment.text.strip() for segment in segments).strip()
 
@@ -319,7 +345,80 @@ def has_speech(audio: np.ndarray) -> bool:
         return False
     rms = float(np.sqrt(np.mean(np.square(audio))))
     peak = float(np.max(np.abs(audio)))
-    return rms > 0.012 and peak > 0.04
+    return rms > 0.016 and peak > 0.055
+
+
+def prepare_speech_audio(audio: np.ndarray) -> np.ndarray:
+    """Apply conservative cleanup before Whisper and speaker clustering."""
+    if audio.size == 0:
+        return audio
+
+    cleaned = high_pass_filter(audio.astype(np.float32), cutoff_hz=85.0)
+    cleaned = suppress_low_energy_noise(cleaned)
+    cleaned = trim_silence(cleaned)
+    return normalize_audio(cleaned)
+
+
+def high_pass_filter(audio: np.ndarray, cutoff_hz: float) -> np.ndarray:
+    if audio.size < 2:
+        return audio
+
+    dt = 1.0 / SAMPLE_RATE
+    rc = 1.0 / (2.0 * math.pi * cutoff_hz)
+    alpha = rc / (rc + dt)
+    output = np.empty_like(audio)
+    output[0] = audio[0]
+    for index in range(1, audio.size):
+        output[index] = alpha * (output[index - 1] + audio[index] - audio[index - 1])
+    return output
+
+
+def suppress_low_energy_noise(audio: np.ndarray) -> np.ndarray:
+    if audio.size < SAMPLE_RATE // 2:
+        return audio
+
+    frame_size = int(SAMPLE_RATE * 0.025)
+    hop = int(SAMPLE_RATE * 0.01)
+    starts = list(range(0, max(1, audio.size - frame_size + 1), hop))
+    if not starts:
+        return audio
+
+    rms = np.array(
+        [
+            float(np.sqrt(np.mean(np.square(audio[start : start + frame_size]))))
+            for start in starts
+        ],
+        dtype=np.float32,
+    )
+    noise_floor = float(np.percentile(rms, 25))
+    speech_peak = float(np.max(rms))
+    gate = max(0.009, noise_floor * 2.4, speech_peak * 0.10)
+    frame_gain = np.where(rms >= gate, 1.0, 0.12).astype(np.float32)
+    if frame_gain.size >= 5:
+        frame_gain = np.convolve(
+            frame_gain,
+            np.ones(5, dtype=np.float32) / 5,
+            mode="same",
+        )
+
+    gain = np.ones(audio.size, dtype=np.float32)
+    weight = np.zeros(audio.size, dtype=np.float32)
+    for start, value in zip(starts, frame_gain):
+        end = min(audio.size, start + frame_size)
+        gain[start:end] += value
+        weight[start:end] += 1.0
+    active = weight > 0
+    gain[active] = gain[active] / (weight[active] + 1.0)
+    return audio * gain
+
+
+def normalize_audio(audio: np.ndarray) -> np.ndarray:
+    if audio.size == 0:
+        return audio
+
+    rms = float(np.sqrt(np.mean(np.square(audio)))) or 1.0
+    gain = min(6.0, 0.08 / rms)
+    return np.clip(audio * gain, -1.0, 1.0).astype(np.float32)
 
 
 def build_voice_embedding(audio: np.ndarray) -> np.ndarray:

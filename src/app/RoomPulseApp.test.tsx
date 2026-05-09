@@ -18,7 +18,7 @@ describe("RoomPulseApp", () => {
     });
   });
 
-  it("moves from setup feeder to room display with demo transcript controls", async () => {
+  it("moves from setup feeder to room display with mic-first transcript controls", async () => {
     render(<RoomPulseApp />);
 
     expect(
@@ -39,11 +39,13 @@ describe("RoomPulseApp", () => {
     expect(screen.getByText(/live raw transcript/i)).toBeInTheDocument();
     expect(screen.getByText(/0 of 3 heard/i)).toBeInTheDocument();
     expect(screen.getByText(/live review document/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^mic$/i })).toHaveClass("active");
 
+    fireEvent.click(screen.getByRole("button", { name: /^demo$/i }));
     fireEvent.change(screen.getByLabelText(/demo line/i), {
       target: { value: "We have not made a decision yet." }
     });
-    fireEvent.click(screen.getByRole("button", { name: /add demo line/i }));
+    fireEvent.click(screen.getByRole("button", { name: /add line/i }));
 
     expect(screen.getByText(/we have not made a decision yet/i)).toBeVisible();
     expect(screen.getByText(/1 of 3 heard/i)).toBeVisible();
@@ -105,10 +107,11 @@ describe("RoomPulseApp", () => {
     ) as HTMLInputElement;
     expect(agendaCheckbox.checked).toBe(false);
 
+    fireEvent.click(screen.getByRole("button", { name: /^demo$/i }));
     fireEvent.change(screen.getByLabelText(/demo line/i), {
       target: { value: "That covers confirming the meeting goal." }
     });
-    fireEvent.click(screen.getByRole("button", { name: /add demo line/i }));
+    fireEvent.click(screen.getByRole("button", { name: /add line/i }));
 
     await waitFor(() => expect(agendaCheckbox.checked).toBe(true));
   });
