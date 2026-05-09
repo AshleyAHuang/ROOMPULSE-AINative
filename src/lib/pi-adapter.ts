@@ -343,8 +343,6 @@ const ALLOWED_CARD_KINDS = new Set([
   "reminder"
 ]);
 const ALLOWED_PRIORITIES = new Set(["low", "medium", "high"]);
-const MAX_TRANSCRIPT_DELTA_LINES = 12;
-const MAX_RECENT_TRANSCRIPT_LINES = 6;
 const MAX_PRIOR_INTERVENTIONS = 3;
 const MAX_CARDS = 5;
 
@@ -369,13 +367,16 @@ Respond with one JSON object only, matching:
 }
 
 Rules:
+- First update the markdown document: produce the complete revised document in "reviewMarkdown" before deciding any UI tool JSONs.
+- Then respond with tool-call JSONs in "uiActions" only for the exposed RoomPulse tools: markdown document edits, agenda changes, and one-round reminders.
 - Maximum ${MAX_CARDS} cards. Prefer fewer, sharper cards over many shallow ones.
 - Each "title" is at most 6 words. Each "body" is one sentence under 140 characters.
 - Cards should reflect what is happening NOW: surface risks, ask for owners, flag agenda drift, nudge quiet voices, capture decisions or actions.
 - Do not invent participants. Only refer to "Speaker N" labels you can see.
-Update reviewMarkdown non-destructively: do not delete or rewrite away prior useful lines; when superseding or removing a claim, use Markdown strikethrough and add the replacement nearby.
-Only include agendaActions when the transcript clearly supports checking or unchecking an agenda item.
-- You also have custom RoomPulse UI tools for every visible control. Prefer calling a tool when you want the UI to change, and also mirror any intended UI changes in uiActions so the browser can apply them after the heartbeat.
+- Update reviewMarkdown non-destructively: do not delete or rewrite away prior useful lines; when superseding or removing a claim, use Markdown strikethrough and add the replacement nearby.
+- Only include agendaActions or agenda uiActions when the transcript clearly supports adding, completing, reopening, or deleting an agenda item.
+- The reminder tool is only for a quiet reminder during this heartbeat round. Do not use it for persistent document content.
+- Do not control microphone, scripted demo, pause/resume, heartbeat interval, expected participant count, or past meeting loading. Those are user controls, not Pi tools.
 
 <context>
 ${JSON.stringify(slim, null, 2)}
@@ -479,9 +480,15 @@ interface SlimHeartbeatContext {
   runtime: HeartbeatInput["runtime"];
   currentReviewMarkdown: string;
   transcriptDelta: { speaker: string; text: string }[];
-  recentTranscript: { speaker: string; text: string }[];
+  fullTranscript: { speaker: string; text: string; timestamp: number }[];
   priorInterventionSummaries: string[];
+  priorReminders: { timestamp: number; message: string }[];
   uiTools: HeartbeatInput["uiTools"];
+  speakers: {
+    observedCount: number;
+    expectedCount: number;
+    observedLabels: string[];
+  };
   transcriptStats: {
     totalLines: number;
     deltaLines: number;
@@ -491,7 +498,8 @@ interface SlimHeartbeatContext {
 function buildSlimContext(input: HeartbeatInput): SlimHeartbeatContext {
   const lineToPair = (line: HeartbeatInput["transcript"][number]) => ({
     speaker: line.speakerLabel,
-    text: line.text
+    text: line.text,
+    timestamp: line.timestamp
   });
 
   return {
@@ -515,14 +523,24 @@ function buildSlimContext(input: HeartbeatInput): SlimHeartbeatContext {
     },
     runtime: input.runtime,
     currentReviewMarkdown: input.currentReviewMarkdown,
-    transcriptDelta: input.transcriptDelta
-      .slice(-MAX_TRANSCRIPT_DELTA_LINES)
-      .map(lineToPair),
-    recentTranscript: input.transcript.slice(-MAX_RECENT_TRANSCRIPT_LINES).map(lineToPair),
+    transcriptDelta: input.transcriptDelta.map(({ speakerLabel, text }) => ({
+      speaker: speakerLabel,
+      text
+    })),
+    fullTranscript: input.transcript.map(lineToPair),
     priorInterventionSummaries: input.priorInterventions
       .slice(0, MAX_PRIOR_INTERVENTIONS)
       .map((entry) => entry.summary),
+    priorReminders: input.priorReminders.map((reminder) => ({
+      timestamp: reminder.timestamp,
+      message: reminder.message
+    })),
     uiTools: input.uiTools,
+    speakers: {
+      observedCount: input.participation.observed,
+      expectedCount: input.participation.expected,
+      observedLabels: input.participation.observedLabels
+    },
     transcriptStats: {
       totalLines: input.transcript.length,
       deltaLines: input.transcriptDelta.length
@@ -573,6 +591,42 @@ function createRoomPulseUiTools(queuedActions: UiAction[]) {
 
   return [
     {
+      name: "update_review_document",
+      label: "Update review document",
+      description:
+        "Replace the live markdown review document with a complete non-destructive revision.",
+      promptSnippet:
+        "update_review_document: replace the live markdown document after applying non-destructive edits.",
+      parameters: Type.Object({
+        markdown: Type.String(),
+        summary: Type.Optional(Type.String()),
+        reason: Type.Optional(Type.String())
+      }),
+      execute: async (_id: string, params: Record<string, unknown>) =>
+        queue(
+          "update_review_document",
+          params,
+          "Pi revised the review document."
+        )
+    },
+    {
+      name: "add_agenda_item",
+      label: "Add agenda item",
+      description: "Add a visible agenda item to the shared RoomPulse display.",
+      promptSnippet:
+        "add_agenda_item: add a new live agenda item when the room creates one.",
+      parameters: Type.Object({
+        title: Type.String(),
+        reason: Type.Optional(Type.String())
+      }),
+      execute: async (_id: string, params: Record<string, unknown>) =>
+        queue(
+          "add_agenda_item",
+          params,
+          "Pi requested a new agenda item."
+        )
+    },
+    {
       name: "set_agenda_item",
       label: "Set agenda item",
       description:
@@ -592,27 +646,28 @@ function createRoomPulseUiTools(queuedActions: UiAction[]) {
         )
     },
     {
-      name: "set_active_agenda_item",
-      label: "Set active agenda item",
-      description: "Move the Now Discussing card to a specific agenda item.",
+      name: "delete_agenda_item",
+      label: "Delete agenda item",
+      description:
+        "Remove a visible agenda item only when the room explicitly drops or merges it.",
       promptSnippet:
-        "set_active_agenda_item: set the current Now Discussing agenda item.",
+        "delete_agenda_item: remove an agenda item by itemId.",
       parameters: Type.Object({
         itemId: Type.String(),
         reason: Type.Optional(Type.String())
       }),
       execute: async (_id: string, params: Record<string, unknown>) =>
         queue(
-          "set_active_agenda_item",
+          "delete_agenda_item",
           params,
-          "Pi requested a Now Discussing update."
+          "Pi requested an agenda item deletion."
         )
     },
     {
       name: "send_room_reminder",
       label: "Send room reminder",
       description:
-        "Show one quiet ephemeral reminder on the shared RoomPulse display.",
+        "Show one quiet ephemeral reminder on the shared RoomPulse display for this heartbeat only.",
       promptSnippet:
         "send_room_reminder: show one quiet reminder for this heartbeat.",
       parameters: Type.Object({
@@ -622,210 +677,17 @@ function createRoomPulseUiTools(queuedActions: UiAction[]) {
       }),
       execute: async (_id: string, params: Record<string, unknown>) =>
         queue("send_room_reminder", params, "Pi sent a room reminder.")
-    },
-    {
-      name: "update_review_document",
-      label: "Update review document",
-      description:
-        "Replace the live markdown review document with a complete non-destructive revision.",
-      promptSnippet:
-        "update_review_document: replace the live markdown document.",
-      parameters: Type.Object({
-        markdown: Type.String(),
-        summary: Type.Optional(Type.String()),
-        reason: Type.Optional(Type.String())
-      }),
-      execute: async (_id: string, params: Record<string, unknown>) =>
-        queue(
-          "update_review_document",
-          params,
-          "Pi revised the review document."
-        )
-    },
-    {
-      name: "set_meeting_pause",
-      label: "Pause or resume meeting",
-      description: "Pause or resume the heartbeat countdown.",
-      parameters: Type.Object({
-        paused: Type.Boolean(),
-        reason: Type.Optional(Type.String())
-      }),
-      execute: async (_id: string, params: Record<string, unknown>) =>
-        queue("set_meeting_pause", params, "Pi updated meeting pause state.")
-    },
-    {
-      name: "restore_review_version",
-      label: "Restore review version",
-      description: "Restore one of the visible review document versions.",
-      parameters: Type.Object({
-        versionId: Type.String(),
-        reason: Type.Optional(Type.String())
-      }),
-      execute: async (_id: string, params: Record<string, unknown>) =>
-        queue(
-          "restore_review_version",
-          params,
-          "Pi restored a prior review document version."
-        )
-    },
-    {
-      name: "set_heartbeat_interval",
-      label: "Set heartbeat interval",
-      description: "Change the heartbeat interval in seconds.",
-      parameters: Type.Object({
-        seconds: Type.Number(),
-        reason: Type.Optional(Type.String())
-      }),
-      execute: async (_id: string, params: Record<string, unknown>) =>
-        queue(
-          "set_heartbeat_interval",
-          params,
-          "Pi changed the heartbeat interval."
-        )
-    },
-    {
-      name: "set_expected_participants",
-      label: "Set expected participants",
-      description:
-        "Change the expected speaker count used for participation reminders.",
-      parameters: Type.Object({
-        count: Type.Number(),
-        reason: Type.Optional(Type.String())
-      }),
-      execute: async (_id: string, params: Record<string, unknown>) =>
-        queue(
-          "set_expected_participants",
-          params,
-          "Pi changed the expected participant count."
-        )
-    },
-    {
-      name: "set_transcript_mode",
-      label: "Set transcript mode",
-      description: "Switch transcript controls between mic and demo mode.",
-      parameters: Type.Object({
-        mode: Type.String(),
-        reason: Type.Optional(Type.String())
-      }),
-      execute: async (_id: string, params: Record<string, unknown>) =>
-        queue("set_transcript_mode", params, "Pi changed transcript mode.")
-    },
-    {
-      name: "request_microphone",
-      label: "Request microphone",
-      description:
-        "Ask the browser UI to begin microphone capture; permission may require user approval.",
-      parameters: Type.Object({
-        reason: Type.Optional(Type.String())
-      }),
-      execute: async (_id: string, params: Record<string, unknown>) =>
-        queue("request_microphone", params, "Pi requested microphone capture.")
-    },
-    {
-      name: "add_demo_transcript_line",
-      label: "Add demo transcript line",
-      description:
-        "Add a simulated transcript line in demo mode. Do not use for real microphone speech.",
-      parameters: Type.Object({
-        speakerLabel: Type.String(),
-        text: Type.String(),
-        reason: Type.Optional(Type.String())
-      }),
-      execute: async (_id: string, params: Record<string, unknown>) =>
-        queue(
-          "add_demo_transcript_line",
-          params,
-          "Pi added a simulated demo transcript line."
-        )
-    },
-    {
-      name: "stop_microphone",
-      label: "Stop microphone",
-      description: "Stop browser microphone capture.",
-      parameters: Type.Object({
-        reason: Type.Optional(Type.String())
-      }),
-      execute: async (_id: string, params: Record<string, unknown>) =>
-        queue("stop_microphone", params, "Pi stopped microphone capture.")
-    },
-    {
-      name: "start_scripted_demo",
-      label: "Start scripted demo",
-      description: "Start the deterministic scripted transcript demo.",
-      parameters: Type.Object({
-        reason: Type.Optional(Type.String())
-      }),
-      execute: async (_id: string, params: Record<string, unknown>) =>
-        queue("start_scripted_demo", params, "Pi started the scripted demo.")
-    },
-    {
-      name: "stop_scripted_demo",
-      label: "Stop scripted demo",
-      description: "Stop the deterministic scripted transcript demo.",
-      parameters: Type.Object({
-        reason: Type.Optional(Type.String())
-      }),
-      execute: async (_id: string, params: Record<string, unknown>) =>
-        queue("stop_scripted_demo", params, "Pi stopped the scripted demo.")
-    },
-    {
-      name: "load_past_meeting",
-      label: "Load past meeting",
-      description: "Open a saved local meeting log preview.",
-      parameters: Type.Object({
-        meetingId: Type.String(),
-        reason: Type.Optional(Type.String())
-      }),
-      execute: async (_id: string, params: Record<string, unknown>) =>
-        queue("load_past_meeting", params, "Pi opened a past meeting.")
-    },
-    {
-      name: "refresh_past_meetings",
-      label: "Refresh past meetings",
-      description: "Refresh the saved local meeting list.",
-      parameters: Type.Object({
-        reason: Type.Optional(Type.String())
-      }),
-      execute: async (_id: string, params: Record<string, unknown>) =>
-        queue(
-          "refresh_past_meetings",
-          params,
-          "Pi refreshed the past-meetings list."
-        )
-    },
-    {
-      name: "request_end_meeting",
-      label: "Request end meeting",
-      description:
-        "Ask the room to end the meeting. The UI surfaces confirmation instead of auto-ending.",
-      parameters: Type.Object({
-        reason: Type.String()
-      }),
-      execute: async (_id: string, params: Record<string, unknown>) =>
-        queue("request_end_meeting", params, "Pi requested meeting end.")
     }
   ];
 }
 
 function isKnownUiTool(value: string): value is UiToolName {
   return (
+    value === "add_agenda_item" ||
     value === "set_agenda_item" ||
-    value === "set_active_agenda_item" ||
+    value === "delete_agenda_item" ||
     value === "send_room_reminder" ||
-    value === "update_review_document" ||
-    value === "restore_review_version" ||
-    value === "set_meeting_pause" ||
-    value === "set_heartbeat_interval" ||
-    value === "set_expected_participants" ||
-    value === "set_transcript_mode" ||
-    value === "add_demo_transcript_line" ||
-    value === "request_microphone" ||
-    value === "stop_microphone" ||
-    value === "start_scripted_demo" ||
-    value === "stop_scripted_demo" ||
-    value === "load_past_meeting" ||
-    value === "refresh_past_meetings" ||
-    value === "request_end_meeting"
+    value === "update_review_document"
   );
 }
 

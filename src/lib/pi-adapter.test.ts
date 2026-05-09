@@ -74,6 +74,7 @@ const heartbeatInput: HeartbeatInput = {
     active: meeting.agenda[0]
   },
   priorInterventions: [],
+  priorReminders: [],
   currentReviewMarkdown: createInitialReviewMarkdown(meeting),
   reviewVersions: [],
   uiTools: createUiToolDefinitions(meeting),
@@ -184,12 +185,24 @@ describe("Pi adapter", () => {
         noTools: "builtin",
         customTools: expect.any(Array),
         tools: expect.arrayContaining([
+          "add_agenda_item",
           "set_agenda_item",
+          "delete_agenda_item",
           "send_room_reminder",
           "update_review_document"
         ]),
         thinkingLevel: "minimal"
       })
+    );
+    expect(createAgentSession.mock.calls[0]?.[0].tools).not.toEqual(
+      expect.arrayContaining([
+        "request_microphone",
+        "stop_microphone",
+        "start_scripted_demo",
+        "stop_scripted_demo",
+        "set_heartbeat_interval",
+        "set_expected_participants"
+      ])
     );
   });
 

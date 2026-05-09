@@ -849,6 +849,61 @@ export default function RoomPulseApp() {
     logMeetingEvent("agenda_manual_update", { itemId: id, done });
   }
 
+  function addAgendaItem(title: string, reason: string) {
+    const trimmed = title.trim();
+    if (!trimmed) return;
+
+    const item: AgendaItem = {
+      id: `agenda-${Date.now()}`,
+      title: trimmed,
+      done: false
+    };
+    setMeeting((current) => ({
+      ...current,
+      agenda: [...current.agenda, item]
+    }));
+    setActiveAgendaItemId((current) => current ?? item.id);
+    logMeetingEvent("agenda_item_added", { item, reason });
+  }
+
+  function deleteAgendaItem(id: string, reason: string) {
+    setMeeting((current) => {
+      const deleted = current.agenda.find((item) => item.id === id);
+      if (!deleted) return current;
+      const agenda = current.agenda.filter((item) => item.id !== id);
+      logMeetingEvent("agenda_item_deleted", { item: deleted, reason });
+      return { ...current, agenda };
+    });
+    setActiveAgendaItemId((current) =>
+      current === id ? meeting.agenda.find((item) => item.id !== id)?.id ?? null : current
+    );
+  }
+
+  function setRuntimeHeartbeatInterval(value: number) {
+    const seconds = clampFiniteNumber(
+      value,
+      meeting.heartbeatIntervalSeconds,
+      15
+    );
+    const nowMs = Date.now();
+
+    setMeeting((current) => ({
+      ...current,
+      heartbeatIntervalSeconds: seconds
+    }));
+
+    if (phase === "meeting" && lastHeartbeatAt > 0 && !isPaused) {
+      const elapsedSinceLastHeartbeatMs = Math.max(0, nowMs - lastHeartbeatAt);
+      const remainingMs = Math.max(
+        0,
+        seconds * 1000 - elapsedSinceLastHeartbeatMs
+      );
+      setNextHeartbeatAt(nowMs + remainingMs);
+    }
+
+    logMeetingEvent("heartbeat_interval_changed", { seconds });
+  }
+
   function applyAgendaActions(actions: FacilitatorOutput["agendaActions"]) {
     setMeeting((current) => ({
       ...current,
@@ -863,6 +918,13 @@ export default function RoomPulseApp() {
     for (const action of actions) {
       const params = action.parameters;
 
+      if (action.tool === "add_agenda_item") {
+        const title = stringParam(params.title);
+        if (title) {
+          addAgendaItem(title, action.reason);
+        }
+      }
+
       if (action.tool === "set_agenda_item") {
         const itemId = stringParam(params.itemId);
         const done = booleanParam(params.done);
@@ -871,10 +933,10 @@ export default function RoomPulseApp() {
         }
       }
 
-      if (action.tool === "set_active_agenda_item") {
+      if (action.tool === "delete_agenda_item") {
         const itemId = stringParam(params.itemId);
         if (itemId) {
-          setActiveAgendaItemId(itemId);
+          deleteAgendaItem(itemId, action.reason);
         }
       }
 
@@ -890,105 +952,6 @@ export default function RoomPulseApp() {
         if (markdown) {
           setReviewMarkdown(markdown);
         }
-      }
-
-      if (action.tool === "restore_review_version") {
-        const versionId = stringParam(params.versionId);
-        const version = reviewVersions.find(
-          (candidate) => candidate.id === versionId
-        );
-        if (version) {
-          restoreReviewVersion(version);
-        }
-      }
-
-      if (action.tool === "set_meeting_pause") {
-        const paused = booleanParam(params.paused);
-        if (paused !== null) {
-          setIsPaused(paused);
-        }
-      }
-
-      if (action.tool === "set_heartbeat_interval") {
-        const seconds = numberParam(params.seconds);
-        if (seconds !== null) {
-          setMeeting((current) => ({
-            ...current,
-            heartbeatIntervalSeconds: clampFiniteNumber(
-              seconds,
-              current.heartbeatIntervalSeconds,
-              15
-            )
-          }));
-        }
-      }
-
-      if (action.tool === "set_expected_participants") {
-        const count = numberParam(params.count);
-        if (count !== null) {
-          setMeeting((current) => ({
-            ...current,
-            expectedParticipants: clampFiniteNumber(
-              count,
-              current.expectedParticipants,
-              1
-            )
-          }));
-        }
-      }
-
-      if (action.tool === "set_transcript_mode") {
-        const mode = stringParam(params.mode);
-        if (mode === "demo") {
-          stopMic();
-          setTranscriptMode("demo");
-        }
-        if (mode === "mic" && !isMicRunning) {
-          setTranscriptMode("mic");
-        }
-      }
-
-      if (action.tool === "add_demo_transcript_line") {
-        const speakerLabel = stringParam(params.speakerLabel) ?? "Speaker 1";
-        const text = stringParam(params.text);
-        if (text) {
-          addTranscriptLine(text, speakerLabel, "simulated", 1);
-        }
-      }
-
-      if (action.tool === "request_microphone") {
-        void startMic();
-      }
-
-      if (action.tool === "stop_microphone") {
-        stopMic();
-      }
-
-      if (action.tool === "start_scripted_demo") {
-        startScriptedDemo();
-      }
-
-      if (action.tool === "stop_scripted_demo") {
-        stopScriptedDemo();
-      }
-
-      if (action.tool === "load_past_meeting") {
-        const meetingId = stringParam(params.meetingId);
-        if (meetingId) {
-          setIsPastMeetingsOpen(true);
-          void loadPastMeetingLog(meetingId);
-        }
-      }
-
-      if (action.tool === "refresh_past_meetings") {
-        setIsPastMeetingsOpen(true);
-        void refreshPastMeetings();
-      }
-
-      if (action.tool === "request_end_meeting") {
-        setEphemeralReminder(
-          action.reason || "RoomPulse recommends wrapping this meeting soon."
-        );
       }
     }
   }
@@ -1315,14 +1278,7 @@ export default function RoomPulseApp() {
                   type="number"
                   value={meeting.heartbeatIntervalSeconds}
                   onChange={(event) =>
-                    setMeeting((current) => ({
-                      ...current,
-                      heartbeatIntervalSeconds: clampFiniteNumber(
-                        Number(event.target.value),
-                        current.heartbeatIntervalSeconds,
-                        15
-                      )
-                    }))
+                    setRuntimeHeartbeatInterval(Number(event.target.value))
                   }
                 />
                 <span>seconds</span>
@@ -1622,17 +1578,6 @@ export default function RoomPulseApp() {
                 observedSpeakerLabels.map((label) => <span key={label}>{label}</span>)
               )}
             </div>
-          </section>
-
-          <section className="reminder-dock" aria-label="Heartbeat reminder">
-            <div className="section-kicker">Reminder</div>
-            {ephemeralReminder ? (
-              <p>{ephemeralReminder}</p>
-            ) : (
-              <p className="quiet-reminder">
-                No room-facing reminder on this heartbeat.
-              </p>
-            )}
           </section>
         </aside>
       </section>
@@ -1991,10 +1936,6 @@ function clampFiniteNumber(value: number, fallback: number, min: number): number
 
 function stringParam(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function numberParam(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function booleanParam(value: unknown): boolean | null {

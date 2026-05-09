@@ -82,23 +82,11 @@ export interface AgendaAction {
 }
 
 export type UiToolName =
+  | "add_agenda_item"
   | "set_agenda_item"
-  | "set_active_agenda_item"
+  | "delete_agenda_item"
   | "send_room_reminder"
-  | "update_review_document"
-  | "restore_review_version"
-  | "set_meeting_pause"
-  | "set_heartbeat_interval"
-  | "set_expected_participants"
-  | "set_transcript_mode"
-  | "add_demo_transcript_line"
-  | "request_microphone"
-  | "stop_microphone"
-  | "start_scripted_demo"
-  | "stop_scripted_demo"
-  | "load_past_meeting"
-  | "refresh_past_meetings"
-  | "request_end_meeting";
+  | "update_review_document";
 
 export interface UiToolDefinition {
   name: UiToolName;
@@ -128,6 +116,7 @@ export interface HeartbeatInput {
   participation: ParticipationStatus;
   agendaProgress: AgendaProgress;
   priorInterventions: TimelineEntry[];
+  priorReminders: { timestamp: number; message: string; source: TimelineEntry["source"] }[];
   currentReviewMarkdown: string;
   reviewVersions: ReviewVersion[];
   uiTools: UiToolDefinition[];
@@ -188,6 +177,13 @@ export function createHeartbeatInput({
     ),
     agendaProgress: getAgendaProgress(meeting.agenda),
     priorInterventions,
+    priorReminders: priorInterventions
+      .filter((entry) => typeof entry.reminder === "string" && entry.reminder.trim())
+      .map((entry) => ({
+        timestamp: entry.timestamp,
+        message: entry.reminder as string,
+        source: entry.source
+      })),
     currentReviewMarkdown:
       currentReviewMarkdown ?? createInitialReviewMarkdown(meeting),
     reviewVersions: reviewVersions ?? [],
@@ -316,6 +312,26 @@ export function createUiToolDefinitions(
 
   return [
     {
+      name: "update_review_document",
+      label: "Update review document",
+      description:
+        "Replace the live markdown review document with the complete non-destructive revision for this heartbeat.",
+      parameters: {
+        markdown: "complete markdown document",
+        summary: "short version summary"
+      }
+    },
+    {
+      name: "add_agenda_item",
+      label: "Add agenda item",
+      description:
+        "Add a visible agenda item when the room creates a new live agenda obligation.",
+      parameters: {
+        title: "agenda item title",
+        reason: "short visible reason"
+      }
+    },
+    {
       name: "set_agenda_item",
       label: "Set agenda item",
       description:
@@ -327,10 +343,10 @@ export function createUiToolDefinitions(
       }
     },
     {
-      name: "set_active_agenda_item",
-      label: "Set active agenda item",
+      name: "delete_agenda_item",
+      label: "Delete agenda item",
       description:
-        "Move the Now Discussing card to the agenda item the room is currently discussing.",
+        "Remove a visible agenda item only when the room explicitly drops or merges it.",
       parameters: {
         itemId: `agenda item id. Available ids: ${agendaHint}`,
         reason: "short visible reason"
@@ -345,133 +361,6 @@ export function createUiToolDefinitions(
         message: "one concise room-facing reminder",
         tone: "info, warning, or urgent"
       }
-    },
-    {
-      name: "update_review_document",
-      label: "Update review document",
-      description:
-        "Replace the live markdown review document with a non-destructive revision.",
-      parameters: {
-        markdown: "complete markdown document",
-        summary: "short version summary"
-      }
-    },
-    {
-      name: "restore_review_version",
-      label: "Restore review version",
-      description: "Restore one of the visible review document versions.",
-      parameters: {
-        versionId: "review version id",
-        reason: "short visible reason"
-      }
-    },
-    {
-      name: "set_meeting_pause",
-      label: "Pause or resume meeting",
-      description: "Pause or resume heartbeat countdown state.",
-      parameters: {
-        paused: "boolean paused state",
-        reason: "short visible reason"
-      }
-    },
-    {
-      name: "set_heartbeat_interval",
-      label: "Set heartbeat interval",
-      description: "Change the meeting heartbeat interval.",
-      parameters: {
-        seconds: "number of seconds, minimum 15",
-        reason: "short visible reason"
-      }
-    },
-    {
-      name: "set_expected_participants",
-      label: "Set expected participants",
-      description:
-        "Adjust the expected speaker cluster count used by participation nudges.",
-      parameters: {
-        count: "number of expected participants, minimum 1",
-        reason: "short visible reason"
-      }
-    },
-    {
-      name: "set_transcript_mode",
-      label: "Set transcript mode",
-      description: "Switch transcript controls between mic and demo mode.",
-      parameters: {
-        mode: "mic or demo",
-        reason: "short visible reason"
-      }
-    },
-    {
-      name: "add_demo_transcript_line",
-      label: "Add demo transcript line",
-      description:
-        "Add a simulated transcript line in demo mode. Do not use for real microphone speech.",
-      parameters: {
-        speakerLabel: "Speaker N label",
-        text: "simulated transcript text",
-        reason: "short visible reason"
-      }
-    },
-    {
-      name: "request_microphone",
-      label: "Request microphone",
-      description:
-        "Ask the UI to start browser microphone capture. Browser permission may still require user approval.",
-      parameters: {
-        reason: "short visible reason"
-      }
-    },
-    {
-      name: "stop_microphone",
-      label: "Stop microphone",
-      description: "Stop browser microphone capture.",
-      parameters: {
-        reason: "short visible reason"
-      }
-    },
-    {
-      name: "start_scripted_demo",
-      label: "Start scripted demo",
-      description: "Start the deterministic scripted transcript demo.",
-      parameters: {
-        reason: "short visible reason"
-      }
-    },
-    {
-      name: "stop_scripted_demo",
-      label: "Stop scripted demo",
-      description: "Stop the deterministic scripted transcript demo.",
-      parameters: {
-        reason: "short visible reason"
-      }
-    },
-    {
-      name: "load_past_meeting",
-      label: "Load past meeting",
-      description: "Open a saved local meeting log preview.",
-      parameters: {
-        meetingId: "local meeting log id",
-        reason: "short visible reason"
-      }
-    },
-    {
-      name: "refresh_past_meetings",
-      label: "Refresh past meetings",
-      description: "Refresh the local past-meetings list.",
-      parameters: {
-        reason: "short visible reason"
-      }
-    },
-    {
-      name: "request_end_meeting",
-      label: "Request end meeting",
-      description:
-        "Ask the room to end the meeting. This is surfaced as a confirmation reminder, not auto-ended.",
-      parameters: {
-        reason: "short visible reason"
-      },
-      confirmationRequired: true
     }
   ];
 }
