@@ -18,7 +18,8 @@ import {
   type MeetingConfig,
   type ReviewVersion,
   type TimelineEntry,
-  type TranscriptLine
+  type TranscriptLine,
+  type UiAction
 } from "@/lib/facilitator";
 import { createParticipationStatus } from "@/lib/speaker-tracker";
 import { LocalTranscriptionClient } from "@/lib/local-transcription-client";
@@ -126,6 +127,12 @@ export default function RoomPulseApp() {
   const [isDemoRunning, setIsDemoRunning] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [isPastMeetingsOpen, setIsPastMeetingsOpen] = useState(false);
+  const [activeAgendaItemId, setActiveAgendaItemId] = useState<string | null>(
+    defaultMeeting.agenda.find((item) => !item.done)?.id ??
+      defaultMeeting.agenda[0]?.id ??
+      null
+  );
   const [meetingStartedAt, setMeetingStartedAt] = useState(0);
   const [heartbeatCount, setHeartbeatCount] = useState(0);
   const [reviewMarkdown, setReviewMarkdown] = useState(
@@ -186,6 +193,23 @@ export default function RoomPulseApp() {
     agendaProgress.total === 0
       ? 0
       : Math.round((agendaProgress.completed / agendaProgress.total) * 100);
+  const activeAgendaItem =
+    meeting.agenda.find((item) => item.id === activeAgendaItemId) ??
+    agendaProgress.active ??
+    meeting.agenda[0] ??
+    null;
+
+  useEffect(() => {
+    if (
+      activeAgendaItemId &&
+      meeting.agenda.some((item) => item.id === activeAgendaItemId)
+    ) {
+      return;
+    }
+    setActiveAgendaItemId(
+      agendaProgress.active?.id ?? meeting.agenda[0]?.id ?? null
+    );
+  }, [activeAgendaItemId, agendaProgress.active, meeting.agenda]);
 
   const logMeetingEvent = useCallback(
     (type: string, payload: unknown, timestamp = Date.now()) => {
@@ -336,6 +360,9 @@ export default function RoomPulseApp() {
       setEphemeralReminder(output.ephemeralReminder);
       if (output.agendaActions.length > 0) {
         applyAgendaActions(output.agendaActions);
+      }
+      if (output.uiActions?.length > 0) {
+        applyUiActions(output.uiActions);
       }
       setTimeline((entries) => [
         {
@@ -529,6 +556,11 @@ export default function RoomPulseApp() {
     };
 
     setMeeting(demoMeeting);
+    setActiveAgendaItemId(
+      demoMeeting.agenda.find((item) => !item.done)?.id ??
+        demoMeeting.agenda[0]?.id ??
+        null
+    );
     setPhase("meeting");
     setMeetingStartedAt(startedAt);
     setHeartbeatCount(0);
@@ -553,6 +585,7 @@ export default function RoomPulseApp() {
       nextHeartbeatHint: "First pulse will arrive at 15 seconds.",
       reviewMarkdown: initialReview,
       agendaActions: [],
+      uiActions: [],
       ephemeralReminder: null
     });
     transcriptStoreRef.current.clear();
@@ -686,6 +719,11 @@ export default function RoomPulseApp() {
     };
 
     setMeeting(configuredMeeting);
+    setActiveAgendaItemId(
+      configuredMeeting.agenda.find((item) => !item.done)?.id ??
+        configuredMeeting.agenda[0]?.id ??
+        null
+    );
     setPhase("meeting");
     const startedAt = Date.now();
     const initialReview = createInitialReviewMarkdown(configuredMeeting);
@@ -719,6 +757,7 @@ export default function RoomPulseApp() {
       nextHeartbeatHint: "Use Run heartbeat now for a live check.",
       reviewMarkdown: initialReview,
       agendaActions: [],
+      uiActions: [],
       ephemeralReminder: null
     });
     setLastHeartbeatAt(startedAt);
@@ -818,6 +857,140 @@ export default function RoomPulseApp() {
         return action ? { ...item, done: action.done } : item;
       })
     }));
+  }
+
+  function applyUiActions(actions: UiAction[]) {
+    for (const action of actions) {
+      const params = action.parameters;
+
+      if (action.tool === "set_agenda_item") {
+        const itemId = stringParam(params.itemId);
+        const done = booleanParam(params.done);
+        if (itemId && done !== null) {
+          updateAgendaItem(itemId, done);
+        }
+      }
+
+      if (action.tool === "set_active_agenda_item") {
+        const itemId = stringParam(params.itemId);
+        if (itemId) {
+          setActiveAgendaItemId(itemId);
+        }
+      }
+
+      if (action.tool === "send_room_reminder") {
+        const message = stringParam(params.message);
+        if (message) {
+          setEphemeralReminder(message);
+        }
+      }
+
+      if (action.tool === "update_review_document") {
+        const markdown = stringParam(params.markdown);
+        if (markdown) {
+          setReviewMarkdown(markdown);
+        }
+      }
+
+      if (action.tool === "restore_review_version") {
+        const versionId = stringParam(params.versionId);
+        const version = reviewVersions.find(
+          (candidate) => candidate.id === versionId
+        );
+        if (version) {
+          restoreReviewVersion(version);
+        }
+      }
+
+      if (action.tool === "set_meeting_pause") {
+        const paused = booleanParam(params.paused);
+        if (paused !== null) {
+          setIsPaused(paused);
+        }
+      }
+
+      if (action.tool === "set_heartbeat_interval") {
+        const seconds = numberParam(params.seconds);
+        if (seconds !== null) {
+          setMeeting((current) => ({
+            ...current,
+            heartbeatIntervalSeconds: clampFiniteNumber(
+              seconds,
+              current.heartbeatIntervalSeconds,
+              15
+            )
+          }));
+        }
+      }
+
+      if (action.tool === "set_expected_participants") {
+        const count = numberParam(params.count);
+        if (count !== null) {
+          setMeeting((current) => ({
+            ...current,
+            expectedParticipants: clampFiniteNumber(
+              count,
+              current.expectedParticipants,
+              1
+            )
+          }));
+        }
+      }
+
+      if (action.tool === "set_transcript_mode") {
+        const mode = stringParam(params.mode);
+        if (mode === "demo") {
+          stopMic();
+          setTranscriptMode("demo");
+        }
+        if (mode === "mic" && !isMicRunning) {
+          setTranscriptMode("mic");
+        }
+      }
+
+      if (action.tool === "add_demo_transcript_line") {
+        const speakerLabel = stringParam(params.speakerLabel) ?? "Speaker 1";
+        const text = stringParam(params.text);
+        if (text) {
+          addTranscriptLine(text, speakerLabel, "simulated", 1);
+        }
+      }
+
+      if (action.tool === "request_microphone") {
+        void startMic();
+      }
+
+      if (action.tool === "stop_microphone") {
+        stopMic();
+      }
+
+      if (action.tool === "start_scripted_demo") {
+        startScriptedDemo();
+      }
+
+      if (action.tool === "stop_scripted_demo") {
+        stopScriptedDemo();
+      }
+
+      if (action.tool === "load_past_meeting") {
+        const meetingId = stringParam(params.meetingId);
+        if (meetingId) {
+          setIsPastMeetingsOpen(true);
+          void loadPastMeetingLog(meetingId);
+        }
+      }
+
+      if (action.tool === "refresh_past_meetings") {
+        setIsPastMeetingsOpen(true);
+        void refreshPastMeetings();
+      }
+
+      if (action.tool === "request_end_meeting") {
+        setEphemeralReminder(
+          action.reason || "RoomPulse recommends wrapping this meeting soon."
+        );
+      }
+    }
   }
 
   function restoreReviewVersion(version: ReviewVersion) {
@@ -1106,80 +1279,75 @@ export default function RoomPulseApp() {
 
   return (
     <main className="app-shell room-shell">
-      <header className="meeting-topbar">
-        <BrandMark />
-        <div className="meeting-controls">
-          <button type="button" onClick={togglePause}>
-            <span className="pause-bars" aria-hidden="true" />
-            {isPaused ? "Resume" : "Pause"}
-          </button>
-          <button type="button" onClick={() => void runHeartbeat()}>
-            {isHeartbeatRunning ? "Reviewing..." : "Run heartbeat now"}
-          </button>
+      <header className="app-bar">
+        <div className="app-bar-left">
           <button
+            aria-label="Past meetings"
+            className="icon-button"
             type="button"
-            className={isDemoRunning ? "demo-running" : ""}
-            onClick={isDemoRunning ? stopScriptedDemo : startScriptedDemo}
+            onClick={() => {
+              setIsPastMeetingsOpen(true);
+              void refreshPastMeetings();
+            }}
           >
-            {isDemoRunning ? "Stop demo" : "Script demo"}
+            <MaterialIcon name="menu" />
           </button>
+          <BrandMark paused={isPaused} />
         </div>
-        <div className="meeting-title-block">
-          <div className="brand-row">
-            <span className={`status-dot ${isPaused ? "" : "live"}`} />
-            <span>{isPaused ? "Meeting paused" : "Meeting live"}</span>
-            {isDemoRunning ? <span className="demo-pill">Demo running</span> : null}
-          </div>
-          <h1>{meeting.title}</h1>
-          <p>{meeting.goal}</p>
-        </div>
-        <div className="meeting-status">
-          <StatusPill tone={isMicRunning ? "good" : "neutral"}>
-            {isMicRunning ? "Microphone live" : "Microphone not live"}
-          </StatusPill>
-          <StatusPill>{isPaused ? "Paused" : `${countdownSeconds}s`}</StatusPill>
-          <button type="button" onClick={() => setShowSettings((value) => !value)}>
-            Settings
+        <div className="app-bar-right">
+          <button
+            aria-label="Meeting settings"
+            className={`icon-button ${showSettings ? "active" : ""}`}
+            type="button"
+            onClick={() => setShowSettings((value) => !value)}
+          >
+            <MaterialIcon name="settings" />
           </button>
         </div>
         {showSettings ? (
           <aside className="settings-popover" aria-label="Meeting settings">
             <label>
               <span>Heartbeat interval</span>
-              <input
-                min={15}
-                step={5}
-                type="number"
-                value={meeting.heartbeatIntervalSeconds}
-                onChange={(event) =>
-                  setMeeting((current) => ({
-                    ...current,
-                    heartbeatIntervalSeconds: clampFiniteNumber(
-                      Number(event.target.value),
-                      current.heartbeatIntervalSeconds,
-                      15
-                    )
-                  }))
-                }
-              />
+              <div className="settings-num">
+                <input
+                  min={15}
+                  step={5}
+                  type="number"
+                  value={meeting.heartbeatIntervalSeconds}
+                  onChange={(event) =>
+                    setMeeting((current) => ({
+                      ...current,
+                      heartbeatIntervalSeconds: clampFiniteNumber(
+                        Number(event.target.value),
+                        current.heartbeatIntervalSeconds,
+                        15
+                      )
+                    }))
+                  }
+                />
+                <span>seconds</span>
+              </div>
             </label>
             <label>
               <span>Expected participants</span>
-              <input
-                min={1}
-                type="number"
-                value={meeting.expectedParticipants}
-                onChange={(event) =>
-                  setMeeting((current) => ({
-                    ...current,
-                    expectedParticipants: clampFiniteNumber(
-                      Number(event.target.value),
-                      current.expectedParticipants,
-                      1
-                    )
-                  }))
-                }
-              />
+              <div className="settings-num">
+                <input
+                  min={1}
+                  type="number"
+                  value={meeting.expectedParticipants}
+                  onChange={(event) =>
+                    setMeeting((current) => ({
+                      ...current,
+                      expectedParticipants: clampFiniteNumber(
+                        Number(event.target.value),
+                        current.expectedParticipants,
+                        1
+                      )
+                    }))
+                  }
+                />
+                <span>voices</span>
+              </div>
             </label>
             <p className="log-status">
               {logStatus}
@@ -1188,6 +1356,55 @@ export default function RoomPulseApp() {
           </aside>
         ) : null}
       </header>
+
+      {isPastMeetingsOpen ? (
+        <PastMeetingsDrawer
+          meetings={pastMeetings}
+          selectedMeetingLog={selectedMeetingLog}
+          onClose={() => setIsPastMeetingsOpen(false)}
+          onRefresh={() => void refreshPastMeetings()}
+          onSelect={(id) => void loadPastMeetingLog(id)}
+          onNewMeeting={() => {
+            setIsPastMeetingsOpen(false);
+            setPhase("setup");
+          }}
+        />
+      ) : null}
+
+      <section className="meet-subheader">
+        <div className="meeting-title-block">
+          <div className="meeting-kicker">
+            <span className={`status-dot ${isPaused ? "" : "live"}`} />
+            <span>{isPaused ? "Meeting paused" : "Meeting live"}</span>
+            {isDemoRunning ? <span className="demo-pill">Demo running</span> : null}
+            <span>{formatElapsed(meetingElapsedSeconds)} elapsed</span>
+            <span>Heartbeat {heartbeatCount}</span>
+          </div>
+          <h1>{meeting.title}</h1>
+          <p>{meeting.goal}</p>
+        </div>
+
+        <HeartbeatRing
+          running={isHeartbeatRunning}
+          secondsLeft={countdownSeconds}
+          total={meeting.heartbeatIntervalSeconds}
+        />
+
+        <div className="meeting-status">
+          <StatusPill tone={isMicRunning ? "good" : "neutral"}>
+            <MaterialIcon name={isMicRunning ? "mic" : "mic_off"} />
+            {isMicRunning ? "Mic live" : "Mic off"}
+          </StatusPill>
+          <StatusPill>
+            <MaterialIcon name={currentOutput?.source === "pi" ? "auto_awesome" : "memory"} />
+            {currentOutput?.source === "pi" ? "Pi · gpt-5.5" : "Local"}
+          </StatusPill>
+          <StatusPill>
+            <MaterialIcon name={isPaused ? "pause" : "schedule"} />
+            {isPaused ? "Paused" : `${countdownSeconds}s`}
+          </StatusPill>
+        </div>
+      </section>
 
       <section className="meeting-grid">
         <section className="transcript-panel room-column" aria-label="Live raw transcript">
@@ -1334,6 +1551,27 @@ export default function RoomPulseApp() {
         </section>
 
         <aside className="right-rail room-column">
+          <section className="now-card" aria-label="Now discussing">
+            <div className="section-kicker">Now discussing</div>
+            <h2>{activeAgendaItem?.title ?? "Open discussion"}</h2>
+            <div className="now-row">
+              <span>Item</span>
+              <strong>
+                {activeAgendaItem
+                  ? `${meeting.agenda.findIndex((item) => item.id === activeAgendaItem.id) + 1} of ${meeting.agenda.length}`
+                  : "0 of 0"}
+              </strong>
+            </div>
+            <div className="now-row">
+              <span>Elapsed</span>
+              <strong>{formatElapsed(meetingElapsedSeconds)}</strong>
+            </div>
+            <div className="now-row">
+              <span>Voices heard</span>
+              <strong>{participation.observed}</strong>
+            </div>
+          </section>
+
           <section className="agenda-card" aria-label="Agenda">
             <div className="rail-card-heading">
               <h2>Agenda</h2>
@@ -1348,7 +1586,10 @@ export default function RoomPulseApp() {
                   <input
                     checked={item.done}
                     type="checkbox"
-                    onChange={(event) => updateAgendaItem(item.id, event.target.checked)}
+                    onChange={(event) => {
+                      setActiveAgendaItemId(item.id);
+                      updateAgendaItem(item.id, event.target.checked);
+                    }}
                   />
                   <span>{item.title}</span>
                 </label>
@@ -1395,22 +1636,226 @@ export default function RoomPulseApp() {
           </section>
         </aside>
       </section>
+
+      <div className="bottom-bar" aria-label="Meeting controls">
+        <button
+          className={`pill-btn ${isMicRunning ? "" : "toggled"}`}
+          type="button"
+          onClick={isMicRunning ? stopMic : () => void startMic()}
+        >
+          <MaterialIcon name={isMicRunning ? "mic" : "mic_off"} filled />
+          {isMicRunning ? "Mic on" : "Mic off"}
+        </button>
+        <button
+          className={`pill-btn ${isPaused ? "toggled" : ""}`}
+          type="button"
+          onClick={togglePause}
+        >
+          <MaterialIcon name={isPaused ? "play_arrow" : "pause"} filled />
+          {isPaused ? "Resume" : "Pause"}
+        </button>
+        <button
+          className={`pill-btn ${isDemoRunning ? "toggled" : ""}`}
+          type="button"
+          onClick={isDemoRunning ? stopScriptedDemo : startScriptedDemo}
+        >
+          <MaterialIcon name={isDemoRunning ? "stop_circle" : "movie"} filled />
+          {isDemoRunning ? "Stop demo" : "Script demo"}
+        </button>
+        <span className="bottom-divider" />
+        <button
+          aria-label="Run heartbeat now"
+          className="pill-btn primary"
+          disabled={isHeartbeatRunning}
+          type="button"
+          onClick={() => void runHeartbeat()}
+        >
+          <MaterialIcon name="favorite" filled />
+          {isHeartbeatRunning ? "Reviewing..." : "Run heartbeat"}
+        </button>
+        <span className="bottom-divider" />
+        <button
+          className="pill-btn danger"
+          type="button"
+          onClick={() => setPhase("setup")}
+        >
+          <MaterialIcon name="call_end" filled />
+          End
+        </button>
+      </div>
+
+      {ephemeralReminder ? (
+        <div className="reminder-snackbar" role="status">
+          <MaterialIcon name="campaign" filled />
+          <div>
+            <span>Heartbeat reminder</span>
+            <p>{ephemeralReminder}</p>
+          </div>
+          <button type="button" onClick={() => setEphemeralReminder(null)}>
+            Dismiss
+          </button>
+        </div>
+      ) : null}
     </main>
   );
 }
 
-function BrandMark() {
+function BrandMark({ paused = false }: { paused?: boolean }) {
   return (
     <div className="brand-mark" aria-label="RoomPulse">
-      <span className="wave-mark" aria-hidden="true">
+      <span className={`wave-mark ${paused ? "paused" : ""}`} aria-hidden="true">
         <i />
         <i />
         <i />
         <i />
         <i />
       </span>
-      <span>RoomPulse</span>
+      <span className="wordmark" aria-hidden="true">
+        <span>R</span>
+        <span>o</span>
+        <span>o</span>
+        <span>m</span>
+        <span>P</span>
+        <span>u</span>
+        <span>l</span>
+        <span>s</span>
+        <span>e</span>
+      </span>
     </div>
+  );
+}
+
+function MaterialIcon({
+  name,
+  filled = false
+}: {
+  name: string;
+  filled?: boolean;
+}) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`material-symbols-outlined ${filled ? "filled" : ""}`}
+    >
+      {name}
+    </span>
+  );
+}
+
+function HeartbeatRing({
+  running,
+  secondsLeft,
+  total
+}: {
+  running: boolean;
+  secondsLeft: number;
+  total: number;
+}) {
+  const radius = 36;
+  const circumference = 2 * Math.PI * radius;
+  const progress = Math.max(0, Math.min(1, secondsLeft / Math.max(1, total)));
+
+  return (
+    <div className="heartbeat-ring" aria-label="Heartbeat countdown">
+      <svg viewBox="0 0 84 84" role="img">
+        <circle className="track" cx="42" cy="42" r={radius} />
+        <circle
+          className="progress"
+          cx="42"
+          cy="42"
+          r={radius}
+          strokeDasharray={circumference}
+          strokeDashoffset={circumference * (1 - progress)}
+        />
+      </svg>
+      <div className="heartbeat-label">
+        <strong>{running ? "..." : secondsLeft}</strong>
+        <span>{running ? "reviewing" : "s pulse"}</span>
+      </div>
+    </div>
+  );
+}
+
+function PastMeetingsDrawer({
+  meetings,
+  selectedMeetingLog,
+  onClose,
+  onRefresh,
+  onSelect,
+  onNewMeeting
+}: {
+  meetings: ClientMeetingLogMetadata[];
+  selectedMeetingLog: ClientMeetingLogSnapshot | null;
+  onClose: () => void;
+  onRefresh: () => void;
+  onSelect: (id: string) => void;
+  onNewMeeting: () => void;
+}) {
+  return (
+    <>
+      <button
+        aria-label="Close past meetings"
+        className="drawer-scrim"
+        type="button"
+        onClick={onClose}
+      />
+      <aside className="meetings-drawer" aria-label="Past meetings">
+        <div className="drawer-head">
+          <button className="icon-button" type="button" onClick={onClose}>
+            <MaterialIcon name="menu_open" />
+          </button>
+          <strong>Past meetings</strong>
+          <button className="drawer-refresh" type="button" onClick={onRefresh}>
+            Refresh
+          </button>
+        </div>
+        <p>
+          Saved local meeting state, including transcript events, agenda updates,
+          heartbeat reminders, and review versions.
+        </p>
+        <div className="drawer-list">
+          {meetings.length === 0 ? (
+            <span className="drawer-empty">No local meeting logs yet.</span>
+          ) : (
+            meetings.map((meetingLog) => (
+              <button
+                className="drawer-row"
+                key={meetingLog.id}
+                type="button"
+                onClick={() => onSelect(meetingLog.id)}
+              >
+                <span className="drawer-dot" />
+                <span>
+                  <strong>{meetingLog.title}</strong>
+                  <small>
+                    {formatClock(meetingLog.startedAt)} -{" "}
+                    {meetingLog.eventCount} events
+                  </small>
+                </span>
+                <MaterialIcon name="chevron_right" />
+              </button>
+            ))
+          )}
+        </div>
+        {selectedMeetingLog ? (
+          <div className="drawer-preview">
+            <strong>{selectedMeetingLog.metadata.title}</strong>
+            {selectedMeetingLog.events.slice(-5).map((event) => (
+              <span key={event.id}>
+                {formatClock(event.timestamp)} -{" "}
+                {event.type.replaceAll("_", " ")}
+              </span>
+            ))}
+          </div>
+        ) : null}
+        <div className="drawer-foot">
+          <button className="btn outlined" type="button" onClick={onNewMeeting}>
+            <MaterialIcon name="add" />
+            New meeting
+          </button>
+        </div>
+      </aside>
+    </>
   );
 }
 
@@ -1542,6 +1987,18 @@ function parseParticipants(value: string) {
 function clampFiniteNumber(value: number, fallback: number, min: number): number {
   const finiteValue = Number.isFinite(value) ? value : fallback;
   return Math.max(min, Math.floor(finiteValue));
+}
+
+function stringParam(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function numberParam(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function booleanParam(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
 }
 
 function formatClock(timestamp: number): string {

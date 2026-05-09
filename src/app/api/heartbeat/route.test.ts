@@ -22,6 +22,7 @@ const output: FacilitatorOutput = {
   nextHeartbeatHint: "Keep listening.",
   reviewMarkdown: "# Demo\n\nOne cue generated.",
   agendaActions: [],
+  uiActions: [],
   ephemeralReminder: null
 };
 

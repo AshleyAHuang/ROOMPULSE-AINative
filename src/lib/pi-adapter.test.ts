@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runPiHeartbeat } from "./pi-adapter";
 import {
   createInitialReviewMarkdown,
+  createUiToolDefinitions,
   type HeartbeatInput,
   type MeetingConfig
 } from "./facilitator";
@@ -75,6 +76,7 @@ const heartbeatInput: HeartbeatInput = {
   priorInterventions: [],
   currentReviewMarkdown: createInitialReviewMarkdown(meeting),
   reviewVersions: [],
+  uiTools: createUiToolDefinitions(meeting),
   runtime: {
     meetingStartedAt: 1_700_000_000_000,
     meetingElapsedSeconds: 0,
@@ -130,6 +132,7 @@ describe("Pi adapter", () => {
             nextHeartbeatHint: "Revisit the open risk owner.",
             reviewMarkdown: "# Launch check\n\n### Heartbeat 1\n- Stay focused.",
             agendaActions: [],
+            uiActions: [],
             ephemeralReminder: "Keep the room on the risk owner decision."
           })
         }
@@ -178,7 +181,13 @@ describe("Pi adapter", () => {
         modelRegistry,
         model: { provider: "openai-codex", id: "gpt-5.5" },
         sessionManager,
-        noTools: "all",
+        noTools: "builtin",
+        customTools: expect.any(Array),
+        tools: expect.arrayContaining([
+          "set_agenda_item",
+          "send_room_reminder",
+          "update_review_document"
+        ]),
         thinkingLevel: "minimal"
       })
     );

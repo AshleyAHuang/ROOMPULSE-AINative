@@ -1,11 +1,14 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { Type } from "@earendil-works/pi-ai";
 import {
   createInitialReviewMarkdown,
   runLocalFacilitation,
   type FacilitatorOutput,
-  type HeartbeatInput
+  type HeartbeatInput,
+  type UiAction,
+  type UiToolName
 } from "./facilitator";
 
 const DEFAULT_PI_TIMEOUT_MS = 25_000;
@@ -50,6 +53,8 @@ interface PiModule {
     model?: PiModel;
     modelRegistry?: PiModelRegistry;
     noTools?: "all" | "builtin";
+    customTools?: unknown[];
+    tools?: string[];
     sessionManager?: unknown;
     thinkingLevel?: string;
   }) => Promise<{
@@ -119,14 +124,18 @@ async function runPiSession(input: HeartbeatInput): Promise<FacilitatorOutput> {
   }
 
   const cwd = process.cwd();
+  const queuedUiActions: UiAction[] = [];
+  const uiTools = createRoomPulseUiTools(queuedUiActions);
   const { session } = await pi.createAgentSession({
     authStorage,
+    customTools: uiTools,
     cwd,
     model,
     modelRegistry,
-    noTools: "all",
+    noTools: "builtin",
     sessionManager: pi.SessionManager.inMemory(cwd),
-    thinkingLevel: config.thinkingLevel
+    thinkingLevel: config.thinkingLevel,
+    tools: uiTools.map((tool) => tool.name)
   });
 
   const chunks: string[] = [];
@@ -143,7 +152,11 @@ async function runPiSession(input: HeartbeatInput): Promise<FacilitatorOutput> {
     const text =
       chunks.join("").trim() ||
       extractAssistantText(session.state?.messages ?? session.messages ?? []);
-    return parsePiOutput(text);
+    const output = parsePiOutput(text);
+    return {
+      ...output,
+      uiActions: mergeUiActions(output.uiActions, queuedUiActions)
+    };
   } finally {
     unsubscribe?.();
     session.dispose?.();
@@ -351,6 +364,7 @@ Respond with one JSON object only, matching:
   "nextHeartbeatHint": "one sentence",
   "reviewMarkdown": "complete updated markdown document",
   "agendaActions": [{"itemId":"agenda item id","done":true,"reason":"why"}],
+  "uiActions": [{"tool":"tool_name","parameters":{},"reason":"why"}],
   "ephemeralReminder": "one quiet room-facing reminder for this heartbeat, or null"
 }
 
@@ -361,6 +375,7 @@ Rules:
 - Do not invent participants. Only refer to "Speaker N" labels you can see.
 Update reviewMarkdown non-destructively: do not delete or rewrite away prior useful lines; when superseding or removing a claim, use Markdown strikethrough and add the replacement nearby.
 Only include agendaActions when the transcript clearly supports checking or unchecking an agenda item.
+- You also have custom RoomPulse UI tools for every visible control. Prefer calling a tool when you want the UI to change, and also mirror any intended UI changes in uiActions so the browser can apply them after the heartbeat.
 
 <context>
 ${JSON.stringify(slim, null, 2)}
@@ -438,6 +453,7 @@ function parsePiOutput(text: string): FacilitatorOutput {
     nextHeartbeatHint,
     reviewMarkdown,
     agendaActions: parseAgendaActions(parsed.agendaActions),
+    uiActions: parseUiActions(parsed.uiActions),
     ephemeralReminder:
       typeof parsed.ephemeralReminder === "string"
         ? parsed.ephemeralReminder
@@ -465,6 +481,7 @@ interface SlimHeartbeatContext {
   transcriptDelta: { speaker: string; text: string }[];
   recentTranscript: { speaker: string; text: string }[];
   priorInterventionSummaries: string[];
+  uiTools: HeartbeatInput["uiTools"];
   transcriptStats: {
     totalLines: number;
     deltaLines: number;
@@ -505,11 +522,326 @@ function buildSlimContext(input: HeartbeatInput): SlimHeartbeatContext {
     priorInterventionSummaries: input.priorInterventions
       .slice(0, MAX_PRIOR_INTERVENTIONS)
       .map((entry) => entry.summary),
+    uiTools: input.uiTools,
     transcriptStats: {
       totalLines: input.transcript.length,
       deltaLines: input.transcriptDelta.length
     }
   };
+}
+
+function parseUiActions(value: unknown): UiAction[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter((item): item is Record<string, unknown> => isRecord(item))
+    .filter((item) => typeof item.tool === "string")
+    .map((item) => ({
+      tool: item.tool as UiToolName,
+      parameters: isRecord(item.parameters) ? item.parameters : {},
+      reason:
+        typeof item.reason === "string"
+          ? item.reason
+          : "Pi proposed a RoomPulse UI action."
+    }))
+    .filter((action) => isKnownUiTool(action.tool));
+}
+
+function createRoomPulseUiTools(queuedActions: UiAction[]) {
+  const queue = (
+    tool: UiToolName,
+    parameters: Record<string, unknown>,
+    fallbackReason: string
+  ) => {
+    const reason =
+      typeof parameters.reason === "string" && parameters.reason.trim()
+        ? parameters.reason.trim()
+        : fallbackReason;
+    queuedActions.push({ tool, parameters, reason });
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Queued RoomPulse UI action: ${tool}.`
+        }
+      ],
+      details: { tool, parameters, reason }
+    };
+  };
+
+  return [
+    {
+      name: "set_agenda_item",
+      label: "Set agenda item",
+      description:
+        "Check or uncheck an agenda item on the shared RoomPulse display.",
+      promptSnippet:
+        "set_agenda_item: check/uncheck a visible agenda item by itemId.",
+      parameters: Type.Object({
+        itemId: Type.String(),
+        done: Type.Boolean(),
+        reason: Type.Optional(Type.String())
+      }),
+      execute: async (_id: string, params: Record<string, unknown>) =>
+        queue(
+          "set_agenda_item",
+          params,
+          "Pi requested an agenda state update."
+        )
+    },
+    {
+      name: "set_active_agenda_item",
+      label: "Set active agenda item",
+      description: "Move the Now Discussing card to a specific agenda item.",
+      promptSnippet:
+        "set_active_agenda_item: set the current Now Discussing agenda item.",
+      parameters: Type.Object({
+        itemId: Type.String(),
+        reason: Type.Optional(Type.String())
+      }),
+      execute: async (_id: string, params: Record<string, unknown>) =>
+        queue(
+          "set_active_agenda_item",
+          params,
+          "Pi requested a Now Discussing update."
+        )
+    },
+    {
+      name: "send_room_reminder",
+      label: "Send room reminder",
+      description:
+        "Show one quiet ephemeral reminder on the shared RoomPulse display.",
+      promptSnippet:
+        "send_room_reminder: show one quiet reminder for this heartbeat.",
+      parameters: Type.Object({
+        message: Type.String(),
+        tone: Type.Optional(Type.String()),
+        reason: Type.Optional(Type.String())
+      }),
+      execute: async (_id: string, params: Record<string, unknown>) =>
+        queue("send_room_reminder", params, "Pi sent a room reminder.")
+    },
+    {
+      name: "update_review_document",
+      label: "Update review document",
+      description:
+        "Replace the live markdown review document with a complete non-destructive revision.",
+      promptSnippet:
+        "update_review_document: replace the live markdown document.",
+      parameters: Type.Object({
+        markdown: Type.String(),
+        summary: Type.Optional(Type.String()),
+        reason: Type.Optional(Type.String())
+      }),
+      execute: async (_id: string, params: Record<string, unknown>) =>
+        queue(
+          "update_review_document",
+          params,
+          "Pi revised the review document."
+        )
+    },
+    {
+      name: "set_meeting_pause",
+      label: "Pause or resume meeting",
+      description: "Pause or resume the heartbeat countdown.",
+      parameters: Type.Object({
+        paused: Type.Boolean(),
+        reason: Type.Optional(Type.String())
+      }),
+      execute: async (_id: string, params: Record<string, unknown>) =>
+        queue("set_meeting_pause", params, "Pi updated meeting pause state.")
+    },
+    {
+      name: "restore_review_version",
+      label: "Restore review version",
+      description: "Restore one of the visible review document versions.",
+      parameters: Type.Object({
+        versionId: Type.String(),
+        reason: Type.Optional(Type.String())
+      }),
+      execute: async (_id: string, params: Record<string, unknown>) =>
+        queue(
+          "restore_review_version",
+          params,
+          "Pi restored a prior review document version."
+        )
+    },
+    {
+      name: "set_heartbeat_interval",
+      label: "Set heartbeat interval",
+      description: "Change the heartbeat interval in seconds.",
+      parameters: Type.Object({
+        seconds: Type.Number(),
+        reason: Type.Optional(Type.String())
+      }),
+      execute: async (_id: string, params: Record<string, unknown>) =>
+        queue(
+          "set_heartbeat_interval",
+          params,
+          "Pi changed the heartbeat interval."
+        )
+    },
+    {
+      name: "set_expected_participants",
+      label: "Set expected participants",
+      description:
+        "Change the expected speaker count used for participation reminders.",
+      parameters: Type.Object({
+        count: Type.Number(),
+        reason: Type.Optional(Type.String())
+      }),
+      execute: async (_id: string, params: Record<string, unknown>) =>
+        queue(
+          "set_expected_participants",
+          params,
+          "Pi changed the expected participant count."
+        )
+    },
+    {
+      name: "set_transcript_mode",
+      label: "Set transcript mode",
+      description: "Switch transcript controls between mic and demo mode.",
+      parameters: Type.Object({
+        mode: Type.String(),
+        reason: Type.Optional(Type.String())
+      }),
+      execute: async (_id: string, params: Record<string, unknown>) =>
+        queue("set_transcript_mode", params, "Pi changed transcript mode.")
+    },
+    {
+      name: "request_microphone",
+      label: "Request microphone",
+      description:
+        "Ask the browser UI to begin microphone capture; permission may require user approval.",
+      parameters: Type.Object({
+        reason: Type.Optional(Type.String())
+      }),
+      execute: async (_id: string, params: Record<string, unknown>) =>
+        queue("request_microphone", params, "Pi requested microphone capture.")
+    },
+    {
+      name: "add_demo_transcript_line",
+      label: "Add demo transcript line",
+      description:
+        "Add a simulated transcript line in demo mode. Do not use for real microphone speech.",
+      parameters: Type.Object({
+        speakerLabel: Type.String(),
+        text: Type.String(),
+        reason: Type.Optional(Type.String())
+      }),
+      execute: async (_id: string, params: Record<string, unknown>) =>
+        queue(
+          "add_demo_transcript_line",
+          params,
+          "Pi added a simulated demo transcript line."
+        )
+    },
+    {
+      name: "stop_microphone",
+      label: "Stop microphone",
+      description: "Stop browser microphone capture.",
+      parameters: Type.Object({
+        reason: Type.Optional(Type.String())
+      }),
+      execute: async (_id: string, params: Record<string, unknown>) =>
+        queue("stop_microphone", params, "Pi stopped microphone capture.")
+    },
+    {
+      name: "start_scripted_demo",
+      label: "Start scripted demo",
+      description: "Start the deterministic scripted transcript demo.",
+      parameters: Type.Object({
+        reason: Type.Optional(Type.String())
+      }),
+      execute: async (_id: string, params: Record<string, unknown>) =>
+        queue("start_scripted_demo", params, "Pi started the scripted demo.")
+    },
+    {
+      name: "stop_scripted_demo",
+      label: "Stop scripted demo",
+      description: "Stop the deterministic scripted transcript demo.",
+      parameters: Type.Object({
+        reason: Type.Optional(Type.String())
+      }),
+      execute: async (_id: string, params: Record<string, unknown>) =>
+        queue("stop_scripted_demo", params, "Pi stopped the scripted demo.")
+    },
+    {
+      name: "load_past_meeting",
+      label: "Load past meeting",
+      description: "Open a saved local meeting log preview.",
+      parameters: Type.Object({
+        meetingId: Type.String(),
+        reason: Type.Optional(Type.String())
+      }),
+      execute: async (_id: string, params: Record<string, unknown>) =>
+        queue("load_past_meeting", params, "Pi opened a past meeting.")
+    },
+    {
+      name: "refresh_past_meetings",
+      label: "Refresh past meetings",
+      description: "Refresh the saved local meeting list.",
+      parameters: Type.Object({
+        reason: Type.Optional(Type.String())
+      }),
+      execute: async (_id: string, params: Record<string, unknown>) =>
+        queue(
+          "refresh_past_meetings",
+          params,
+          "Pi refreshed the past-meetings list."
+        )
+    },
+    {
+      name: "request_end_meeting",
+      label: "Request end meeting",
+      description:
+        "Ask the room to end the meeting. The UI surfaces confirmation instead of auto-ending.",
+      parameters: Type.Object({
+        reason: Type.String()
+      }),
+      execute: async (_id: string, params: Record<string, unknown>) =>
+        queue("request_end_meeting", params, "Pi requested meeting end.")
+    }
+  ];
+}
+
+function isKnownUiTool(value: string): value is UiToolName {
+  return (
+    value === "set_agenda_item" ||
+    value === "set_active_agenda_item" ||
+    value === "send_room_reminder" ||
+    value === "update_review_document" ||
+    value === "restore_review_version" ||
+    value === "set_meeting_pause" ||
+    value === "set_heartbeat_interval" ||
+    value === "set_expected_participants" ||
+    value === "set_transcript_mode" ||
+    value === "add_demo_transcript_line" ||
+    value === "request_microphone" ||
+    value === "stop_microphone" ||
+    value === "start_scripted_demo" ||
+    value === "stop_scripted_demo" ||
+    value === "load_past_meeting" ||
+    value === "refresh_past_meetings" ||
+    value === "request_end_meeting"
+  );
+}
+
+function mergeUiActions(primary: UiAction[], queued: UiAction[]): UiAction[] {
+  const seen = new Set<string>();
+  const merged: UiAction[] = [];
+
+  for (const action of [...queued, ...primary]) {
+    const key = `${action.tool}:${JSON.stringify(action.parameters)}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      merged.push(action);
+    }
+  }
+
+  return merged;
 }
 
 function parseAgendaActions(value: unknown): FacilitatorOutput["agendaActions"] {

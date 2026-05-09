@@ -81,6 +81,39 @@ export interface AgendaAction {
   reason: string;
 }
 
+export type UiToolName =
+  | "set_agenda_item"
+  | "set_active_agenda_item"
+  | "send_room_reminder"
+  | "update_review_document"
+  | "restore_review_version"
+  | "set_meeting_pause"
+  | "set_heartbeat_interval"
+  | "set_expected_participants"
+  | "set_transcript_mode"
+  | "add_demo_transcript_line"
+  | "request_microphone"
+  | "stop_microphone"
+  | "start_scripted_demo"
+  | "stop_scripted_demo"
+  | "load_past_meeting"
+  | "refresh_past_meetings"
+  | "request_end_meeting";
+
+export interface UiToolDefinition {
+  name: UiToolName;
+  label: string;
+  description: string;
+  parameters: Record<string, string>;
+  confirmationRequired?: boolean;
+}
+
+export interface UiAction {
+  tool: UiToolName;
+  parameters: Record<string, unknown>;
+  reason: string;
+}
+
 export interface HeartbeatRuntimeState {
   meetingStartedAt: number;
   meetingElapsedSeconds: number;
@@ -97,6 +130,7 @@ export interface HeartbeatInput {
   priorInterventions: TimelineEntry[];
   currentReviewMarkdown: string;
   reviewVersions: ReviewVersion[];
+  uiTools: UiToolDefinition[];
   runtime: HeartbeatRuntimeState;
   now: number;
 }
@@ -108,6 +142,7 @@ export interface FacilitatorOutput {
   nextHeartbeatHint: string;
   reviewMarkdown: string;
   agendaActions: AgendaAction[];
+  uiActions: UiAction[];
   ephemeralReminder: string | null;
   adapterNotice?: string;
 }
@@ -156,6 +191,7 @@ export function createHeartbeatInput({
     currentReviewMarkdown:
       currentReviewMarkdown ?? createInitialReviewMarkdown(meeting),
     reviewVersions: reviewVersions ?? [],
+    uiTools: createUiToolDefinitions(meeting),
     runtime: {
       meetingStartedAt: startedAt,
       meetingElapsedSeconds: Math.max(0, Math.floor((now - startedAt) / 1000)),
@@ -265,8 +301,179 @@ export async function runLocalFacilitation(
       : "Next check should confirm whether the meeting goal is complete.",
     reviewMarkdown: buildReviewMarkdown(input, cards, mergedAgendaActions),
     agendaActions: mergedAgendaActions,
+    uiActions: buildLocalUiActions(input, mergedAgendaActions, cards),
     ephemeralReminder: selectEphemeralReminder(input, cards)
   };
+}
+
+export function createUiToolDefinitions(
+  meeting: MeetingConfig
+): UiToolDefinition[] {
+  const agendaHint =
+    meeting.agenda.length > 0
+      ? meeting.agenda.map((item) => item.id).join(", ")
+      : "no agenda item ids yet";
+
+  return [
+    {
+      name: "set_agenda_item",
+      label: "Set agenda item",
+      description:
+        "Check or uncheck a visible agenda item when the transcript clearly supports the change.",
+      parameters: {
+        itemId: `agenda item id. Available ids: ${agendaHint}`,
+        done: "boolean agenda completion state",
+        reason: "short visible reason"
+      }
+    },
+    {
+      name: "set_active_agenda_item",
+      label: "Set active agenda item",
+      description:
+        "Move the Now Discussing card to the agenda item the room is currently discussing.",
+      parameters: {
+        itemId: `agenda item id. Available ids: ${agendaHint}`,
+        reason: "short visible reason"
+      }
+    },
+    {
+      name: "send_room_reminder",
+      label: "Send room reminder",
+      description:
+        "Show one quiet, ephemeral reminder snackbar/dock message for this heartbeat.",
+      parameters: {
+        message: "one concise room-facing reminder",
+        tone: "info, warning, or urgent"
+      }
+    },
+    {
+      name: "update_review_document",
+      label: "Update review document",
+      description:
+        "Replace the live markdown review document with a non-destructive revision.",
+      parameters: {
+        markdown: "complete markdown document",
+        summary: "short version summary"
+      }
+    },
+    {
+      name: "restore_review_version",
+      label: "Restore review version",
+      description: "Restore one of the visible review document versions.",
+      parameters: {
+        versionId: "review version id",
+        reason: "short visible reason"
+      }
+    },
+    {
+      name: "set_meeting_pause",
+      label: "Pause or resume meeting",
+      description: "Pause or resume heartbeat countdown state.",
+      parameters: {
+        paused: "boolean paused state",
+        reason: "short visible reason"
+      }
+    },
+    {
+      name: "set_heartbeat_interval",
+      label: "Set heartbeat interval",
+      description: "Change the meeting heartbeat interval.",
+      parameters: {
+        seconds: "number of seconds, minimum 15",
+        reason: "short visible reason"
+      }
+    },
+    {
+      name: "set_expected_participants",
+      label: "Set expected participants",
+      description:
+        "Adjust the expected speaker cluster count used by participation nudges.",
+      parameters: {
+        count: "number of expected participants, minimum 1",
+        reason: "short visible reason"
+      }
+    },
+    {
+      name: "set_transcript_mode",
+      label: "Set transcript mode",
+      description: "Switch transcript controls between mic and demo mode.",
+      parameters: {
+        mode: "mic or demo",
+        reason: "short visible reason"
+      }
+    },
+    {
+      name: "add_demo_transcript_line",
+      label: "Add demo transcript line",
+      description:
+        "Add a simulated transcript line in demo mode. Do not use for real microphone speech.",
+      parameters: {
+        speakerLabel: "Speaker N label",
+        text: "simulated transcript text",
+        reason: "short visible reason"
+      }
+    },
+    {
+      name: "request_microphone",
+      label: "Request microphone",
+      description:
+        "Ask the UI to start browser microphone capture. Browser permission may still require user approval.",
+      parameters: {
+        reason: "short visible reason"
+      }
+    },
+    {
+      name: "stop_microphone",
+      label: "Stop microphone",
+      description: "Stop browser microphone capture.",
+      parameters: {
+        reason: "short visible reason"
+      }
+    },
+    {
+      name: "start_scripted_demo",
+      label: "Start scripted demo",
+      description: "Start the deterministic scripted transcript demo.",
+      parameters: {
+        reason: "short visible reason"
+      }
+    },
+    {
+      name: "stop_scripted_demo",
+      label: "Stop scripted demo",
+      description: "Stop the deterministic scripted transcript demo.",
+      parameters: {
+        reason: "short visible reason"
+      }
+    },
+    {
+      name: "load_past_meeting",
+      label: "Load past meeting",
+      description: "Open a saved local meeting log preview.",
+      parameters: {
+        meetingId: "local meeting log id",
+        reason: "short visible reason"
+      }
+    },
+    {
+      name: "refresh_past_meetings",
+      label: "Refresh past meetings",
+      description: "Refresh the local past-meetings list.",
+      parameters: {
+        reason: "short visible reason"
+      }
+    },
+    {
+      name: "request_end_meeting",
+      label: "Request end meeting",
+      description:
+        "Ask the room to end the meeting. This is surfaced as a confirmation reminder, not auto-ended.",
+      parameters: {
+        reason: "short visible reason"
+      },
+      confirmationRequired: true
+    }
+  ];
 }
 
 export function getAgendaProgress(agenda: AgendaItem[]): AgendaProgress {
@@ -581,6 +788,35 @@ function selectEphemeralReminder(
   }
 
   return null;
+}
+
+function buildLocalUiActions(
+  input: HeartbeatInput,
+  agendaActions: AgendaAction[],
+  cards: FacilitatorCard[]
+): UiAction[] {
+  const actions: UiAction[] = agendaActions.map((action) => ({
+    tool: "set_agenda_item",
+    parameters: {
+      itemId: action.itemId,
+      done: action.done
+    },
+    reason: action.reason
+  }));
+
+  const reminder = selectEphemeralReminder(input, cards);
+  if (reminder) {
+    actions.push({
+      tool: "send_room_reminder",
+      parameters: {
+        message: reminder,
+        tone: cards.some((card) => card.priority === "high") ? "urgent" : "info"
+      },
+      reason: "Local facilitator generated the current heartbeat reminder."
+    });
+  }
+
+  return actions;
 }
 
 function formatElapsed(totalSeconds: number): string {
