@@ -2,10 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  applyAgendaCoverage,
   createHeartbeatInput,
   getAgendaProgress,
+  runLocalFacilitation,
   type AgendaItem,
   type FacilitatorOutput,
+  type HeartbeatInput,
   type MeetingConfig,
   type TimelineEntry,
   type TranscriptLine
@@ -16,6 +19,14 @@ import {
   extractVoiceFeaturesFromFrequencyData
 } from "@/lib/speaker-tracker";
 import { TranscriptStore } from "@/lib/transcript-store";
+import {
+  DEMO_AGENDA,
+  DEMO_DURATION_MS,
+  DEMO_EXPECTED_PARTICIPANTS,
+  DEMO_HEARTBEAT_INTERVAL_SECONDS,
+  DEMO_PARTICIPANTS,
+  DEMO_SCRIPT
+} from "@/lib/demo-script";
 
 type Phase = "setup" | "meeting";
 type TranscriptMode = "demo" | "mic";
@@ -114,12 +125,14 @@ export default function RoomPulseApp() {
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   const [lastHeartbeatAt, setLastHeartbeatAt] = useState(0);
   const [nextHeartbeatAt, setNextHeartbeatAt] = useState(0);
-  const [now, setNow] = useState(() => Date.now());
+  const [countdownSeconds, setCountdownSeconds] = useState(0);
   const [isHeartbeatRunning, setIsHeartbeatRunning] = useState(false);
   const [heartbeatError, setHeartbeatError] = useState<string | null>(null);
+  const [pulseTick, setPulseTick] = useState(0);
   const [micStatus, setMicStatus] = useState("Mic idle");
   const [currentMicSpeaker, setCurrentMicSpeaker] = useState("Speaker 1");
   const [isMicRunning, setIsMicRunning] = useState(false);
+  const [isDemoRunning, setIsDemoRunning] = useState(false);
 
   const transcriptStoreRef = useRef(new TranscriptStore());
   const speakerTrackerRef = useRef(new SpeakerTracker());
@@ -130,6 +143,10 @@ export default function RoomPulseApp() {
   const currentMicSpeakerRef = useRef("Speaker 1");
   const isHeartbeatRunningRef = useRef(false);
   const transcriptFeedRef = useRef<HTMLDivElement | null>(null);
+  const heartbeatTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const runHeartbeatRef = useRef<(() => Promise<void>) | null>(null);
+  const demoTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const heartbeatIntervalRef = useRef(meetingDraft.heartbeatIntervalSeconds);
 
   const observedSpeakerLabels = useMemo(
     () => Array.from(new Set(transcript.map((line) => line.speakerLabel))),
@@ -147,10 +164,11 @@ export default function RoomPulseApp() {
     () => getAgendaProgress(meeting.agenda),
     [meeting.agenda]
   );
-  const countdownSeconds = Math.max(
-    0,
-    Math.ceil((nextHeartbeatAt - now) / 1000)
-  );
+  const intervalSeconds = meeting.heartbeatIntervalSeconds;
+  const countdownProgress =
+    intervalSeconds <= 0
+      ? 0
+      : Math.min(1, Math.max(0, 1 - countdownSeconds / intervalSeconds));
   const progressPercent =
     agendaProgress.total === 0
       ? 0
@@ -198,6 +216,18 @@ export default function RoomPulseApp() {
     []
   );
 
+  const scheduleNextHeartbeat = useCallback((delayMs: number) => {
+    if (heartbeatTimeoutRef.current) {
+      clearTimeout(heartbeatTimeoutRef.current);
+    }
+    const fireAt = Date.now() + Math.max(0, delayMs);
+    setNextHeartbeatAt(fireAt);
+    heartbeatTimeoutRef.current = setTimeout(() => {
+      heartbeatTimeoutRef.current = null;
+      void runHeartbeatRef.current?.();
+    }, Math.max(0, delayMs));
+  }, []);
+
   const runHeartbeat = useCallback(async () => {
     if (isHeartbeatRunningRef.current || phase !== "meeting") {
       return;
@@ -216,6 +246,7 @@ export default function RoomPulseApp() {
     setIsHeartbeatRunning(true);
     isHeartbeatRunningRef.current = true;
     setHeartbeatError(null);
+    setPulseTick((tick) => tick + 1);
 
     try {
       const response = await fetch("/api/heartbeat", {
@@ -240,20 +271,15 @@ export default function RoomPulseApp() {
       const output = (await response.json()) as FacilitatorOutput;
       applyHeartbeatOutput(output, heartbeatNow);
       setLastHeartbeatAt(heartbeatNow);
-      setNextHeartbeatAt(
-        Date.now() + meeting.heartbeatIntervalSeconds * 1000
-      );
     } catch (error) {
       setHeartbeatError(error instanceof Error ? error.message : String(error));
-      const fallbackOutput = await runLocalHeartbeatInBrowser(input);
+      const fallbackOutput = await runLocalFacilitationInBrowser(input);
       applyHeartbeatOutput(fallbackOutput, heartbeatNow);
       setLastHeartbeatAt(heartbeatNow);
-      setNextHeartbeatAt(
-        Date.now() + meeting.heartbeatIntervalSeconds * 1000
-      );
     } finally {
       setIsHeartbeatRunning(false);
       isHeartbeatRunningRef.current = false;
+      scheduleNextHeartbeat(heartbeatIntervalRef.current * 1000);
     }
   }, [
     applyHeartbeatOutput,
@@ -261,30 +287,49 @@ export default function RoomPulseApp() {
     meeting,
     observedSpeakerLabels,
     phase,
+    scheduleNextHeartbeat,
     timeline,
     transcript
   ]);
 
+  // Keep a ref to the latest runHeartbeat so the self-scheduling timeout
+  // always invokes the current closure rather than a stale one.
   useEffect(() => {
-    const timer = setInterval(() => {
-      setNow(Date.now());
-    }, 1000);
+    runHeartbeatRef.current = runHeartbeat;
+  }, [runHeartbeat]);
 
+  useEffect(() => {
+    heartbeatIntervalRef.current = meeting.heartbeatIntervalSeconds;
+  }, [meeting.heartbeatIntervalSeconds]);
+
+  // Lightweight 1Hz tick that only updates the visible countdown.
+  useEffect(() => {
+    if (phase !== "meeting") {
+      setCountdownSeconds(0);
+      return;
+    }
+
+    const update = () => {
+      const remaining = Math.max(
+        0,
+        Math.ceil((nextHeartbeatAt - Date.now()) / 1000)
+      );
+      setCountdownSeconds(remaining);
+    };
+    update();
+    const timer = setInterval(update, 250);
+    return () => clearInterval(timer);
+  }, [nextHeartbeatAt, phase]);
+
+  // Clear the heartbeat timeout on unmount.
+  useEffect(() => {
     return () => {
-      clearInterval(timer);
+      if (heartbeatTimeoutRef.current) {
+        clearTimeout(heartbeatTimeoutRef.current);
+        heartbeatTimeoutRef.current = null;
+      }
     };
   }, []);
-
-  useEffect(() => {
-    if (
-      phase === "meeting" &&
-      nextHeartbeatAt > 0 &&
-      now >= nextHeartbeatAt &&
-      !isHeartbeatRunningRef.current
-    ) {
-      void runHeartbeat();
-    }
-  }, [nextHeartbeatAt, now, phase, runHeartbeat]);
 
   useEffect(() => {
     return () => {
@@ -293,12 +338,156 @@ export default function RoomPulseApp() {
   }, []);
 
   useEffect(() => {
-    if (!transcriptFeedRef.current) {
+    const feed = transcriptFeedRef.current;
+    if (!feed) {
       return;
     }
 
-    transcriptFeedRef.current.scrollTop = transcriptFeedRef.current.scrollHeight;
+    // Only auto-scroll if the user is already near the bottom; otherwise let
+    // them keep reading history without being yanked.
+    const distanceFromBottom =
+      feed.scrollHeight - feed.scrollTop - feed.clientHeight;
+    if (distanceFromBottom < 96) {
+      feed.scrollTop = feed.scrollHeight;
+    }
   }, [transcript.length]);
+
+  // Auto-check agenda items the room has clearly covered.
+  useEffect(() => {
+    if (phase !== "meeting") return;
+    setMeeting((current) => {
+      const updated = applyAgendaCoverage(current.agenda, transcript);
+      if (updated === current.agenda) return current;
+      return { ...current, agenda: updated };
+    });
+  }, [phase, transcript]);
+
+  const stopMicSafe = useCallback(() => {
+    if (recognitionRef.current || mediaStreamRef.current) {
+      cleanupMicResources();
+      currentMicSpeakerRef.current = "Speaker 1";
+      setCurrentMicSpeaker("Speaker 1");
+      setIsMicRunning(false);
+      setMicStatus("Mic idle");
+    }
+  }, []);
+
+  const stopScriptedDemo = useCallback(() => {
+    for (const timer of demoTimeoutsRef.current) {
+      clearTimeout(timer);
+    }
+    demoTimeoutsRef.current = [];
+    setIsDemoRunning(false);
+  }, []);
+
+  const startScriptedDemo = useCallback(() => {
+    stopScriptedDemo();
+    stopMicSafe();
+    setTranscriptMode("demo");
+    setIsDemoRunning(true);
+
+    // Reset transcript and timeline so the arc tells a clean story.
+    transcriptStoreRef.current.clear();
+    setTranscript([]);
+    setTimeline([]);
+    setCurrentOutput({
+      source: "local-fallback",
+      cards: [
+        {
+          id: "demo-armed",
+          kind: "heartbeat",
+          title: "Scripted demo running",
+          body:
+            "Transcript will start streaming in seconds. First pulse arrives at the heartbeat interval.",
+          priority: "medium"
+        }
+      ],
+      summary: "Scripted demo armed.",
+      nextHeartbeatHint: "Watch the room cues swap in at every pulse."
+    });
+
+    // Restart the heartbeat clock fresh so the first pulse lands cleanly.
+    const startedAt = Date.now();
+    setLastHeartbeatAt(startedAt);
+    scheduleNextHeartbeat(heartbeatIntervalRef.current * 1000);
+
+    for (const beat of DEMO_SCRIPT) {
+      const timer = setTimeout(() => {
+        addTranscriptLine(beat.text, beat.speaker, "simulated");
+      }, beat.delayMs);
+      demoTimeoutsRef.current.push(timer);
+    }
+
+    // Auto-clear the running flag after the script finishes plus one heartbeat.
+    const finalTimer = setTimeout(() => {
+      setIsDemoRunning(false);
+      demoTimeoutsRef.current = [];
+    }, DEMO_DURATION_MS + heartbeatIntervalRef.current * 1000);
+    demoTimeoutsRef.current.push(finalTimer);
+  }, [
+    addTranscriptLine,
+    scheduleNextHeartbeat,
+    stopMicSafe,
+    stopScriptedDemo
+  ]);
+
+  const launchLiveDemo = useCallback(() => {
+    const demoMeeting: MeetingConfig = {
+      title: "Launch readiness review",
+      goal: "Leave with owners for every open launch risk.",
+      context:
+        "RoomPulse should surface risks, drift, and missing voices on the shared display.",
+      agenda: DEMO_AGENDA.map((title, index) => ({
+        id: `agenda-${index + 1}`,
+        title,
+        done: false
+      })),
+      expectedParticipants: DEMO_EXPECTED_PARTICIPANTS,
+      participants: [...DEMO_PARTICIPANTS],
+      heartbeatIntervalSeconds: DEMO_HEARTBEAT_INTERVAL_SECONDS
+    };
+
+    setMeeting(demoMeeting);
+    heartbeatIntervalRef.current = demoMeeting.heartbeatIntervalSeconds;
+    setPhase("meeting");
+    setCurrentOutput({
+      source: "local-fallback",
+      cards: [
+        {
+          id: "demo-armed",
+          kind: "heartbeat",
+          title: "Demo armed",
+          body:
+            "First scripted line lands in moments. Heartbeat fires every 15 seconds — watch the cards swap in.",
+          priority: "medium"
+        }
+      ],
+      summary: "Scripted demo armed.",
+      nextHeartbeatHint: "First pulse will arrive at 15 seconds."
+    });
+    transcriptStoreRef.current.clear();
+    setTranscript([]);
+    setTimeline([]);
+    const startedAt = Date.now();
+    setLastHeartbeatAt(startedAt);
+    scheduleNextHeartbeat(demoMeeting.heartbeatIntervalSeconds * 1000);
+
+    // Kick off the script after a short tick so React commits the phase swap.
+    setTimeout(() => startScriptedDemo(), 120);
+  }, [scheduleNextHeartbeat, startScriptedDemo]);
+
+  // Stop demo timers when leaving the meeting view.
+  useEffect(() => {
+    if (phase !== "meeting") {
+      stopScriptedDemo();
+    }
+  }, [phase, stopScriptedDemo]);
+
+  useEffect(() => {
+    return () => {
+      stopScriptedDemo();
+    };
+  }, [stopScriptedDemo]);
 
   function startMeeting() {
     const expectedParticipants = clampFiniteNumber(
@@ -323,6 +512,7 @@ export default function RoomPulseApp() {
     };
 
     setMeeting(configuredMeeting);
+    heartbeatIntervalRef.current = configuredMeeting.heartbeatIntervalSeconds;
     setPhase("meeting");
     setCurrentOutput({
       source: "local-fallback",
@@ -341,8 +531,8 @@ export default function RoomPulseApp() {
     });
     const startedAt = Date.now();
     setLastHeartbeatAt(startedAt);
-    setNextHeartbeatAt(
-      startedAt + configuredMeeting.heartbeatIntervalSeconds * 1000
+    scheduleNextHeartbeat(
+      configuredMeeting.heartbeatIntervalSeconds * 1000
     );
   }
 
@@ -590,6 +780,23 @@ export default function RoomPulseApp() {
           </form>
 
           <aside className="preview-panel">
+            <div className="demo-launch">
+              <div className="section-kicker">One-click demo</div>
+              <h2>Launch the live demo</h2>
+              <p>
+                Skip the form, project the room display, and watch a 75-second
+                meeting fire risk, drift, decision, action, and participation
+                cards on cue.
+              </p>
+              <button
+                type="button"
+                className="demo-launch-button"
+                onClick={launchLiveDemo}
+              >
+                Launch live demo
+                <span aria-hidden="true">{"->"}</span>
+              </button>
+            </div>
             <div className="section-kicker">Display preview</div>
             <div className="preview-metric">
               <strong>{meetingDraft.heartbeatIntervalSeconds}s</strong>
@@ -619,23 +826,73 @@ export default function RoomPulseApp() {
     );
   }
 
+  const cardSource = currentOutput?.source ?? "pending";
+  const sourceLabel =
+    cardSource === "pi"
+      ? "Powered by Pi"
+      : cardSource === "local-fallback"
+        ? "Local fallback"
+        : "Awaiting first pulse";
+
+  // Stroke dash for the countdown ring (circumference ~= 276 at r=44).
+  const RING_CIRCUMFERENCE = 276.46;
+  const ringOffset = RING_CIRCUMFERENCE * countdownProgress;
+
   return (
     <main className="app-shell room-shell">
       <header className="room-header">
-        <div>
+        <div className="room-headline">
           <div className="brand-row">
             <span className="status-dot live" />
             <span>Heartbeat facilitator live</span>
+            {isDemoRunning ? (
+              <span className="demo-pill">Scripted demo running</span>
+            ) : null}
           </div>
           <h1>{meeting.title}</h1>
           <p>{meeting.goal}</p>
         </div>
         <div className="heartbeat-console" aria-label="Heartbeat status">
-          <span>{isHeartbeatRunning ? "Running" : "Next pulse"}</span>
-          <strong>{isHeartbeatRunning ? "..." : `${countdownSeconds}s`}</strong>
-          <button type="button" onClick={() => void runHeartbeat()}>
-            Run heartbeat now
-          </button>
+          <div
+            className={`heartbeat-ring ${isHeartbeatRunning ? "is-pulsing" : ""}`}
+            aria-hidden="true"
+          >
+            <svg viewBox="0 0 100 100">
+              <circle className="ring-track" cx="50" cy="50" r="44" />
+              <circle
+                className="ring-progress"
+                cx="50"
+                cy="50"
+                r="44"
+                style={{
+                  strokeDasharray: RING_CIRCUMFERENCE,
+                  strokeDashoffset: ringOffset
+                }}
+              />
+            </svg>
+            <span className="ring-flash" key={pulseTick} aria-hidden="true" />
+            <div className="ring-label">
+              <span>{isHeartbeatRunning ? "Pulsing" : "Next pulse"}</span>
+              <strong>{isHeartbeatRunning ? "…" : `${countdownSeconds}s`}</strong>
+            </div>
+          </div>
+          <div className="heartbeat-actions">
+            <button
+              type="button"
+              className="primary-action"
+              onClick={() => void runHeartbeat()}
+              disabled={isHeartbeatRunning}
+            >
+              Run heartbeat now
+            </button>
+            <button
+              type="button"
+              className={`demo-action ${isDemoRunning ? "is-running" : ""}`}
+              onClick={isDemoRunning ? stopScriptedDemo : startScriptedDemo}
+            >
+              {isDemoRunning ? "Stop scripted demo" : "Run scripted demo"}
+            </button>
+          </div>
         </div>
       </header>
 
@@ -646,14 +903,18 @@ export default function RoomPulseApp() {
               <div className="section-kicker">Current facilitator cards</div>
               <h2>Room cues</h2>
             </div>
-            <span>{currentOutput?.source === "pi" ? "Pi" : "Local fallback"}</span>
+            <span className={`source-badge source-${cardSource}`}>
+              {cardSource === "pi" ? <span className="source-dot" /> : null}
+              {sourceLabel}
+            </span>
           </div>
 
-          <div className="card-stack">
-            {(currentOutput?.cards ?? []).map((card) => (
+          <div className="card-stack" key={`pulse-${pulseTick}`}>
+            {(currentOutput?.cards ?? []).map((card, index) => (
               <article
                 className={`facilitator-card priority-${card.priority}`}
                 key={card.id}
+                style={{ animationDelay: `${index * 80}ms` }}
               >
                 <span>{card.kind}</span>
                 <h3>{card.title}</h3>
@@ -705,8 +966,9 @@ export default function RoomPulseApp() {
               <div className="section-kicker">Live raw transcript</div>
               <h2>Transcript stream</h2>
             </div>
-            <div className="mode-switch" aria-label="Transcript mode">
+            <div className="mode-switch" role="group" aria-label="Transcript mode">
               <button
+                aria-pressed={transcriptMode === "demo"}
                 className={transcriptMode === "demo" ? "active" : ""}
                 type="button"
                 onClick={() => {
@@ -717,6 +979,7 @@ export default function RoomPulseApp() {
                 Demo
               </button>
               <button
+                aria-pressed={transcriptMode === "mic"}
                 className={transcriptMode === "mic" ? "active" : ""}
                 disabled={isMicRunning}
                 type="button"
@@ -826,8 +1089,9 @@ export default function RoomPulseApp() {
   );
 }
 
-async function runLocalHeartbeatInBrowser(input: ReturnType<typeof createHeartbeatInput>) {
-  const { runLocalFacilitation } = await import("@/lib/facilitator");
+async function runLocalFacilitationInBrowser(
+  input: HeartbeatInput
+): Promise<FacilitatorOutput> {
   return runLocalFacilitation(input);
 }
 

@@ -58,6 +58,7 @@ const heartbeatInput: HeartbeatInput = {
     expected: 3,
     observed: 1,
     missingCount: 2,
+    observedLabels: ["Speaker 1"],
     needsNudge: true,
     reminder:
       "Two expected participants have not appeared in the speaker clusters yet."

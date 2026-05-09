@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyAgendaCoverage,
   createHeartbeatInput,
   runLocalFacilitation,
   type MeetingConfig,
@@ -87,7 +88,62 @@ describe("heartbeat facilitation", () => {
     expect(output.cards[0].title).toBe("Heartbeat check");
     expect(output.summary).toContain("Q3 launch planning");
     expect(output.nextHeartbeatHint).toBe(
-      "Next check should revisit Assign risk owner."
+      'Next check should revisit "Assign risk owner".'
     );
+  });
+
+  it("auto-checks an agenda item when transcript says it was covered", () => {
+    const updated = applyAgendaCoverage(meeting.agenda, [
+      {
+        id: "t3",
+        speakerId: "speaker-1",
+        speakerLabel: "Speaker 1",
+        text: "That covers assigning the risk owner. Let's keep going.",
+        timestamp: 3_000,
+        source: "simulated",
+        confidence: 1
+      }
+    ]);
+
+    expect(updated.find((item) => item.id === "a2")?.done).toBe(true);
+    expect(updated.find((item) => item.id === "a3")?.done).toBe(false);
+  });
+
+  it("does not auto-check an agenda item when coverage is explicitly negated", () => {
+    const updated = applyAgendaCoverage(meeting.agenda, [
+      {
+        id: "t4",
+        speakerId: "speaker-1",
+        speakerLabel: "Speaker 1",
+        text: "We have not covered the support plan yet.",
+        timestamp: 4_000,
+        source: "simulated",
+        confidence: 1
+      }
+    ]);
+
+    expect(updated).toBe(meeting.agenda);
+    expect(updated.find((item) => item.id === "a3")?.done).toBe(false);
+  });
+
+  it("does not check a different agenda item just because one line contains a coverage cue", () => {
+    const agenda = [
+      { id: "a1", title: "Review blockers", done: false },
+      { id: "a2", title: "Assign owners", done: false }
+    ];
+    const updated = applyAgendaCoverage(agenda, [
+      {
+        id: "t5",
+        speakerId: "speaker-1",
+        speakerLabel: "Speaker 1",
+        text: "We've covered blockers. Next we should assign owners.",
+        timestamp: 5_000,
+        source: "simulated",
+        confidence: 1
+      }
+    ]);
+
+    expect(updated.find((item) => item.id === "a1")?.done).toBe(true);
+    expect(updated.find((item) => item.id === "a2")?.done).toBe(false);
   });
 });

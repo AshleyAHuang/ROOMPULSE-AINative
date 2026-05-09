@@ -11,13 +11,21 @@ npm run dev
 
 Open `http://localhost:3000`.
 
-Demo flow:
+### Hackathon demo (one click)
+
+The fastest path is the **Launch live demo** button on the setup screen. It loads a pre-baked launch-readiness meeting, jumps straight to the room display, and runs a 75-second scripted scenario that fires every facilitator card kind in turn (risk → drift → decision → action → participation → resolution).
+
+You can also start it from the room display via **Run scripted demo** at any time, which resets the transcript and runs the same arc against whatever meeting config is currently loaded.
+
+### Custom flow
 
 1. Fill the setup/context feeder with title, goal, context, agenda, expected participant count, optional names/roles, and heartbeat interval.
 2. Start the meeting.
-3. Use demo transcript mode to add lines from `Speaker 1`, `Speaker 2`, etc.
-4. Click `Run heartbeat now` to trigger the server-side facilitator adapter.
+3. Use demo transcript mode to add lines from `Speaker 1`, `Speaker 2`, etc., or switch to mic mode.
+4. Click `Run heartbeat now` to trigger the server-side facilitator adapter, or wait for the next scheduled pulse — the countdown ring drains in real time and flashes when a pulse fires.
 5. Watch the current facilitator cards, participation panel, agenda progress, transcript, countdown, and intervention timeline update.
+
+Agenda checkboxes remain manually editable, and RoomPulse also auto-checks items when the transcript clearly indicates they were covered, such as “that covers launch risks” or “done with owners.”
 
 ## Pi Integration
 

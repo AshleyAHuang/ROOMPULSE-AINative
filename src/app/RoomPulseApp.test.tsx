@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import RoomPulseApp from "./RoomPulseApp";
 
@@ -78,5 +78,26 @@ describe("RoomPulseApp", () => {
     expect(
       screen.queryByRole("button", { name: /stop mic/i })
     ).not.toBeInTheDocument();
+  });
+
+  it("checks an agenda item when the transcript says it was covered", async () => {
+    render(<RoomPulseApp />);
+
+    fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    expect(
+      await screen.findByRole("button", { name: /run heartbeat now/i })
+    ).toBeInTheDocument();
+
+    const agendaCheckbox = screen.getByLabelText(
+      /confirm the meeting goal/i
+    ) as HTMLInputElement;
+    expect(agendaCheckbox.checked).toBe(false);
+
+    fireEvent.change(screen.getByLabelText(/demo line/i), {
+      target: { value: "That covers confirming the meeting goal." }
+    });
+    fireEvent.click(screen.getByRole("button", { name: /add demo line/i }));
+
+    await waitFor(() => expect(agendaCheckbox.checked).toBe(true));
   });
 });
