@@ -538,20 +538,48 @@ export default function RoomPulseApp() {
   if (phase === "setup") {
     return (
       <main className="app-shell setup-shell">
-        <section className="setup-hero" aria-labelledby="setup-title">
-          <div className="brand-row">
-            <span className="status-dot" />
-            <span>Mode 2 shared room display</span>
+        <header className="app-topbar setup-topbar">
+          <BrandMark />
+          <div className="topbar-title">
+            <span>Prepare the shared display</span>
+            <h1 id="setup-title">RoomPulse setup</h1>
           </div>
-          <h1 id="setup-title">RoomPulse</h1>
-          <p>
-            Feed the room context, then put this on a shared monitor. The
-            heartbeat loop wakes the facilitator and keeps raw transcript,
-            agenda, and participation visible.
-          </p>
-        </section>
+          <div className="topbar-pills" aria-label="Setup readiness">
+            <StatusPill tone="good">Local-first</StatusPill>
+            <StatusPill>{meetingDraft.heartbeatIntervalSeconds}s pulse</StatusPill>
+          </div>
+        </header>
 
-        <section className="setup-grid" aria-label="Meeting setup">
+        <section className="setup-workspace" aria-labelledby="setup-title">
+          <aside className="setup-brief" aria-label="RoomPulse brief">
+            <div className="setup-brief-copy">
+              <div className="section-kicker">Mode 2 shared room display</div>
+              <h2>Initialize the room before anyone starts talking.</h2>
+              <p>
+                RoomPulse needs the meeting goal, agenda, expected voices, and
+                participant context up front so each heartbeat can nudge the
+                room instead of writing private notes.
+              </p>
+            </div>
+            <div className="setup-flow">
+              <div>
+                <span>1</span>
+                <strong>Context</strong>
+                <p>Goal, stakes, and background the facilitator should remember.</p>
+              </div>
+              <div>
+                <span>2</span>
+                <strong>Room shape</strong>
+                <p>Expected voices and optional names for participation nudges.</p>
+              </div>
+              <div>
+                <span>3</span>
+                <strong>Heartbeat</strong>
+                <p>How often the Pi adapter reviews transcript deltas.</p>
+              </div>
+            </div>
+          </aside>
+
           <form
             className="setup-panel"
             noValidate
@@ -646,36 +674,59 @@ export default function RoomPulseApp() {
               />
             </label>
             <button className="primary-action" type="submit">
-              <span>Start meeting</span>
-              <span aria-hidden="true">{"->"}</span>
+              Start meeting
             </button>
           </form>
 
           <aside className="preview-panel">
-            <div className="section-kicker">Display preview</div>
-            <div className="preview-metric">
-              <strong>{meetingDraft.heartbeatIntervalSeconds}s</strong>
-              <span>heartbeat interval</span>
+            <div className="section-kicker">Launch check</div>
+            <div className="setup-metrics">
+              <div>
+                <strong>{meetingDraft.heartbeatIntervalSeconds}s</strong>
+                <span>heartbeat</span>
+              </div>
+              <div>
+                <strong>{meetingDraft.expectedParticipants}</strong>
+                <span>voices</span>
+              </div>
             </div>
-            <div className="preview-metric">
-              <strong>{meetingDraft.expectedParticipants}</strong>
-              <span>expected voices</span>
-            </div>
-            <div className="preview-copy">
-              <span>Pi adapter</span>
+            <section className="setup-card">
+              <div className="setup-card-title">
+                <span className="status-dot live" />
+                <strong>Facilitator adapter</strong>
+              </div>
               <p>
-                The server route calls <code>runPiHeartbeat(input)</code> on every
-                pulse. Strict mode surfaces missing Pi auth instead of using
+                Every pulse calls <code>runPiHeartbeat(input)</code>. Strict mode
+                surfaces missing Pi auth; normal mode keeps a deterministic
                 local fallback.
               </p>
-            </div>
-            <div className="preview-copy">
-              <span>Local transcription</span>
+            </section>
+            <section className="setup-card">
+              <div className="setup-card-title">
+                <span className="status-dot" />
+                <strong>Microphone path</strong>
+              </div>
               <p>
-                Mic mode streams browser audio to local Whisper transcription
-                and Speaker N clustering.
+                Browser audio streams to local Whisper and returns live
+                transcript lines with Speaker N clustering.
               </p>
-            </div>
+            </section>
+            <section className="setup-card agenda-preview">
+              <div className="setup-card-title">
+                <strong>Agenda preview</strong>
+                <span>{agendaText.split("\n").filter(Boolean).length} items</span>
+              </div>
+              <ol>
+                {agendaText
+                  .split("\n")
+                  .map((item) => item.trim())
+                  .filter(Boolean)
+                  .slice(0, 4)
+                  .map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+              </ol>
+            </section>
           </aside>
         </section>
       </main>
@@ -685,8 +736,10 @@ export default function RoomPulseApp() {
   return (
     <main className="app-shell room-shell">
       <header className="meeting-topbar">
+        <BrandMark />
         <div className="meeting-controls">
           <button type="button" onClick={togglePause}>
+            <span className="pause-bars" aria-hidden="true" />
             {isPaused ? "Resume" : "Pause"}
           </button>
           <button type="button" onClick={() => void runHeartbeat()}>
@@ -702,8 +755,10 @@ export default function RoomPulseApp() {
           <p>{meeting.goal}</p>
         </div>
         <div className="meeting-status">
-          <span>{isMicRunning ? "Microphone live" : "Microphone not live"}</span>
-          <strong>{isPaused ? "Paused" : `${countdownSeconds}s`}</strong>
+          <StatusPill tone={isMicRunning ? "good" : "neutral"}>
+            {isMicRunning ? "Microphone live" : "Microphone not live"}
+          </StatusPill>
+          <StatusPill>{isPaused ? "Paused" : `${countdownSeconds}s`}</StatusPill>
           <button type="button" onClick={() => setShowSettings((value) => !value)}>
             Settings
           </button>
@@ -788,8 +843,13 @@ export default function RoomPulseApp() {
             ) : (
               transcript.map((line) => (
                 <article className="transcript-line" key={line.id}>
-                  <span>{line.speakerLabel}</span>
-                  <p>{line.text}</p>
+                  <div className={`speaker-badge speaker-${speakerNumber(line.speakerLabel)}`}>
+                    S{speakerNumber(line.speakerLabel)}
+                  </div>
+                  <div>
+                    <span>{line.speakerLabel}</span>
+                    <p>{line.text}</p>
+                  </div>
                   <time>{formatClock(line.timestamp)}</time>
                 </article>
               ))
@@ -892,8 +952,13 @@ export default function RoomPulseApp() {
 
         <aside className="right-rail room-column">
           <section className="agenda-card" aria-label="Agenda">
-            <div className="section-kicker">Agenda</div>
-            <strong>{progressPercent}% complete</strong>
+            <div className="rail-card-heading">
+              <h2>Agenda</h2>
+              <span>{progressPercent}% complete</span>
+            </div>
+            <div className="meter agenda-meter">
+              <span style={{ width: `${progressPercent}%` }} />
+            </div>
             <div className="agenda-list">
               {meeting.agenda.map((item) => (
                 <label className="agenda-item" key={item.id}>
@@ -909,10 +974,12 @@ export default function RoomPulseApp() {
           </section>
 
           <section className="participation-card" aria-label="Participation">
-            <div className="section-kicker">Participation</div>
-            <strong>
-              {participation.observed} of {participation.expected} heard
-            </strong>
+            <div className="rail-card-heading">
+              <h2>Participation</h2>
+              <span>
+                {participation.observed} of {participation.expected} heard
+              </span>
+            </div>
             <div className="meter">
               <span
                 style={{
@@ -946,6 +1013,36 @@ export default function RoomPulseApp() {
         </aside>
       </section>
     </main>
+  );
+}
+
+function BrandMark() {
+  return (
+    <div className="brand-mark" aria-label="RoomPulse">
+      <span className="wave-mark" aria-hidden="true">
+        <i />
+        <i />
+        <i />
+        <i />
+        <i />
+      </span>
+      <span>RoomPulse</span>
+    </div>
+  );
+}
+
+function StatusPill({
+  children,
+  tone = "neutral"
+}: {
+  children: ReactNode;
+  tone?: "good" | "neutral";
+}) {
+  return (
+    <span className={`status-pill ${tone}`}>
+      {tone === "good" ? <span className="status-dot" aria-hidden="true" /> : null}
+      {children}
+    </span>
   );
 }
 
@@ -1056,4 +1153,9 @@ function formatElapsed(totalSeconds: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
+function speakerNumber(label: string): number {
+  const match = label.match(/\d+/);
+  return match ? Number(match[0]) : 1;
 }
