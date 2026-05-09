@@ -51,6 +51,11 @@ button {
   cursor: pointer;
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
 code {
   color: var(--accent);
 }
@@ -128,6 +133,19 @@ code {
   line-height: 1.5;
   margin: 0;
   max-width: 720px;
+}
+
+.setup-hero h1,
+.setup-hero p,
+.room-header h1,
+.room-header p,
+.facilitator-card,
+.side-panel,
+.transcript-line,
+.timeline-entry,
+.adapter-notice,
+.mic-status {
+  overflow-wrap: anywhere;
 }
 
 .setup-grid {

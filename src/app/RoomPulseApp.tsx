@@ -119,6 +119,7 @@ export default function RoomPulseApp() {
   const [heartbeatError, setHeartbeatError] = useState<string | null>(null);
   const [micStatus, setMicStatus] = useState("Mic idle");
   const [currentMicSpeaker, setCurrentMicSpeaker] = useState("Speaker 1");
+  const [isMicRunning, setIsMicRunning] = useState(false);
 
   const transcriptStoreRef = useRef(new TranscriptStore());
   const speakerTrackerRef = useRef(new SpeakerTracker());
@@ -128,6 +129,7 @@ export default function RoomPulseApp() {
   const featureTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const currentMicSpeakerRef = useRef("Speaker 1");
   const isHeartbeatRunningRef = useRef(false);
+  const transcriptFeedRef = useRef<HTMLDivElement | null>(null);
 
   const observedSpeakerLabels = useMemo(
     () => Array.from(new Set(transcript.map((line) => line.speakerLabel))),
@@ -179,6 +181,23 @@ export default function RoomPulseApp() {
     []
   );
 
+  const applyHeartbeatOutput = useCallback(
+    (output: FacilitatorOutput, heartbeatNow: number) => {
+      setCurrentOutput(output);
+      setTimeline((entries) => [
+        {
+          id: `${heartbeatNow}-${entries.length + 1}`,
+          timestamp: heartbeatNow,
+          source: output.source,
+          cards: output.cards,
+          summary: output.summary
+        },
+        ...entries
+      ]);
+    },
+    []
+  );
+
   const runHeartbeat = useCallback(async () => {
     if (isHeartbeatRunningRef.current || phase !== "meeting") {
       return;
@@ -219,24 +238,15 @@ export default function RoomPulseApp() {
       }
 
       const output = (await response.json()) as FacilitatorOutput;
-      setCurrentOutput(output);
-      setTimeline((entries) => [
-        {
-          id: `${heartbeatNow}-${entries.length + 1}`,
-          timestamp: heartbeatNow,
-          source: output.source,
-          cards: output.cards,
-          summary: output.summary
-        },
-        ...entries
-      ]);
+      applyHeartbeatOutput(output, heartbeatNow);
       setLastHeartbeatAt(heartbeatNow);
       setNextHeartbeatAt(
         Date.now() + meeting.heartbeatIntervalSeconds * 1000
       );
     } catch (error) {
       setHeartbeatError(error instanceof Error ? error.message : String(error));
-      setCurrentOutput(await runLocalHeartbeatInBrowser(input));
+      const fallbackOutput = await runLocalHeartbeatInBrowser(input);
+      applyHeartbeatOutput(fallbackOutput, heartbeatNow);
       setLastHeartbeatAt(heartbeatNow);
       setNextHeartbeatAt(
         Date.now() + meeting.heartbeatIntervalSeconds * 1000
@@ -246,6 +256,7 @@ export default function RoomPulseApp() {
       isHeartbeatRunningRef.current = false;
     }
   }, [
+    applyHeartbeatOutput,
     lastHeartbeatAt,
     meeting,
     observedSpeakerLabels,
@@ -277,21 +288,36 @@ export default function RoomPulseApp() {
 
   useEffect(() => {
     return () => {
-      stopMic();
+      cleanupMicResources();
     };
   }, []);
 
+  useEffect(() => {
+    if (!transcriptFeedRef.current) {
+      return;
+    }
+
+    transcriptFeedRef.current.scrollTop = transcriptFeedRef.current.scrollHeight;
+  }, [transcript.length]);
+
   function startMeeting() {
+    const expectedParticipants = clampFiniteNumber(
+      meetingDraft.expectedParticipants,
+      1,
+      1
+    );
+    const heartbeatIntervalSeconds = clampFiniteNumber(
+      meetingDraft.heartbeatIntervalSeconds,
+      15,
+      15
+    );
     const configuredMeeting: MeetingConfig = {
       ...meetingDraft,
       title: meetingDraft.title.trim() || defaultMeeting.title,
       goal: meetingDraft.goal.trim() || defaultMeeting.goal,
       context: meetingDraft.context.trim(),
-      expectedParticipants: Math.max(1, meetingDraft.expectedParticipants),
-      heartbeatIntervalSeconds: Math.max(
-        15,
-        meetingDraft.heartbeatIntervalSeconds
-      ),
+      expectedParticipants,
+      heartbeatIntervalSeconds,
       agenda: parseAgenda(agendaText),
       participants: parseParticipants(participantsText)
     };
@@ -327,6 +353,17 @@ export default function RoomPulseApp() {
   }
 
   async function startMic() {
+    setTranscriptMode("mic");
+
+    if (
+      isMicRunning ||
+      recognitionRef.current ||
+      mediaStreamRef.current ||
+      featureTimerRef.current
+    ) {
+      return;
+    }
+
     const speechWindow = window as SpeechWindow;
     const SpeechRecognition =
       speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition;
@@ -337,8 +374,12 @@ export default function RoomPulseApp() {
     }
 
     try {
+      setMicStatus("Requesting mic access");
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const audioContext = new AudioContext();
+      audioContextRef.current = audioContext;
+      mediaStreamRef.current = stream;
+
       const analyser = audioContext.createAnalyser();
       analyser.fftSize = 2048;
       const source = audioContext.createMediaStreamSource(stream);
@@ -388,16 +429,24 @@ export default function RoomPulseApp() {
 
       recognition.start();
       recognitionRef.current = recognition;
-      audioContextRef.current = audioContext;
-      mediaStreamRef.current = stream;
-      setTranscriptMode("mic");
+      setIsMicRunning(true);
       setMicStatus("Mic transcription running");
     } catch (error) {
+      cleanupMicResources();
+      setIsMicRunning(false);
       setMicStatus(error instanceof Error ? error.message : String(error));
     }
   }
 
   function stopMic() {
+    cleanupMicResources();
+    currentMicSpeakerRef.current = "Speaker 1";
+    setCurrentMicSpeaker("Speaker 1");
+    setIsMicRunning(false);
+    setMicStatus("Mic idle");
+  }
+
+  function cleanupMicResources() {
     recognitionRef.current?.stop();
     recognitionRef.current = null;
 
@@ -441,7 +490,14 @@ export default function RoomPulseApp() {
         </section>
 
         <section className="setup-grid" aria-label="Meeting setup">
-          <form className="setup-panel" onSubmit={(event) => event.preventDefault()}>
+          <form
+            className="setup-panel"
+            noValidate
+            onSubmit={(event) => {
+              event.preventDefault();
+              startMeeting();
+            }}
+          >
             <div className="section-kicker">Context feeder</div>
             <label>
               <span>Meeting title</span>
@@ -527,7 +583,7 @@ export default function RoomPulseApp() {
                 onChange={(event) => setParticipantsText(event.target.value)}
               />
             </label>
-            <button className="primary-action" type="button" onClick={startMeeting}>
+            <button className="primary-action" type="submit">
               <span>Start meeting</span>
               <span aria-hidden="true">{"->"}</span>
             </button>
@@ -653,12 +709,16 @@ export default function RoomPulseApp() {
               <button
                 className={transcriptMode === "demo" ? "active" : ""}
                 type="button"
-                onClick={() => setTranscriptMode("demo")}
+                onClick={() => {
+                  stopMic();
+                  setTranscriptMode("demo");
+                }}
               >
                 Demo
               </button>
               <button
                 className={transcriptMode === "mic" ? "active" : ""}
+                disabled={isMicRunning}
                 type="button"
                 onClick={() => void startMic()}
               >
@@ -667,7 +727,7 @@ export default function RoomPulseApp() {
             </div>
           </div>
 
-          <div className="transcript-feed">
+          <div className="transcript-feed" ref={transcriptFeedRef}>
             {transcript.length === 0 ? (
               <p className="empty-state">
                 Raw transcript will appear here as speech or simulated lines arrive.
@@ -710,12 +770,16 @@ export default function RoomPulseApp() {
               Add demo line
             </button>
           </div>
-          <p className="mic-status">
-            {micStatus}. Current audio cluster: {currentMicSpeaker}
-            <button type="button" onClick={stopMic}>
-              Stop mic
-            </button>
-          </p>
+          {transcriptMode === "mic" ? (
+            <p className="mic-status">
+              {micStatus}. Current audio cluster: {currentMicSpeaker}
+              {isMicRunning ? (
+                <button type="button" onClick={stopMic}>
+                  Stop mic
+                </button>
+              ) : null}
+            </p>
+          ) : null}
         </section>
 
         <aside className="side-panel agenda-panel">
@@ -792,6 +856,11 @@ function parseParticipants(value: string) {
         role
       };
     });
+}
+
+function clampFiniteNumber(value: number, fallback: number, min: number): number {
+  const finiteValue = Number.isFinite(value) ? value : fallback;
+  return Math.max(min, Math.floor(finiteValue));
 }
 
 function formatClock(timestamp: number): string {

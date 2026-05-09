@@ -1,8 +1,12 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import RoomPulseApp from "./RoomPulseApp";
 
 describe("RoomPulseApp", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("moves from setup feeder to room display with demo transcript controls", async () => {
     render(<RoomPulseApp />);
 
@@ -31,5 +35,48 @@ describe("RoomPulseApp", () => {
 
     expect(screen.getByText(/we have not made a decision yet/i)).toBeVisible();
     expect(screen.getByText(/1 of 3 heard/i)).toBeVisible();
+  });
+
+  it("records browser fallback heartbeat pulses in the intervention timeline", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new Error("network down"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+
+    fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: /run heartbeat now/i })
+    );
+
+    expect(await screen.findByText(/browser fallback used: network down/i)).toBeVisible();
+    expect(screen.getByText(/1 pulses/i)).toBeVisible();
+  });
+
+  it("clamps invalid numeric setup values before starting the room display", async () => {
+    render(<RoomPulseApp />);
+
+    fireEvent.change(screen.getByLabelText(/expected participants/i), {
+      target: { value: "not-a-number" }
+    });
+    fireEvent.change(screen.getByLabelText(/heartbeat interval/i), {
+      target: { value: "not-a-number" }
+    });
+    fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+
+    expect(await screen.findByText(/0 of 1 heard/i)).toBeVisible();
+    expect(screen.queryByText(/nan/i)).not.toBeInTheDocument();
+  });
+
+  it("hides the stop mic control until mic mode is active", async () => {
+    render(<RoomPulseApp />);
+
+    fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+
+    expect(
+      await screen.findByRole("button", { name: /run heartbeat now/i })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /stop mic/i })
+    ).not.toBeInTheDocument();
   });
 });
