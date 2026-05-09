@@ -27,7 +27,30 @@ The explicit integration boundary is:
 runPiHeartbeat(input): Promise<FacilitatorOutput>
 ```
 
-It lives in `src/lib/pi-adapter.ts`, and the Next.js route at `src/app/api/heartbeat/route.ts` calls it on every heartbeat. The adapter imports `@earendil-works/pi-coding-agent` server-side and tries to create a Pi agent session with tools disabled for a concise JSON-only facilitation response.
+It lives in `src/lib/pi-adapter.ts`, and the Next.js route at `src/app/api/heartbeat/route.ts` calls it on every heartbeat. The adapter imports `@earendil-works/pi-coding-agent` server-side and creates an in-memory Pi agent session with tools disabled for a concise JSON-only facilitation response.
+
+By default, RoomPulse uses Pi's OpenAI Codex subscription provider:
+
+```bash
+ROOMPULSE_PI_PROVIDER=openai-codex
+ROOMPULSE_PI_MODEL=gpt-5.5
+```
+
+If Pi does not already have `openai-codex` auth, RoomPulse imports the local Codex CLI ChatGPT login from `~/.codex/auth.json` into Pi's `~/.pi/agent/auth.json`. Run `codex login` first on the machine hosting the Next.js server. You can disable that bridge with:
+
+```bash
+ROOMPULSE_IMPORT_CODEX_CLI_AUTH=0 npm run dev
+```
+
+Useful adapter overrides:
+
+```bash
+ROOMPULSE_PI_PROVIDER=openai-codex
+ROOMPULSE_PI_MODEL=gpt-5.5
+ROOMPULSE_PI_THINKING_LEVEL=minimal
+ROOMPULSE_PI_TIMEOUT_MS=25000
+ROOMPULSE_CODEX_AUTH_PATH=/path/to/codex/auth.json
+```
 
 If Pi auth, model configuration, or runtime access is missing, the adapter catches the failure and returns deterministic local fallback facilitation. For a guaranteed local-only demo:
 
