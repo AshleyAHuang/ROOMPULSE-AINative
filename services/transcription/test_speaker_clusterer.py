@@ -15,6 +15,7 @@ from server import (
     frame_rms,
     get_voice_embedder,
     trim_silence,
+    transcription_window_seconds,
 )
 
 
@@ -123,6 +124,26 @@ class SpeakerClustererTest(unittest.TestCase):
                 os.environ["ROOMPULSE_SPEAKER_EMBEDDING_BACKEND"] = previous_backend
 
         self.assertIsInstance(embedder, PyannoteVoiceEmbedder)
+
+    def test_transcription_window_normalizes_bad_env_order(self) -> None:
+        previous_min = os.environ.get("ROOMPULSE_TRANSCRIPTION_MIN_SECONDS")
+        previous_max = os.environ.get("ROOMPULSE_TRANSCRIPTION_MAX_SECONDS")
+        os.environ["ROOMPULSE_TRANSCRIPTION_MIN_SECONDS"] = "4.0"
+        os.environ["ROOMPULSE_TRANSCRIPTION_MAX_SECONDS"] = "2.0"
+        try:
+            min_seconds, max_seconds = transcription_window_seconds()
+        finally:
+            if previous_min is None:
+                os.environ.pop("ROOMPULSE_TRANSCRIPTION_MIN_SECONDS", None)
+            else:
+                os.environ["ROOMPULSE_TRANSCRIPTION_MIN_SECONDS"] = previous_min
+            if previous_max is None:
+                os.environ.pop("ROOMPULSE_TRANSCRIPTION_MAX_SECONDS", None)
+            else:
+                os.environ["ROOMPULSE_TRANSCRIPTION_MAX_SECONDS"] = previous_max
+
+        self.assertEqual(min_seconds, 4.0)
+        self.assertEqual(max_seconds, 4.0)
 
 
 class FixedEmbeddingVoiceEmbedder:

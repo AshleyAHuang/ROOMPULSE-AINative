@@ -34,7 +34,7 @@ export async function POST(request: Request, context: RouteContext) {
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Meeting event log failed" },
-      { status: isMeetingNotFound(error) ? 404 : 500 }
+      { status: eventWriteErrorStatus(error) }
     );
   }
 }
@@ -107,7 +107,7 @@ function isTranscriptLine(value: unknown): boolean {
 function isReviewVersion(value: unknown): boolean {
   return (
     isRecord(value) &&
-    typeof value.id === "string" &&
+    isNonEmptyString(value.id) &&
     isFiniteNumber(value.timestamp) &&
     typeof value.markdown === "string" &&
     typeof value.summary === "string" &&
@@ -133,6 +133,16 @@ function isNonEmptyString(value: unknown): value is string {
 
 function isMeetingNotFound(error: unknown): boolean {
   return error instanceof Error && error.message === "Meeting log not found";
+}
+
+function eventWriteErrorStatus(error: unknown): number {
+  if (isMeetingNotFound(error)) {
+    return 404;
+  }
+  if (error instanceof Error && error.message === "Meeting log has ended") {
+    return 409;
+  }
+  return 500;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -34,6 +34,7 @@ type TranscriptionServerMessage =
 
 const TARGET_SAMPLE_RATE = 16_000;
 const SOCKET_CONNECT_TIMEOUT_MS = 4_000;
+const SOCKET_FLUSH_TIMEOUT_MS = 2_000;
 
 type AudioContextConstructor = new () => AudioContext;
 
@@ -48,6 +49,7 @@ export class LocalTranscriptionClient {
   private source: MediaStreamAudioSourceNode | null = null;
   private processor: ScriptProcessorNode | null = null;
   private silentGain: GainNode | null = null;
+  private flushResolver: (() => void) | null = null;
 
   constructor(options: LocalTranscriptionClientOptions) {
     this.url = options.url ?? getDefaultTranscriptionUrl();
@@ -123,22 +125,33 @@ export class LocalTranscriptionClient {
         message: "Microphone active; streaming audio to local transcription"
       });
     } catch (error) {
-      this.stop();
+      this.stopImmediately();
       throw error;
     }
   }
 
-  stop(): void {
-    if (this.socket?.readyState === WebSocket.OPEN) {
-      this.socket.send(JSON.stringify({ type: "flush" }));
-    }
+  async stop(): Promise<void> {
+    await this.flushOpenSocket();
+    this.disconnectAudioGraph();
+    this.closeResources();
+  }
+
+  stopImmediately(): void {
+    this.resolveFlushWaiter();
+    this.disconnectAudioGraph();
+    this.closeResources();
+  }
+
+  private disconnectAudioGraph(): void {
     this.processor?.disconnect();
     this.source?.disconnect();
     this.silentGain?.disconnect();
     this.processor = null;
     this.source = null;
     this.silentGain = null;
+  }
 
+  private closeResources(): void {
     this.stream?.getTracks().forEach((track) => {
       track.stop();
     });
@@ -149,6 +162,31 @@ export class LocalTranscriptionClient {
 
     this.socket?.close();
     this.socket = null;
+  }
+
+  private async flushOpenSocket(): Promise<void> {
+    const socket = this.socket;
+    if (socket?.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        window.clearTimeout(timeout);
+        if (this.flushResolver === finish) {
+          this.flushResolver = null;
+        }
+        resolve();
+      };
+      const timeout = window.setTimeout(finish, SOCKET_FLUSH_TIMEOUT_MS);
+      this.flushResolver = finish;
+      socket.send(JSON.stringify({ type: "flush" }));
+    });
   }
 
   private handleMessage(event: MessageEvent): void {
@@ -171,10 +209,19 @@ export class LocalTranscriptionClient {
 
     if (message.type === "engine_status") {
       this.onStatus(message);
+      if (message.status === "flushed") {
+        this.resolveFlushWaiter();
+      }
       return;
     }
 
     this.onError(message.message);
+  }
+
+  private resolveFlushWaiter(): void {
+    const resolver = this.flushResolver;
+    this.flushResolver = null;
+    resolver?.();
   }
 }
 

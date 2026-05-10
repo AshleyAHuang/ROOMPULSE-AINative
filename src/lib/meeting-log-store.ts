@@ -150,6 +150,7 @@ export async function appendMeetingLogEvent(
 ): Promise<MeetingLogEvent> {
   const db = getDatabase();
   assertMeetingExists(db, meetingId);
+  assertMeetingAcceptsEvent(db, meetingId);
 
   const logEvent: MeetingLogEvent = {
     id: randomUUID(),
@@ -226,13 +227,14 @@ export async function updateMeetingLogState(
           updatedAt
         }
       : update.state;
+  const mergedState = state ? mergeStateWithMaterializedRows(db, meetingId, state) : state;
   const status = wasEnded || requestedEnded ? "ended" : update.status ?? state?.status;
   const isPaused =
     wasEnded || requestedEnded ? true : update.isPaused ?? state?.isPaused;
   const endedAt = effectiveEndedAt;
-  const meeting = state?.meeting;
-  const latestReviewMarkdown = state?.reviewMarkdown;
-  const latestReviewVersionId = state?.currentReviewVersionId;
+  const meeting = mergedState?.meeting;
+  const latestReviewMarkdown = mergedState?.reviewMarkdown;
+  const latestReviewVersionId = mergedState?.currentReviewVersionId;
 
   db.exec("BEGIN IMMEDIATE");
   try {
@@ -257,17 +259,17 @@ export async function updateMeetingLogState(
       meeting ? toJson(meeting) : null,
       meeting?.title ?? null,
       meeting?.goal ?? null,
-      state ? toJson(state) : null,
+      mergedState ? toJson(mergedState) : null,
       latestReviewMarkdown ?? null,
       latestReviewVersionId ?? null,
       meetingId
     );
 
-    if (state) {
-      for (const line of state.transcript) {
+    if (mergedState) {
+      for (const line of mergedState.transcript) {
         upsertTranscriptLine(db, meetingId, line);
       }
-      for (const version of state.reviewVersions) {
+      for (const version of mergedState.reviewVersions) {
         upsertReviewVersion(db, meetingId, version);
       }
     }
@@ -463,6 +465,17 @@ function assertMeetingExists(db: DatabaseSync, meetingId: string): void {
   }
 }
 
+function assertMeetingAcceptsEvent(db: DatabaseSync, meetingId: string): void {
+  const row = db
+    .prepare("SELECT status, ended_at FROM meeting_sessions WHERE id = ?")
+    .get(meetingId) as unknown as
+    | Pick<MeetingRow, "status" | "ended_at">
+    | undefined;
+  if (row?.status === "ended" || typeof row?.ended_at === "number") {
+    throw new Error("Meeting log has ended");
+  }
+}
+
 function rowToMetadata(row: MeetingRow): MeetingLogMetadata {
   return {
     id: row.id,
@@ -535,13 +548,14 @@ function materializeEvent(
   }
 
   if (event.type === "meeting_ended") {
+    const endedAt = endedAtFromPayload(event.payload) ?? event.timestamp;
     db.prepare(
       `UPDATE meeting_sessions
         SET status = 'ended',
             is_paused = 1,
             ended_at = COALESCE(ended_at, ?)
         WHERE id = ?`
-    ).run(event.timestamp, meetingId);
+    ).run(endedAt, meetingId);
   }
 }
 
@@ -602,6 +616,20 @@ function updateLatestReview(
   meetingId: string,
   version: ReviewVersion
 ): void {
+  const current = db
+    .prepare(
+      `SELECT rv.timestamp
+        FROM review_versions rv
+        JOIN meeting_sessions ms
+          ON ms.latest_review_version_id = rv.id
+          AND ms.id = rv.meeting_id
+        WHERE ms.id = ?`
+    )
+    .get(meetingId) as unknown as { timestamp: number } | undefined;
+  if (current && current.timestamp > version.timestamp) {
+    return;
+  }
+
   db.prepare(
     `UPDATE meeting_sessions
       SET latest_review_markdown = ?,
@@ -654,6 +682,53 @@ function readReviewVersions(
     markdown: row.markdown,
     summary: row.summary
   }));
+}
+
+function mergeStateWithMaterializedRows(
+  db: DatabaseSync,
+  meetingId: string,
+  state: PersistedMeetingState
+): PersistedMeetingState {
+  const transcript = mergeTranscriptLines(state.transcript, readTranscriptLines(db, meetingId));
+  const reviewVersions = mergeReviewVersions(
+    state.reviewVersions,
+    readReviewVersions(db, meetingId)
+  );
+  const currentReview = reviewVersions[0] ?? null;
+
+  return {
+    ...state,
+    transcript,
+    reviewVersions,
+    currentReviewVersionId: currentReview?.id ?? state.currentReviewVersionId,
+    reviewMarkdown: currentReview?.markdown ?? state.reviewMarkdown
+  };
+}
+
+function mergeTranscriptLines(
+  stateLines: TranscriptLine[],
+  storedLines: TranscriptLine[]
+): TranscriptLine[] {
+  const byId = new Map<string, TranscriptLine>();
+  for (const line of [...storedLines, ...stateLines]) {
+    byId.set(line.id, line);
+  }
+  return Array.from(byId.values()).sort(
+    (left, right) => left.timestamp - right.timestamp || left.id.localeCompare(right.id)
+  );
+}
+
+function mergeReviewVersions(
+  stateVersions: ReviewVersion[],
+  storedVersions: ReviewVersion[]
+): ReviewVersion[] {
+  const byId = new Map<string, ReviewVersion>();
+  for (const version of [...stateVersions, ...storedVersions]) {
+    byId.set(version.id, version);
+  }
+  return Array.from(byId.values()).sort(
+    (left, right) => right.timestamp - left.timestamp || right.id.localeCompare(left.id)
+  );
 }
 
 function lineFromPayload(payload: unknown): TranscriptLine | null {
@@ -750,6 +825,11 @@ function reviewVersionFromInitializedPayload(
 function pausedFromPayload(payload: unknown): boolean | null {
   if (!isRecord(payload) || typeof payload.paused !== "boolean") return null;
   return payload.paused;
+}
+
+function endedAtFromPayload(payload: unknown): number | null {
+  if (!isRecord(payload) || !isFiniteNumber(payload.endedAt)) return null;
+  return payload.endedAt;
 }
 
 function normalizeStatus(value: string): MeetingStatus {

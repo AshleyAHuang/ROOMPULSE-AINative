@@ -200,6 +200,7 @@ export default function RoomPulseApp() {
   const transcriptStoreRef = useRef(new TranscriptStore());
   const transcriptionClientRef = useRef<LocalTranscriptionClient | null>(null);
   const currentMicSpeakerRef = useRef("Speaker 1");
+  const micStartTokenRef = useRef(0);
   const isHeartbeatRunningRef = useRef(false);
   const transcriptFeedRef = useRef<HTMLDivElement | null>(null);
   const demoTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
@@ -208,6 +209,7 @@ export default function RoomPulseApp() {
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const endingSessionRef = useRef(false);
   const meetingStartAttemptRef = useRef(0);
+  const reviewLastUpdatedAtRef = useRef(Date.now());
 
   const observedSpeakerLabels = useMemo(
     () => Array.from(new Set(transcript.map((line) => line.speakerLabel))),
@@ -260,10 +262,11 @@ export default function RoomPulseApp() {
   const buildPersistedMeetingState = useCallback(
     (overrides: Partial<PersistedMeetingState> = {}): PersistedMeetingState => {
       const updatedAt = Date.now();
+      const transcriptSnapshot = transcriptStoreRef.current.getLines();
       return {
         status: isPaused ? "paused" : "active",
         meeting,
-        transcript,
+        transcript: transcriptSnapshot,
         reviewMarkdown,
         reviewVersions,
         currentReviewVersionId,
@@ -299,7 +302,7 @@ export default function RoomPulseApp() {
   useEffect(() => {
     if (
       activeAgendaItemId &&
-      meeting.agenda.some((item) => item.id === activeAgendaItemId)
+      meeting.agenda.some((item) => item.id === activeAgendaItemId && !item.done)
     ) {
       return;
     }
@@ -457,6 +460,7 @@ export default function RoomPulseApp() {
           : { ...output, reviewMarkdown: finalReviewMarkdown };
 
       setCurrentOutput(finalOutput);
+      reviewLastUpdatedAtRef.current = heartbeatNow;
       setReviewMarkdown(finalReviewMarkdown);
       setCurrentReviewVersionId(`${heartbeatNow}-review`);
       setReviewVersions((versions) => [
@@ -506,10 +510,14 @@ export default function RoomPulseApp() {
     }
 
     const heartbeatNow = Date.now();
+    const transcriptSnapshot = transcriptStoreRef.current.getLines();
+    const speakerSnapshot = Array.from(
+      new Set(transcriptSnapshot.map((line) => line.speakerLabel))
+    );
     const input = createHeartbeatInput({
       meeting,
-      transcript,
-      observedSpeakerLabels,
+      transcript: transcriptSnapshot,
+      observedSpeakerLabels: speakerSnapshot,
       lastHeartbeatAt,
       now: heartbeatNow,
       priorInterventions: timeline,
@@ -537,8 +545,8 @@ export default function RoomPulseApp() {
         signal: controller.signal,
         body: JSON.stringify({
           meeting,
-          transcript,
-          observedSpeakerLabels,
+          transcript: transcriptSnapshot,
+          observedSpeakerLabels: speakerSnapshot,
           lastHeartbeatAt,
           now: heartbeatNow,
           priorInterventions: timeline,
@@ -699,14 +707,12 @@ export default function RoomPulseApp() {
     endingSessionRef.current = false;
     const restoredState = snapshot.metadata.state ?? fallbackStateFromSnapshot(snapshot);
     const restoredMeeting = restoredState.meeting;
-    const restoredTranscript =
-      restoredState.transcript.length > 0
-        ? restoredState.transcript
-        : snapshot.transcript;
+    const restoredTranscript = mergeTranscriptLines(
+      restoredState.transcript,
+      snapshot.transcript
+    );
     const restoredVersions =
-      restoredState.reviewVersions.length > 0
-        ? restoredState.reviewVersions
-        : snapshot.reviewVersions;
+      mergeReviewVersions(restoredState.reviewVersions, snapshot.reviewVersions);
     const restoredReviewMarkdown =
       restoredState.reviewMarkdown ||
       snapshot.metadata.latestReviewMarkdown ||
@@ -733,6 +739,7 @@ export default function RoomPulseApp() {
     }
 
     transcriptStoreRef.current.replace(restoredTranscript);
+    reviewLastUpdatedAtRef.current = restoredVersions[0]?.timestamp ?? nowMs;
     meetingLogIdRef.current = snapshot.metadata.id;
     setMeetingLogId(snapshot.metadata.id);
     setMeeting(restoredMeeting);
@@ -861,21 +868,10 @@ export default function RoomPulseApp() {
     stopMic();
     setTranscriptMode("demo");
     setIsDemoRunning(true);
-
-    transcriptStoreRef.current.clear();
-    setTranscript([]);
-    setTimeline([]);
-    setHeartbeatCount(0);
-    setHeartbeatError(null);
-    setEphemeralReminder(null);
     logMeetingEvent("scripted_demo_started", {
       durationMs: DEMO_DURATION_MS,
       beats: DEMO_SCRIPT.length
     });
-
-    const startedAt = Date.now();
-    setLastHeartbeatAt(startedAt);
-    setNextHeartbeatAt(startedAt + heartbeatIntervalSeconds * 1000);
 
     for (const beat of DEMO_SCRIPT) {
       const timer = setTimeout(() => {
@@ -935,6 +931,7 @@ export default function RoomPulseApp() {
     setMeetingStartedAt(startedAt);
     setHeartbeatCount(0);
     setIsPaused(false);
+    reviewLastUpdatedAtRef.current = startedAt;
     setReviewMarkdown(initialReview);
     setReviewVersions([initialVersion]);
     setCurrentReviewVersionId(initialVersion.id);
@@ -980,6 +977,9 @@ export default function RoomPulseApp() {
     void initializeReviewDocument(demoMeeting)
       .then((initialDocument) => {
         const initializedAt = Date.now();
+        if (reviewLastUpdatedAtRef.current > startedAt) {
+          return;
+        }
         const initializedVersion: ReviewVersion = {
           id: `${initializedAt}-initial-review`,
           timestamp: initializedAt,
@@ -987,6 +987,7 @@ export default function RoomPulseApp() {
           markdown: initialDocument.markdown,
           summary: initialDocument.summary
         };
+        reviewLastUpdatedAtRef.current = initializedAt;
         setReviewMarkdown(initialDocument.markdown);
         setReviewVersions((versions) => [initializedVersion, ...versions]);
         setCurrentReviewVersionId(initializedVersion.id);
@@ -1188,6 +1189,7 @@ export default function RoomPulseApp() {
     setMeetingStartedAt(startedAt);
     setHeartbeatCount(0);
     setIsPaused(false);
+    reviewLastUpdatedAtRef.current = startedAt;
     setReviewMarkdown(initialReview);
     setReviewVersions([initialVersion]);
     setCurrentReviewVersionId(initialVersion.id);
@@ -1244,6 +1246,8 @@ export default function RoomPulseApp() {
       return;
     }
 
+    const startToken = micStartTokenRef.current + 1;
+    micStartTokenRef.current = startToken;
     try {
       setMicStatus("Requesting browser microphone permission");
       const client = new LocalTranscriptionClient({
@@ -1276,6 +1280,14 @@ export default function RoomPulseApp() {
       });
       transcriptionClientRef.current = client;
       await client.start();
+      if (
+        micStartTokenRef.current !== startToken ||
+        transcriptionClientRef.current !== client ||
+        transcriptMode !== "mic"
+      ) {
+        await client.stop();
+        return;
+      }
       setIsMicRunning(true);
     } catch (error) {
       cleanupMicResources();
@@ -1285,6 +1297,7 @@ export default function RoomPulseApp() {
   }
 
   function stopMic() {
+    micStartTokenRef.current += 1;
     cleanupMicResources();
     currentMicSpeakerRef.current = "Speaker 1";
     setCurrentMicSpeaker("Speaker 1");
@@ -1293,8 +1306,9 @@ export default function RoomPulseApp() {
   }
 
   function cleanupMicResources() {
-    transcriptionClientRef.current?.stop();
+    const client = transcriptionClientRef.current;
     transcriptionClientRef.current = null;
+    void client?.stop();
   }
 
   function updateAgendaItem(id: string, done: boolean) {
@@ -1417,12 +1431,13 @@ export default function RoomPulseApp() {
   function restoreReviewVersion(version: ReviewVersion) {
     const restoredAt = Date.now();
     const restoredVersion: ReviewVersion = {
-      id: `${restoredAt}-restored-review`,
+      id: `${restoredAt}-restored-${version.id}`,
       timestamp: restoredAt,
       source: "restored",
       markdown: version.markdown,
       summary: `Restored review from ${formatClock(version.timestamp)}.`
     };
+    reviewLastUpdatedAtRef.current = restoredAt;
     setReviewMarkdown(version.markdown);
     setCurrentReviewVersionId(restoredVersion.id);
     setReviewVersions((versions) => [restoredVersion, ...versions]);
@@ -1510,6 +1525,7 @@ export default function RoomPulseApp() {
         .join("\n")
     );
     const initialReview = createInitialReviewMarkdown(defaultMeeting);
+    reviewLastUpdatedAtRef.current = Date.now();
     setReviewMarkdown(initialReview);
     setReviewVersions([
       {
@@ -2132,8 +2148,10 @@ export default function RoomPulseApp() {
               disabled={reviewVersions.length < 2}
               type="button"
               onClick={() => {
-                const previous = reviewVersions.find(
-                  (version) => version.id !== currentReviewVersionId
+                const previous = previousReviewVersion(
+                  reviewVersions,
+                  currentReviewVersionId,
+                  reviewMarkdown
                 );
                 if (previous) {
                   restoreReviewVersion(previous);
@@ -2706,6 +2724,49 @@ function fallbackStateFromSnapshot(
     updatedAt: now,
     endedAt: snapshot.metadata.endedAt
   };
+}
+
+function mergeTranscriptLines(
+  stateLines: TranscriptLine[],
+  eventLines: TranscriptLine[]
+): TranscriptLine[] {
+  const byId = new Map<string, TranscriptLine>();
+  for (const line of [...stateLines, ...eventLines]) {
+    byId.set(line.id, line);
+  }
+  return Array.from(byId.values()).sort(
+    (left, right) => left.timestamp - right.timestamp || left.id.localeCompare(right.id)
+  );
+}
+
+function mergeReviewVersions(
+  stateVersions: ReviewVersion[],
+  eventVersions: ReviewVersion[]
+): ReviewVersion[] {
+  const byId = new Map<string, ReviewVersion>();
+  for (const version of [...stateVersions, ...eventVersions]) {
+    byId.set(version.id, version);
+  }
+  return Array.from(byId.values()).sort(
+    (left, right) => right.timestamp - left.timestamp || right.id.localeCompare(left.id)
+  );
+}
+
+function previousReviewVersion(
+  versions: ReviewVersion[],
+  currentId: string,
+  currentMarkdown: string
+): ReviewVersion | undefined {
+  const historical = versions.filter((version) => version.source !== "restored");
+  const restoredSourceId = currentId.match(/^\d+-restored-(.+)$/)?.[1];
+  const activeHistoricalId = restoredSourceId ?? currentId;
+  const activeIndex = historical.findIndex(
+    (version) => version.id === activeHistoricalId
+  );
+  if (activeIndex >= 0) {
+    return historical[activeIndex + 1];
+  }
+  return historical.find((version) => version.markdown !== currentMarkdown);
 }
 
 async function runLocalHeartbeatInBrowser(input: ReturnType<typeof createHeartbeatInput>) {

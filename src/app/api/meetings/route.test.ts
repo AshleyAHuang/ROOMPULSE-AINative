@@ -179,6 +179,264 @@ describe("/api/meetings", () => {
     });
   });
 
+  it("rejects review events that would not materialize into queryable versions", async () => {
+    const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
+    const created = await createResponse.json();
+
+    const response = await POST_EVENT(
+      jsonRequest({
+        type: "review_initialized",
+        timestamp: Date.now(),
+        payload: {
+          reviewVersion: {
+            id: " ",
+            timestamp: Date.now(),
+            source: "pi",
+            markdown: "# Review",
+            summary: "Should be rejected before storage."
+          }
+        }
+      }),
+      routeContext(created.id)
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid log event payload"
+    });
+  });
+
+  it("keeps ended meetings terminal and rejects later materialized events", async () => {
+    const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
+    const created = await createResponse.json();
+    const timestamp = Date.now();
+
+    const endResponse = await POST_EVENT(
+      jsonRequest({
+        type: "meeting_ended",
+        timestamp,
+        payload: { endedAt: timestamp }
+      }),
+      routeContext(created.id)
+    );
+    expect(endResponse.status).toBe(201);
+
+    const lateTranscript = await POST_EVENT(
+      jsonRequest({
+        type: "transcript_line",
+        timestamp: timestamp + 1,
+        payload: {
+          line: {
+            id: "late-line",
+            speakerId: "speaker-1",
+            speakerLabel: "Speaker 1",
+            text: "This should not mutate an ended meeting.",
+            timestamp: timestamp + 1,
+            source: "speech",
+            confidence: 0.9
+          }
+        }
+      }),
+      routeContext(created.id)
+    );
+
+    expect(lateTranscript.status).toBe(409);
+    await expect(lateTranscript.json()).resolves.toEqual({
+      error: "Meeting log has ended"
+    });
+
+    const snapshotResponse = await GET_MEETING(
+      new Request("http://localhost/api/meetings/test"),
+      routeContext(created.id)
+    );
+    await expect(snapshotResponse.json()).resolves.toMatchObject({
+      metadata: {
+        status: "ended",
+        isPaused: true,
+        endedAt: timestamp
+      },
+      transcript: []
+    });
+  });
+
+  it("honors the meeting_ended payload time instead of the log write time", async () => {
+    const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
+    const created = await createResponse.json();
+    const endedAt = Date.now();
+
+    const response = await POST_EVENT(
+      jsonRequest({
+        type: "meeting_ended",
+        timestamp: endedAt + 5_000,
+        payload: { endedAt }
+      }),
+      routeContext(created.id)
+    );
+    expect(response.status).toBe(201);
+
+    const snapshotResponse = await GET_MEETING(
+      new Request("http://localhost/api/meetings/test"),
+      routeContext(created.id)
+    );
+    await expect(snapshotResponse.json()).resolves.toMatchObject({
+      metadata: { endedAt }
+    });
+  });
+
+  it("does not regress latest review metadata for out-of-order heartbeat events", async () => {
+    const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
+    const created = await createResponse.json();
+    const timestamp = Date.now();
+
+    await POST_EVENT(
+      jsonRequest({
+        type: "heartbeat_output",
+        timestamp: timestamp + 2_000,
+        payload: {
+          reviewVersionId: "new-review",
+          output: {
+            source: "pi",
+            summary: "New review.",
+            reviewMarkdown: "# New review"
+          }
+        }
+      }),
+      routeContext(created.id)
+    );
+
+    await POST_EVENT(
+      jsonRequest({
+        type: "heartbeat_output",
+        timestamp: timestamp + 1_000,
+        payload: {
+          reviewVersionId: "old-review",
+          output: {
+            source: "pi",
+            summary: "Old retry.",
+            reviewMarkdown: "# Old retry"
+          }
+        }
+      }),
+      routeContext(created.id)
+    );
+
+    const snapshotResponse = await GET_MEETING(
+      new Request("http://localhost/api/meetings/test"),
+      routeContext(created.id)
+    );
+    await expect(snapshotResponse.json()).resolves.toMatchObject({
+      metadata: {
+        latestReviewMarkdown: "# New review",
+        latestReviewVersionId: "new-review"
+      },
+      reviewVersions: [{ id: "new-review" }, { id: "old-review" }]
+    });
+  });
+
+  it("merges stale autosave state with newer materialized transcript and review rows", async () => {
+    const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
+    const created = await createResponse.json();
+    const timestamp = Date.now();
+    const firstLine = {
+      id: "line-1",
+      speakerId: "speaker-1",
+      speakerLabel: "Speaker 1",
+      text: "First line.",
+      timestamp,
+      source: "speech",
+      confidence: 0.9
+    };
+
+    await POST_EVENT(
+      jsonRequest({
+        type: "transcript_line",
+        timestamp,
+        payload: { line: firstLine }
+      }),
+      routeContext(created.id)
+    );
+    await POST_EVENT(
+      jsonRequest({
+        type: "transcript_line",
+        timestamp: timestamp + 1,
+        payload: {
+          line: {
+            ...firstLine,
+            id: "line-2",
+            text: "Second line.",
+            timestamp: timestamp + 1
+          }
+        }
+      }),
+      routeContext(created.id)
+    );
+    await POST_EVENT(
+      jsonRequest({
+        type: "heartbeat_output",
+        timestamp: timestamp + 2,
+        payload: {
+          reviewVersionId: "review-2",
+          output: {
+            source: "pi",
+            summary: "Newer materialized review.",
+            reviewMarkdown: "# Newer review"
+          }
+        }
+      }),
+      routeContext(created.id)
+    );
+
+    const patchResponse = await PATCH(
+      jsonRequest({
+        updatedAt: timestamp + 3,
+        state: {
+          status: "active",
+          meeting: validMeeting,
+          transcript: [firstLine],
+          reviewMarkdown: "# Stale review",
+          reviewVersions: [
+            {
+              id: "review-1",
+              timestamp,
+              source: "pi",
+              markdown: "# Stale review",
+              summary: "Stale autosave review."
+            }
+          ],
+          currentReviewVersionId: "review-1",
+          timeline: [],
+          lastHeartbeatAt: timestamp,
+          nextHeartbeatAt: timestamp + 30_000,
+          meetingStartedAt: timestamp,
+          heartbeatCount: 1,
+          isPaused: false,
+          currentOutput: null,
+          activeAgendaItemId: "a1",
+          updatedAt: timestamp + 3
+        }
+      }),
+      routeContext(created.id)
+    );
+    expect(patchResponse.status).toBe(200);
+
+    const snapshotResponse = await GET_MEETING(
+      new Request("http://localhost/api/meetings/test"),
+      routeContext(created.id)
+    );
+    await expect(snapshotResponse.json()).resolves.toMatchObject({
+      metadata: {
+        state: {
+          transcript: [{ id: "line-1" }, { id: "line-2" }],
+          currentReviewVersionId: "review-2",
+          reviewMarkdown: "# Newer review"
+        },
+        latestReviewMarkdown: "# Newer review",
+        latestReviewVersionId: "review-2"
+      },
+      transcript: [{ id: "line-1" }, { id: "line-2" }]
+    });
+  });
+
   it("rejects malformed persisted state and keeps ended meetings terminal", async () => {
     const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
     const created = await createResponse.json();

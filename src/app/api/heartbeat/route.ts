@@ -60,6 +60,7 @@ function isHeartbeatPayload(value: unknown): value is CreateHeartbeatInputArgs {
     isFiniteNumber(value.lastHeartbeatAt) &&
     isFiniteNumber(value.now) &&
     Array.isArray(value.priorInterventions) &&
+    value.priorInterventions.every(isTimelineEntry) &&
     (value.currentReviewMarkdown === undefined ||
       typeof value.currentReviewMarkdown === "string") &&
     (value.reviewVersions === undefined || Array.isArray(value.reviewVersions)) &&
@@ -120,6 +121,38 @@ function isTranscriptLine(value: unknown): boolean {
 
 function isTranscriptSource(value: unknown): boolean {
   return value === "speech" || value === "simulated" || value === "manual";
+}
+
+function isTimelineEntry(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.id) &&
+    isFiniteNumber(value.timestamp) &&
+    (value.source === "pi" ||
+      value.source === "openrouter" ||
+      value.source === "local-fallback") &&
+    Array.isArray(value.cards) &&
+    value.cards.every(isFacilitatorCard) &&
+    typeof value.summary === "string" &&
+    (value.reviewMarkdown === undefined ||
+      typeof value.reviewMarkdown === "string") &&
+    (value.reminder === undefined ||
+      value.reminder === null ||
+      typeof value.reminder === "string")
+  );
+}
+
+function isFacilitatorCard(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.id) &&
+    typeof value.kind === "string" &&
+    isNonEmptyString(value.title) &&
+    typeof value.body === "string" &&
+    (value.priority === "low" ||
+      value.priority === "medium" ||
+      value.priority === "high")
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

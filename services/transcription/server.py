@@ -471,12 +471,7 @@ class TranscriptionSession:
         self.closed = False
         self.clusterer = SpeakerClusterer()
         self.sequence = 0
-        self.min_seconds = float(
-            os.getenv("ROOMPULSE_TRANSCRIPTION_MIN_SECONDS", "2.0")
-        )
-        self.max_seconds = float(
-            os.getenv("ROOMPULSE_TRANSCRIPTION_MAX_SECONDS", "4.0")
-        )
+        self.min_seconds, self.max_seconds = transcription_window_seconds()
         self.language = os.getenv("ROOMPULSE_WHISPER_LANGUAGE", DEFAULT_LANGUAGE)
 
     async def handle_control(self, raw: str) -> None:
@@ -494,6 +489,7 @@ class TranscriptionSession:
             await self.send_status("reset", "Transcription session reset")
         elif message.get("type") == "flush":
             await self.flush(force=True)
+            await self.send_status("flushed", "Transcription buffer flushed")
 
     async def append_audio(self, chunk: bytes) -> None:
         async with self.buffer_lock:
@@ -595,6 +591,30 @@ async def transcribe_audio(
 
 def seconds_to_bytes(seconds: float) -> int:
     return int(seconds * SAMPLE_RATE * BYTES_PER_SAMPLE)
+
+
+def transcription_window_seconds() -> tuple[float, float]:
+    min_seconds = parse_positive_float(
+        os.getenv("ROOMPULSE_TRANSCRIPTION_MIN_SECONDS"),
+        2.0,
+    )
+    max_seconds = parse_positive_float(
+        os.getenv("ROOMPULSE_TRANSCRIPTION_MAX_SECONDS"),
+        4.0,
+    )
+    if max_seconds < min_seconds:
+        max_seconds = min_seconds
+    return min_seconds, max_seconds
+
+
+def parse_positive_float(raw: str | None, default: float) -> float:
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
 
 
 def pcm16_to_float32(raw: bytes) -> np.ndarray:

@@ -118,6 +118,21 @@ describe("POST /api/heartbeat", () => {
     expect(runPiHeartbeat).not.toHaveBeenCalled();
   });
 
+  it("rejects malformed prior interventions before creating heartbeat input", async () => {
+    const response = await POST(
+      jsonRequest({
+        ...validPayload,
+        priorInterventions: [null]
+      })
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid heartbeat payload"
+    });
+    expect(runPiHeartbeat).not.toHaveBeenCalled();
+  });
+
   it("marks strict Pi failures so the client does not silently fall back", async () => {
     process.env.ROOMPULSE_REQUIRE_PI = "1";
     vi.mocked(runPiHeartbeat).mockRejectedValue(new Error("Pi unavailable"));
