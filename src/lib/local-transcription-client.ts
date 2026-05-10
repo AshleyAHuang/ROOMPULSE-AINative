@@ -201,20 +201,33 @@ export class LocalTranscriptionClient {
       return;
     }
 
-    let message: TranscriptionServerMessage;
+    let message: unknown;
     try {
-      message = JSON.parse(event.data) as TranscriptionServerMessage;
+      message = JSON.parse(event.data);
     } catch {
       this.onError("Local transcription service sent invalid JSON");
       return;
     }
 
+    if (!isRecord(message) || typeof message.type !== "string") {
+      this.onError("Local transcription service sent a malformed message");
+      return;
+    }
+
     if (message.type === "final_transcript") {
+      if (!isTranscriptSegment(message)) {
+        this.onError("Local transcription service sent a malformed transcript");
+        return;
+      }
       this.onSegment(message);
       return;
     }
 
     if (message.type === "engine_status") {
+      if (!isEngineStatus(message)) {
+        this.onError("Local transcription service sent a malformed status");
+        return;
+      }
       this.onStatus(message);
       if (message.status === "flushed") {
         this.resolveFlushWaiter();
@@ -222,6 +235,10 @@ export class LocalTranscriptionClient {
       return;
     }
 
+    if (message.type !== "engine_error" || typeof message.message !== "string") {
+      this.onError("Local transcription service sent an unknown message");
+      return;
+    }
     this.onError(message.message);
   }
 
@@ -318,4 +335,51 @@ export function floatToPcm16(input: Float32Array): ArrayBuffer {
   }
 
   return output.buffer;
+}
+
+function isTranscriptSegment(
+  value: Record<string, unknown>
+): value is Record<string, unknown> &
+  { type: "final_transcript" } &
+  LocalTranscriptSegment {
+  return (
+    isNonEmptyString(value.id) &&
+    isNonEmptyString(value.speakerId) &&
+    isNonEmptyString(value.speakerLabel) &&
+    typeof value.text === "string" &&
+    isConfidence(value.confidence) &&
+    Array.isArray(value.observedSpeakerLabels) &&
+    value.observedSpeakerLabels.every(isNonEmptyString)
+  );
+}
+
+function isEngineStatus(
+  value: Record<string, unknown>
+): value is Record<string, unknown> &
+  { type: "engine_status" } &
+  LocalTranscriptionStatus {
+  return (
+    isNonEmptyString(value.status) &&
+    typeof value.message === "string" &&
+    (value.observedSpeakerLabels === undefined ||
+      (Array.isArray(value.observedSpeakerLabels) &&
+        value.observedSpeakerLabels.every(isNonEmptyString)))
+  );
+}
+
+function isConfidence(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= 0 &&
+    value <= 1
+  );
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

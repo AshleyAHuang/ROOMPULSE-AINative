@@ -377,6 +377,10 @@ describe("/api/meetings", () => {
       source: "speech",
       confidence: 0.9
     };
+    const staleFirstLine = {
+      ...firstLine,
+      text: "Stale autosave copy should not overwrite the event log."
+    };
 
     await POST_EVENT(
       jsonRequest({
@@ -423,7 +427,7 @@ describe("/api/meetings", () => {
         state: {
           status: "active",
           meeting: validMeeting,
-          transcript: [firstLine],
+          transcript: [staleFirstLine],
           reviewMarkdown: "# Stale review",
           reviewVersions: [
             {
@@ -464,7 +468,10 @@ describe("/api/meetings", () => {
         latestReviewMarkdown: "# Newer review",
         latestReviewVersionId: "review-2"
       },
-      transcript: [{ id: "line-1" }, { id: "line-2" }]
+      transcript: [
+        { id: "line-1", text: "First line." },
+        { id: "line-2", text: "Second line." }
+      ]
     });
   });
 

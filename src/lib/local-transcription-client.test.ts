@@ -33,6 +33,72 @@ describe("local transcription audio utilities", () => {
     expect(Array.from(pcm)).toEqual([-32768, 0, 32767]);
   });
 
+  it("rejects malformed transcript socket messages before updating the UI", () => {
+    const onSegment = vi.fn();
+    const onError = vi.fn();
+    const client = new LocalTranscriptionClient({
+      onSegment,
+      onStatus: vi.fn(),
+      onError
+    });
+    const handleMessage = (
+      client as unknown as {
+        handleMessage: (event: MessageEvent) => void;
+      }
+    ).handleMessage.bind(client);
+
+    handleMessage({
+      data: JSON.stringify({
+        type: "final_transcript",
+        id: "line-1",
+        speakerId: "",
+        speakerLabel: "Speaker 1",
+        text: "Missing usable speaker id.",
+        confidence: 0.9,
+        observedSpeakerLabels: ["Speaker 1"]
+      })
+    } as MessageEvent);
+
+    expect(onSegment).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(
+      "Local transcription service sent a malformed transcript"
+    );
+  });
+
+  it("accepts valid transcript socket messages", () => {
+    const onSegment = vi.fn();
+    const client = new LocalTranscriptionClient({
+      onSegment,
+      onStatus: vi.fn(),
+      onError: vi.fn()
+    });
+    const handleMessage = (
+      client as unknown as {
+        handleMessage: (event: MessageEvent) => void;
+      }
+    ).handleMessage.bind(client);
+
+    handleMessage({
+      data: JSON.stringify({
+        type: "final_transcript",
+        id: "line-1",
+        speakerId: "speaker-1",
+        speakerLabel: "Speaker 1",
+        text: "Valid segment.",
+        confidence: 0.9,
+        observedSpeakerLabels: ["Speaker 1"]
+      })
+    } as MessageEvent);
+
+    expect(onSegment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "line-1",
+        speakerId: "speaker-1",
+        text: "Valid segment."
+      })
+    );
+  });
+
   it("releases browser audio resources when the socket closes during stop flush", async () => {
     const stopTrack = vi.fn();
     const closeSocket = vi.fn();

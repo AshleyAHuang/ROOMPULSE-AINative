@@ -812,7 +812,7 @@ function mergeTranscriptLines(
   storedLines: TranscriptLine[]
 ): TranscriptLine[] {
   const byId = new Map<string, TranscriptLine>();
-  for (const line of [...storedLines, ...stateLines]) {
+  for (const line of [...stateLines, ...storedLines]) {
     byId.set(line.id, line);
   }
   return Array.from(byId.values()).sort(
