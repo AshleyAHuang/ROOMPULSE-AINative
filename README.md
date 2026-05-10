@@ -122,7 +122,7 @@ npm run dev:strict    # require Pi/OpenRouter; no silent local fallback
 npm run smoke:heartbeat
 npm test
 npm run build
-npm run check         # test + build
+npm run check         # typecheck + test + build
 ```
 
 ## Requirements

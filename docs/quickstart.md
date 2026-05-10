@@ -83,4 +83,5 @@ unless the response source is `pi` or `openrouter`.
 npm run check
 ```
 
-That runs the full Vitest suite and a production Next.js build.
+That runs full TypeScript checking, the Vitest suite, and a production Next.js
+build.
