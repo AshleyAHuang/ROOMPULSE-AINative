@@ -263,7 +263,9 @@ cluster recurring voice patterns into `Speaker 1`, `Speaker 2`, etc. Room
 noise, overlapping speech, microphone placement, and similar voices can
 produce incorrect labels. It does not
 identify named people unless a later calibration flow maps a cluster to a
-participant name.
+participant name. If microphone capture is restarted mid-meeting, RoomPulse
+offsets new local clusters so fresh `Speaker N` labels do not collide with
+earlier transcript labels.
 
 Participation reminders intentionally compare only expected participant count against observed speaker clusters. RoomPulse does not claim to know that a specific named person has spoken.
 

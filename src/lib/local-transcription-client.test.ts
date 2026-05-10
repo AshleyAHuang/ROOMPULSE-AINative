@@ -40,6 +40,11 @@ describe("local transcription audio utilities", () => {
       type: "reset",
       maxSpeakerClusters: 4
     });
+    expect(createResetControlMessage(4, 2)).toEqual({
+      type: "reset",
+      maxSpeakerClusters: 4,
+      speakerLabelOffset: 2
+    });
     expect(createSpeakerConfigControlMessage(5)).toEqual({
       type: "configure",
       maxSpeakerClusters: 5

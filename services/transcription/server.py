@@ -621,6 +621,7 @@ class SpeakerClusterer:
         threshold: float | None = None,
         embedder: VoiceEmbedder | None = None,
         max_clusters: int | None = None,
+        speaker_label_offset: int = 0,
     ) -> None:
         self.threshold = threshold
         self.embedder = embedder or get_voice_embedder()
@@ -628,6 +629,7 @@ class SpeakerClusterer:
             max_clusters,
             speaker_max_clusters(),
         )
+        self.speaker_label_offset = parse_speaker_label_offset(speaker_label_offset)
         self.clusters: list[SpeakerCluster] = []
         self.pending_candidates: list[PendingSpeakerCandidate] = []
 
@@ -703,9 +705,10 @@ class SpeakerClusterer:
         samples: int = 1,
         quality_sum: float | None = None,
     ) -> SpeakerCluster:
+        speaker_number = self.speaker_label_offset + len(self.clusters) + 1
         cluster = SpeakerCluster(
-            id=f"speaker-{len(self.clusters) + 1}",
-            label=f"Speaker {len(self.clusters) + 1}",
+            id=f"speaker-{speaker_number}",
+            label=f"Speaker {speaker_number}",
             backend=embedding.backend,
             centroid=embedding.vector.copy(),
             samples=samples,
@@ -870,7 +873,12 @@ class TranscriptionSession:
                     message.get("maxSpeakerClusters"),
                     speaker_max_clusters(),
                 )
-                self.clusterer = SpeakerClusterer(max_clusters=max_clusters)
+                self.clusterer = SpeakerClusterer(
+                    max_clusters=max_clusters,
+                    speaker_label_offset=parse_speaker_label_offset(
+                        message.get("speakerLabelOffset")
+                    ),
+                )
                 self.sequence = 0
             await self.send_status("reset", "Transcription session reset")
         elif message.get("type") == "configure":
@@ -879,6 +887,11 @@ class TranscriptionSession:
                     message.get("maxSpeakerClusters"),
                     self.clusterer.max_clusters,
                 )
+                if not self.clusterer.clusters:
+                    self.clusterer.speaker_label_offset = parse_speaker_label_offset(
+                        message.get("speakerLabelOffset"),
+                        self.clusterer.speaker_label_offset,
+                    )
             await self.send_status("configured", "Transcription session configured")
         elif message.get("type") == "flush":
             await self.flush(force=True)
@@ -1371,6 +1384,13 @@ def pending_speaker_promotion_samples() -> int:
 def parse_speaker_cluster_cap(raw: object, default: int) -> int:
     return min(
         parse_positive_int_value(raw, default),
+        DEFAULT_SPEAKER_HARD_CLUSTER_LIMIT,
+    )
+
+
+def parse_speaker_label_offset(raw: object, default: int = 0) -> int:
+    return min(
+        parse_nonnegative_int_value(raw, default),
         DEFAULT_SPEAKER_HARD_CLUSTER_LIMIT,
     )
 

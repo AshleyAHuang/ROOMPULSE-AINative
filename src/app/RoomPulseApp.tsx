@@ -1392,6 +1392,11 @@ export default function RoomPulseApp() {
       setMicStatus("Requesting browser microphone permission");
       client = new LocalTranscriptionClient({
         expectedParticipants,
+        speakerLabelOffset: highestSpeakerNumber(
+          transcriptStoreRef.current
+            .getLines()
+            .map((line) => line.speakerLabel)
+        ),
         onSegment: (segment) => {
           if (micStartTokenRef.current !== startToken) {
             return;
@@ -3191,4 +3196,12 @@ function formatElapsed(totalSeconds: number): string {
 function speakerNumber(label: string): number {
   const match = label.match(/\d+/);
   return match ? Number(match[0]) : 1;
+}
+
+function highestSpeakerNumber(labels: string[]): number {
+  return labels.reduce((highest, label) => {
+    const match = label.match(/\d+/);
+    const value = match ? Number(match[0]) : 0;
+    return Number.isFinite(value) ? Math.max(highest, value) : highest;
+  }, 0);
 }

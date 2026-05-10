@@ -18,6 +18,7 @@ export interface LocalTranscriptionStatus {
 export interface LocalTranscriptionClientOptions {
   url?: string;
   expectedParticipants?: number;
+  speakerLabelOffset?: number;
   onSegment: (segment: LocalTranscriptSegment) => void;
   onStatus: (status: LocalTranscriptionStatus) => void;
   onError: (message: string) => void;
@@ -47,6 +48,7 @@ export class LocalTranscriptionClient {
   private readonly onStatus: (status: LocalTranscriptionStatus) => void;
   private readonly onError: (message: string) => void;
   private expectedParticipants: number | undefined;
+  private readonly speakerLabelOffset: number;
   private socket: WebSocket | null = null;
   private stream: MediaStream | null = null;
   private audioContext: AudioContext | null = null;
@@ -61,6 +63,9 @@ export class LocalTranscriptionClient {
     this.onStatus = options.onStatus;
     this.onError = options.onError;
     this.expectedParticipants = options.expectedParticipants;
+    this.speakerLabelOffset = normalizeSpeakerLabelOffset(
+      options.speakerLabelOffset
+    );
   }
 
   async start(): Promise<void> {
@@ -126,7 +131,12 @@ export class LocalTranscriptionClient {
       this.processor.connect(this.silentGain);
       this.silentGain.connect(this.audioContext.destination);
       this.socket.send(
-        JSON.stringify(createResetControlMessage(this.expectedParticipants))
+        JSON.stringify(
+          createResetControlMessage(
+            this.expectedParticipants,
+            this.speakerLabelOffset
+          )
+        )
       );
       this.onStatus({
         status: "streaming",
@@ -275,14 +285,21 @@ export function getDefaultTranscriptionUrl(): string {
   );
 }
 
-export function createResetControlMessage(expectedParticipants: number | undefined): {
+export function createResetControlMessage(
+  expectedParticipants: number | undefined,
+  speakerLabelOffset?: number
+): {
   type: "reset";
   maxSpeakerClusters?: number;
+  speakerLabelOffset?: number;
 } {
   const maxSpeakerClusters = normalizeSpeakerClusterCap(expectedParticipants);
-  return maxSpeakerClusters === null
-    ? { type: "reset" }
-    : { type: "reset", maxSpeakerClusters };
+  const normalizedOffset = normalizeSpeakerLabelOffset(speakerLabelOffset);
+  return {
+    type: "reset",
+    ...(maxSpeakerClusters === null ? {} : { maxSpeakerClusters }),
+    ...(normalizedOffset > 0 ? { speakerLabelOffset: normalizedOffset } : {})
+  };
 }
 
 export function createSpeakerConfigControlMessage(
@@ -309,6 +326,14 @@ function normalizeSpeakerClusterCap(expectedParticipants: number | undefined): n
   return maxSpeakerClusters > 0
     ? Math.min(maxSpeakerClusters, MAX_EXPECTED_PARTICIPANTS)
     : null;
+}
+
+function normalizeSpeakerLabelOffset(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(MAX_EXPECTED_PARTICIPANTS, Math.floor(value)));
 }
 
 function getSocketFlushTimeoutMs(): number {

@@ -83,6 +83,21 @@ class SpeakerClustererTest(unittest.TestCase):
         self.assertEqual(second.label, "Speaker 2")
         self.assertEqual(clusterer.labels(), ["Speaker 1", "Speaker 2"])
 
+    def test_offsets_speaker_labels_after_mic_session_restart(self) -> None:
+        clusterer = SpeakerClusterer(
+            threshold=0.18,
+            embedder=DspVoiceEmbedder(),
+            speaker_label_offset=2,
+        )
+
+        first = asyncio.run(clusterer.assign(synthetic_voice(110)))
+        second = asyncio.run(clusterer.assign(synthetic_voice(190)))
+
+        self.assertEqual(first.id, "speaker-3")
+        self.assertEqual(first.label, "Speaker 3")
+        self.assertEqual(second.label, "Speaker 4")
+        self.assertEqual(clusterer.labels(), ["Speaker 3", "Speaker 4"])
+
     def test_trims_silence_before_embedding(self) -> None:
         audio = synthetic_voice(150, silence_prefix=1.0, silence_suffix=1.0)
 
@@ -503,17 +518,22 @@ class SpeakerClustererTest(unittest.TestCase):
         self.assertEqual(max_seconds, 4.0)
 
     def test_reset_control_configures_session_speaker_cap(self) -> None:
-        async def run() -> tuple[int, list[dict]]:
+        async def run() -> tuple[int, int, list[dict]]:
             websocket = FakeWebSocket()
             session = TranscriptionSession(websocket)
             await session.handle_control(
-                '{"type":"reset","maxSpeakerClusters":10000}'
+                '{"type":"reset","maxSpeakerClusters":10000,"speakerLabelOffset":2}'
             )
-            return session.clusterer.max_clusters, websocket.messages
+            return (
+                session.clusterer.max_clusters,
+                session.clusterer.speaker_label_offset,
+                websocket.messages,
+            )
 
-        max_clusters, messages = asyncio.run(run())
+        max_clusters, speaker_label_offset, messages = asyncio.run(run())
 
         self.assertEqual(max_clusters, DEFAULT_SPEAKER_HARD_CLUSTER_LIMIT)
+        self.assertEqual(speaker_label_offset, 2)
         self.assertEqual(messages[-1]["status"], "reset")
 
     def test_configure_control_updates_existing_session_speaker_cap(self) -> None:

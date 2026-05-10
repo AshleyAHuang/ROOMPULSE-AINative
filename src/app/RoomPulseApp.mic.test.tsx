@@ -6,6 +6,7 @@ const clients = vi.hoisted(
     [] as Array<{
       options: {
         expectedParticipants?: number;
+        speakerLabelOffset?: number;
         onSegment: (segment: {
           id: string;
           speakerId: string;
@@ -130,6 +131,45 @@ describe("RoomPulseApp mic lifecycle", () => {
       expect(clients).toHaveLength(2);
     });
     expect(clients[1].stop).not.toHaveBeenCalled();
+  });
+
+  it("continues speaker labels after restarting mic capture", async () => {
+    render(<RoomPulseApp />);
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: /new meeting/i })[0]);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    expect(
+      await screen.findByRole("button", { name: /run heartbeat now/i })
+    ).toBeInTheDocument();
+    await waitFor(() => {
+      expect(clients).toHaveLength(1);
+    });
+
+    act(() => {
+      clients[0].options.onSegment({
+        id: "first-speaker",
+        speakerId: "speaker-1",
+        speakerLabel: "Speaker 1",
+        text: "First mic segment.",
+        confidence: 0.9,
+        observedSpeakerLabels: ["Speaker 1"]
+      });
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^demo$/i }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^mic$/i }));
+    });
+    await waitFor(() => {
+      expect(clients).toHaveLength(2);
+    });
+
+    expect(clients[1].options.speakerLabelOffset).toBe(1);
   });
 
   it("does not let a stale failed mic start stop the newer mic client", async () => {
