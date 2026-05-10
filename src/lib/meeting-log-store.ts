@@ -218,7 +218,7 @@ export async function updateMeetingLogState(
     typeof update.endedAt === "number" ||
     typeof update.state?.endedAt === "number";
   const effectiveEndedAt = wasEnded
-    ? existing.ended_at
+    ? existing.ended_at ?? updatedAt
     : requestedEnded
       ? update.endedAt ?? update.state?.endedAt ?? updatedAt
       : update.endedAt ?? update.state?.endedAt;

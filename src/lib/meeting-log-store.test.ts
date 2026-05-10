@@ -7,7 +7,8 @@ import {
   appendMeetingLogEvent,
   createMeetingLog,
   listMeetingLogs,
-  readMeetingLog
+  readMeetingLog,
+  updateMeetingLogState
 } from "./meeting-log-store";
 import type { MeetingConfig } from "./facilitator";
 
@@ -254,6 +255,29 @@ describe("meeting log store", () => {
 
     expect(snapshot.metadata.meeting.expectedParticipants).toBe(1);
     expect(snapshot.metadata.state).toBeNull();
+  });
+
+  it("backfills missing endedAt for legacy ended sessions on state update", async () => {
+    const startedAt = Date.UTC(2026, 4, 9, 12, 0, 0);
+    const metadata = await createMeetingLog(meeting, startedAt);
+    const database = new DatabaseSync(join(logDir, "roompulse.sqlite"));
+    try {
+      database
+        .prepare("UPDATE meeting_sessions SET status = 'ended', ended_at = NULL WHERE id = ?")
+        .run(metadata.id);
+    } finally {
+      database.close();
+    }
+
+    const updated = await updateMeetingLogState(metadata.id, {
+      status: "active",
+      isPaused: false,
+      updatedAt: startedAt + 5_000
+    });
+
+    expect(updated.status).toBe("ended");
+    expect(updated.isPaused).toBe(true);
+    expect(updated.endedAt).toBe(startedAt + 5_000);
   });
 
   it("filters malformed materialized transcript and review rows on read", async () => {
