@@ -449,6 +449,144 @@ describe("RoomPulseApp", () => {
     ).toBeDisabled();
   });
 
+  it("checkpoints the current session before opening another saved meeting", async () => {
+    const now = Date.now();
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/meetings" && method === "GET") {
+          return Response.json({
+            meetings: [
+              {
+                id: "other-session",
+                title: "Other active session",
+                goal: "Resume safely.",
+                startedAt: now - 60_000,
+                updatedAt: now,
+                endedAt: null,
+                status: "paused",
+                isPaused: true,
+                eventCount: 2,
+                meeting: {},
+                state: null,
+                latestReviewMarkdown: "# Other",
+                latestReviewVersionId: "other-review"
+              }
+            ]
+          });
+        }
+        if (url.includes("/api/review-document/init")) {
+          return Response.json({
+            source: "pi",
+            markdown: "# Current session",
+            summary: "Initialized current session."
+          });
+        }
+        if (url === "/api/meetings" && method === "POST") {
+          return Response.json(
+            {
+              id: "current-session",
+              title: "Current session",
+              goal: "Checkpoint before leaving.",
+              startedAt: now,
+              updatedAt: now,
+              endedAt: null,
+              status: "active",
+              isPaused: false,
+              eventCount: 0,
+              meeting: {},
+              state: null,
+              latestReviewMarkdown: "",
+              latestReviewVersionId: null
+            },
+            { status: 201 }
+          );
+        }
+        if (url === "/api/meetings/current-session" && method === "PATCH") {
+          return Response.json({ id: "current-session" });
+        }
+        if (url.includes("/events")) {
+          return Response.json({ id: "event-1" }, { status: 201 });
+        }
+        if (url === "/api/meetings/other-session") {
+          return Response.json({
+            metadata: {
+              id: "other-session",
+              title: "Other active session",
+              goal: "Resume safely.",
+              startedAt: now - 60_000,
+              updatedAt: now,
+              endedAt: null,
+              status: "paused",
+              isPaused: true,
+              eventCount: 2,
+              meeting: {
+                title: "Other active session",
+                goal: "Resume safely.",
+                context: "",
+                agenda: [{ id: "a1", title: "Open", done: false }],
+                expectedParticipants: 1,
+                participants: [],
+                heartbeatIntervalSeconds: 30
+              },
+              state: null,
+              latestReviewMarkdown: "# Other",
+              latestReviewVersionId: "other-review"
+            },
+            events: [],
+            transcript: [],
+            reviewVersions: [
+              {
+                id: "other-review",
+                timestamp: now,
+                source: "pi",
+                markdown: "# Other",
+                summary: "Other review."
+              }
+            ]
+          });
+        }
+        return Response.json({});
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    expect(
+      await screen.findByRole("button", { name: /run heartbeat now/i })
+    ).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /past meetings/i }));
+    });
+    await act(async () => {
+      fireEvent.click(
+        await screen.findByRole("button", { name: /other active session/i })
+      );
+    });
+
+    await waitFor(() => {
+      const checkpointCallIndex = fetchMock.mock.calls.findIndex(
+        ([url, init]) =>
+          String(url) === "/api/meetings/current-session" &&
+          init?.method === "PATCH"
+      );
+      const openCallIndex = fetchMock.mock.calls.findIndex(
+        ([url]) => String(url) === "/api/meetings/other-session"
+      );
+      expect(checkpointCallIndex).toBeGreaterThan(-1);
+      expect(openCallIndex).toBeGreaterThan(checkpointCallIndex);
+    });
+    expect(
+      await screen.findByRole("heading", { name: /other active session/i })
+    ).toBeVisible();
+  });
+
   it("clamps invalid numeric setup values before starting the room display", async () => {
     render(<RoomPulseApp />);
 

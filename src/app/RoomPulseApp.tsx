@@ -683,6 +683,9 @@ export default function RoomPulseApp() {
 
   async function openMeetingLog(id: string) {
     try {
+      if (phase === "meeting" && meetingLogIdRef.current !== id) {
+        await checkpointCurrentMeetingBeforeLeaving();
+      }
       const response = await fetch(`/api/meetings/${encodeURIComponent(id)}`);
       if (!response.ok) {
         throw new Error(`Meeting log returned ${response.status}`);
