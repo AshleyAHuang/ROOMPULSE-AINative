@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { appendMeetingLogEvent } from "@/lib/meeting-log-store";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 interface RouteContext {
   params: Promise<{
     meetingId: string;
@@ -31,7 +34,7 @@ export async function POST(request: Request, context: RouteContext) {
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Meeting event log failed" },
-      { status: 500 }
+      { status: isMeetingNotFound(error) ? 404 : 500 }
     );
   }
 }
@@ -47,8 +50,80 @@ function isLogEventPayload(value: unknown): value is {
     value.type.length > 0 &&
     typeof value.timestamp === "number" &&
     Number.isFinite(value.timestamp) &&
-    "payload" in value
+    "payload" in value &&
+    isValidEventPayload(value.type, value.payload)
   );
+}
+
+function isValidEventPayload(type: string, payload: unknown): boolean {
+  if (type === "transcript_line") {
+    return isRecord(payload) && isTranscriptLine(payload.line);
+  }
+
+  if (type === "heartbeat_output") {
+    return (
+      isRecord(payload) &&
+      (payload.reviewVersionId === undefined ||
+        typeof payload.reviewVersionId === "string") &&
+      isRecord(payload.output) &&
+      typeof payload.output.reviewMarkdown === "string"
+    );
+  }
+
+  if (type === "review_initialized") {
+    return isRecord(payload) && isReviewVersion(payload.reviewVersion);
+  }
+
+  if (type === "review_restored") {
+    return isRecord(payload) && isReviewVersion(payload.restoredVersion);
+  }
+
+  if (type === "meeting_pause_toggled") {
+    return isRecord(payload) && typeof payload.paused === "boolean";
+  }
+
+  if (type === "meeting_ended") {
+    return isRecord(payload) && isFiniteNumber(payload.endedAt);
+  }
+
+  return true;
+}
+
+function isTranscriptLine(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.speakerId === "string" &&
+    typeof value.speakerLabel === "string" &&
+    typeof value.text === "string" &&
+    isFiniteNumber(value.timestamp) &&
+    (value.source === "speech" ||
+      value.source === "simulated" ||
+      value.source === "manual") &&
+    isFiniteNumber(value.confidence)
+  );
+}
+
+function isReviewVersion(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    isFiniteNumber(value.timestamp) &&
+    typeof value.markdown === "string" &&
+    typeof value.summary === "string" &&
+    (value.source === "pi" ||
+      value.source === "local-fallback" ||
+      value.source === "initial" ||
+      value.source === "restored")
+  );
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isMeetingNotFound(error: unknown): boolean {
+  return error instanceof Error && error.message === "Meeting log not found";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

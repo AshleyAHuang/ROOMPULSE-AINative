@@ -23,6 +23,25 @@ export default function MarkdownDocument({ markdown }: { markdown: string }) {
       }
     }
 
+    if (isBulletLine(line)) {
+      const items: string[] = [];
+      const start = index;
+      while (index < lines.length && isBulletLine(lines[index] ?? "")) {
+        items.push((lines[index] ?? "").slice(2));
+        index += 1;
+      }
+      nodes.push(
+        <ul key={`list-${start}`}>
+          {items.map((item, itemIndex) => (
+            <li key={`${itemIndex}-${item.slice(0, 12)}`}>
+              {renderInlineMarkdown(item)}
+            </li>
+          ))}
+        </ul>
+      );
+      continue;
+    }
+
     nodes.push(renderMarkdownLine(line, index));
     index += 1;
   }
@@ -60,6 +79,14 @@ function renderMarkdownLine(line: string, index: number): ReactNode {
     return <div className="markdown-gap" key={key} />;
   }
   return <p key={key}>{renderInlineMarkdown(line)}</p>;
+}
+
+function isBulletLine(line: string): boolean {
+  return (
+    line.startsWith("- ") &&
+    !line.startsWith("- [x] ") &&
+    !line.startsWith("- [ ] ")
+  );
 }
 
 function MarkdownTableView({ table }: { table: MarkdownTable }) {

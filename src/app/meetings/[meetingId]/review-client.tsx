@@ -212,19 +212,21 @@ function formatTranscript(snapshot: MeetingLogSnapshot): string {
 }
 
 function formatClock(timestamp: number): string {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("en-US", {
     hour: "numeric",
     minute: "2-digit",
-    second: "2-digit"
+    second: "2-digit",
+    timeZone: "America/Los_Angeles"
   }).format(new Date(timestamp));
 }
 
 function formatDateTime(timestamp: number): string {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("en-US", {
     month: "short",
     day: "numeric",
     hour: "numeric",
-    minute: "2-digit"
+    minute: "2-digit",
+    timeZone: "America/Los_Angeles"
   }).format(new Date(timestamp));
 }
 

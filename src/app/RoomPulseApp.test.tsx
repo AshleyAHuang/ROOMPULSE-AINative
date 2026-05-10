@@ -143,6 +143,7 @@ describe("RoomPulseApp", () => {
     );
 
     expect(await screen.findByText(/network down/i)).toBeVisible();
+    expect((await screen.findAllByText(/heartbeat check/i)).length).toBeGreaterThan(0);
     expect(screen.getByText(/2 versions/i)).toBeVisible();
   });
 

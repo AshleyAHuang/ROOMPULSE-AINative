@@ -131,6 +131,94 @@ describe("/api/meetings", () => {
     });
   });
 
+  it("rejects malformed materialized events instead of silently dropping them", async () => {
+    const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
+    const created = await createResponse.json();
+
+    const response = await POST_EVENT(
+      jsonRequest({
+        type: "transcript_line",
+        timestamp: Date.now(),
+        payload: { text: "This is not the materialized line envelope." }
+      }),
+      routeContext(created.id)
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid log event payload"
+    });
+  });
+
+  it("rejects malformed persisted state and keeps ended meetings terminal", async () => {
+    const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
+    const created = await createResponse.json();
+    const timestamp = Date.now();
+
+    const invalidPatch = await PATCH(
+      jsonRequest({
+        state: {
+          status: "active",
+          meeting: { title: "bad" },
+          transcript: [{ id: "line-1" }],
+          reviewMarkdown: "bad",
+          reviewVersions: [],
+          currentReviewVersionId: "v1",
+          timeline: [],
+          lastHeartbeatAt: timestamp,
+          nextHeartbeatAt: timestamp,
+          meetingStartedAt: timestamp,
+          heartbeatCount: 0,
+          isPaused: false,
+          updatedAt: timestamp
+        }
+      }),
+      routeContext(created.id)
+    );
+
+    expect(invalidPatch.status).toBe(400);
+
+    const endedPatch = await PATCH(
+      jsonRequest({
+        status: "ended",
+        isPaused: true,
+        endedAt: timestamp,
+        updatedAt: timestamp
+      }),
+      routeContext(created.id)
+    );
+    expect(endedPatch.status).toBe(200);
+
+    const stalePatch = await PATCH(
+      jsonRequest({
+        status: "active",
+        isPaused: false,
+        updatedAt: timestamp + 1
+      }),
+      routeContext(created.id)
+    );
+
+    expect(stalePatch.status).toBe(200);
+    await expect(stalePatch.json()).resolves.toMatchObject({
+      status: "ended",
+      isPaused: true,
+      endedAt: timestamp
+    });
+  });
+
+  it("returns 404 for writes to missing meeting logs", async () => {
+    const response = await POST_EVENT(
+      jsonRequest({
+        type: "meeting_started",
+        timestamp: Date.now(),
+        payload: { meeting: validMeeting }
+      }),
+      routeContext("missing-meeting")
+    );
+
+    expect(response.status).toBe(404);
+  });
+
   it("returns 400 for invalid meeting payloads", async () => {
     const response = await POST(jsonRequest({ meeting: null }));
 

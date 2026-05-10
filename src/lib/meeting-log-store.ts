@@ -201,10 +201,35 @@ export async function updateMeetingLogState(
   assertMeetingExists(db, meetingId);
 
   const updatedAt = update.updatedAt ?? Date.now();
-  const state = update.state;
-  const status = update.status ?? state?.status;
-  const isPaused = update.isPaused ?? state?.isPaused;
-  const endedAt = update.endedAt ?? state?.endedAt;
+  const existing = db
+    .prepare("SELECT status, ended_at FROM meeting_sessions WHERE id = ?")
+    .get(meetingId) as unknown as Pick<MeetingRow, "status" | "ended_at">;
+  const wasEnded =
+    existing.status === "ended" || typeof existing.ended_at === "number";
+  const requestedEnded =
+    update.status === "ended" ||
+    update.state?.status === "ended" ||
+    typeof update.endedAt === "number" ||
+    typeof update.state?.endedAt === "number";
+  const effectiveEndedAt = wasEnded
+    ? existing.ended_at
+    : requestedEnded
+      ? update.endedAt ?? update.state?.endedAt ?? updatedAt
+      : update.endedAt ?? update.state?.endedAt;
+  const state =
+    update.state && (wasEnded || requestedEnded)
+      ? {
+          ...update.state,
+          status: "ended" as const,
+          isPaused: true,
+          endedAt: effectiveEndedAt ?? updatedAt,
+          updatedAt
+        }
+      : update.state;
+  const status = wasEnded || requestedEnded ? "ended" : update.status ?? state?.status;
+  const isPaused =
+    wasEnded || requestedEnded ? true : update.isPaused ?? state?.isPaused;
+  const endedAt = effectiveEndedAt;
   const meeting = state?.meeting;
   const latestReviewMarkdown = state?.reviewMarkdown;
   const latestReviewVersionId = state?.currentReviewVersionId;

@@ -33,6 +33,9 @@ type TranscriptionServerMessage =
     };
 
 const TARGET_SAMPLE_RATE = 16_000;
+const SOCKET_CONNECT_TIMEOUT_MS = 4_000;
+
+type AudioContextConstructor = new () => AudioContext;
 
 export class LocalTranscriptionClient {
   private readonly url: string;
@@ -57,67 +60,78 @@ export class LocalTranscriptionClient {
     if (!navigator.mediaDevices?.getUserMedia) {
       throw new Error("Browser microphone capture is not available.");
     }
+    const AudioContextCtor = getAudioContextConstructor();
+    if (!AudioContextCtor) {
+      throw new Error("Browser audio processing is not available.");
+    }
 
-    this.onStatus({ status: "requesting-mic", message: "Requesting microphone" });
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        channelCount: 1,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true
-      }
-    });
-    this.onStatus({
-      status: "mic-granted",
-      message: "Microphone permission granted; opening local transcription stream"
-    });
+    try {
+      this.onStatus({ status: "requesting-mic", message: "Requesting microphone" });
+      this.stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      });
+      this.onStatus({
+        status: "mic-granted",
+        message: "Microphone permission granted; opening local transcription stream"
+      });
 
-    this.onStatus({
-      status: "connecting",
-      message: "Connecting to local transcription service"
-    });
-    this.socket = await openSocket(this.url);
-    this.socket.binaryType = "arraybuffer";
-    this.socket.onmessage = (event) => this.handleMessage(event);
-    this.socket.onerror = () => {
-      this.onError("Local transcription WebSocket error");
-    };
-    this.socket.onclose = () => {
-      this.onStatus({ status: "closed", message: "Local transcription stopped" });
-    };
+      this.onStatus({
+        status: "connecting",
+        message: "Connecting to local transcription service"
+      });
+      this.socket = await openSocket(this.url);
+      this.socket.binaryType = "arraybuffer";
+      this.socket.onmessage = (event) => this.handleMessage(event);
+      this.socket.onerror = () => {
+        this.onError("Local transcription WebSocket error");
+      };
+      this.socket.onclose = () => {
+        this.onStatus({ status: "closed", message: "Local transcription stopped" });
+      };
 
-    this.audioContext = new AudioContext();
-    this.source = this.audioContext.createMediaStreamSource(this.stream);
-    this.processor = this.audioContext.createScriptProcessor(4096, 1, 1);
-    this.silentGain = this.audioContext.createGain();
-    this.silentGain.gain.value = 0;
+      this.audioContext = new AudioContextCtor();
+      this.source = this.audioContext.createMediaStreamSource(this.stream);
+      this.processor = this.audioContext.createScriptProcessor(4096, 1, 1);
+      this.silentGain = this.audioContext.createGain();
+      this.silentGain.gain.value = 0;
 
-    this.processor.onaudioprocess = (event) => {
-      if (this.socket?.readyState !== WebSocket.OPEN || !this.audioContext) {
-        return;
-      }
+      this.processor.onaudioprocess = (event) => {
+        if (this.socket?.readyState !== WebSocket.OPEN || !this.audioContext) {
+          return;
+        }
 
-      const input = event.inputBuffer.getChannelData(0);
-      const pcm = floatToPcm16(
-        downsample(input, this.audioContext.sampleRate, TARGET_SAMPLE_RATE)
-      );
-      if (pcm.byteLength > 0) {
-        this.socket.send(pcm);
-      }
-    };
+        const input = event.inputBuffer.getChannelData(0);
+        const pcm = floatToPcm16(
+          downsample(input, this.audioContext.sampleRate, TARGET_SAMPLE_RATE)
+        );
+        if (pcm.byteLength > 0) {
+          this.socket.send(pcm);
+        }
+      };
 
-    this.source.connect(this.processor);
-    this.processor.connect(this.silentGain);
-    this.silentGain.connect(this.audioContext.destination);
-    this.socket.send(JSON.stringify({ type: "reset" }));
-    this.onStatus({
-      status: "streaming",
-      message: "Microphone active; streaming audio to local transcription"
-    });
+      this.source.connect(this.processor);
+      this.processor.connect(this.silentGain);
+      this.silentGain.connect(this.audioContext.destination);
+      this.socket.send(JSON.stringify({ type: "reset" }));
+      this.onStatus({
+        status: "streaming",
+        message: "Microphone active; streaming audio to local transcription"
+      });
+    } catch (error) {
+      this.stop();
+      throw error;
+    }
   }
 
   stop(): void {
-    this.socket?.send(JSON.stringify({ type: "flush" }));
+    if (this.socket?.readyState === WebSocket.OPEN) {
+      this.socket.send(JSON.stringify({ type: "flush" }));
+    }
     this.processor?.disconnect();
     this.source?.disconnect();
     this.silentGain?.disconnect();
@@ -173,10 +187,44 @@ export function getDefaultTranscriptionUrl(): string {
 
 function openSocket(url: string): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
+    let settled = false;
     const socket = new WebSocket(url);
-    socket.onopen = () => resolve(socket);
-    socket.onerror = () => reject(new Error(`Could not connect to ${url}`));
+    const timeout = window.setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      socket.close();
+      reject(new Error(`Could not connect to ${url}`));
+    }, SOCKET_CONNECT_TIMEOUT_MS);
+
+    socket.onopen = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      window.clearTimeout(timeout);
+      resolve(socket);
+    };
+    socket.onerror = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      window.clearTimeout(timeout);
+      reject(new Error(`Could not connect to ${url}`));
+    };
   });
+}
+
+function getAudioContextConstructor(): AudioContextConstructor | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const audioWindow = window as Window & {
+    webkitAudioContext?: AudioContextConstructor;
+  };
+  return window.AudioContext ?? audioWindow.webkitAudioContext ?? null;
 }
 
 export function downsample(

@@ -207,6 +207,7 @@ export default function RoomPulseApp() {
   const pendingLogEventsRef = useRef<PendingMeetingLogEvent[]>([]);
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const endingSessionRef = useRef(false);
+  const meetingStartAttemptRef = useRef(0);
 
   const observedSpeakerLabels = useMemo(
     () => Array.from(new Set(transcript.map((line) => line.speakerLabel))),
@@ -548,10 +549,14 @@ export default function RoomPulseApp() {
       if (!response.ok) {
         const errorBody = (await response.json().catch(() => null)) as {
           error?: string;
+          piRequired?: boolean;
         } | null;
-        throw new Error(
+        const heartbeatError = new Error(
           errorBody?.error ?? `Heartbeat route returned ${response.status}`
         );
+        (heartbeatError as Error & { piRequired?: boolean }).piRequired =
+          errorBody?.piRequired === true;
+        throw heartbeatError;
       }
 
       const output = (await response.json()) as FacilitatorOutput;
@@ -568,7 +573,10 @@ export default function RoomPulseApp() {
           ? `Pi heartbeat timed out after ${getClientPiTimeoutMs()}ms`
           : message
       );
-      if (process.env.NEXT_PUBLIC_ROOMPULSE_REQUIRE_PI === "1") {
+      if (
+        process.env.NEXT_PUBLIC_ROOMPULSE_REQUIRE_PI === "1" ||
+        (error as Error & { piRequired?: boolean })?.piRequired === true
+      ) {
         return;
       }
 
@@ -783,6 +791,10 @@ export default function RoomPulseApp() {
     if (isEndingSession) {
       return;
     }
+    if (isHeartbeatRunningRef.current) {
+      setLogStatus("Wait for the current heartbeat review to finish before ending.");
+      return;
+    }
 
     endingSessionRef.current = true;
     setIsEndingSession(true);
@@ -953,10 +965,11 @@ export default function RoomPulseApp() {
       }
     ]);
     setIsInitializingReview(false);
-    setTimeout(
+    const demoStartTimer = setTimeout(
       () => startScriptedDemo(demoMeeting.heartbeatIntervalSeconds),
       120
     );
+    demoTimeoutsRef.current.push(demoStartTimer);
 
     void initializeReviewDocument(demoMeeting)
       .then((initialDocument) => {
@@ -1127,6 +1140,8 @@ export default function RoomPulseApp() {
 
   async function startMeeting() {
     endingSessionRef.current = false;
+    const attemptId = meetingStartAttemptRef.current + 1;
+    meetingStartAttemptRef.current = attemptId;
     const configuredMeeting = configuredDraftMeeting;
     setIsInitializingReview(true);
     setHeartbeatError(null);
@@ -1134,10 +1149,16 @@ export default function RoomPulseApp() {
     try {
       initialDocument = await initializeReviewDocument(configuredMeeting);
     } catch (error) {
+      if (meetingStartAttemptRef.current !== attemptId) {
+        return;
+      }
       const message = error instanceof Error ? error.message : String(error);
       setHeartbeatError(message);
       setLogStatus(`Meeting start blocked: ${message}`);
       setIsInitializingReview(false);
+      return;
+    }
+    if (meetingStartAttemptRef.current !== attemptId) {
       return;
     }
     setIsInitializingReview(false);
@@ -1414,7 +1435,37 @@ export default function RoomPulseApp() {
     }
   }
 
-  function startNewMeetingSetup() {
+  async function checkpointCurrentMeetingBeforeLeaving() {
+    const id = meetingLogIdRef.current;
+    if (phase !== "meeting" || !id || endingSessionRef.current) {
+      return;
+    }
+
+    const updatedAt = Date.now();
+    const state = buildPersistedMeetingState({
+      status: "paused",
+      isPaused: true,
+      updatedAt
+    });
+    try {
+      await sendMeetingState(id, {
+        status: "paused",
+        isPaused: true,
+        updatedAt,
+        state
+      });
+    } catch (error) {
+      setLogStatus(
+        `Session checkpoint failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  async function startNewMeetingSetup() {
+    meetingStartAttemptRef.current += 1;
+    if (phase === "meeting") {
+      await checkpointCurrentMeetingBeforeLeaving();
+    }
     endingSessionRef.current = false;
     stopMic();
     stopScriptedDemo();
@@ -1474,6 +1525,7 @@ export default function RoomPulseApp() {
   }
 
   function returnToDashboard() {
+    meetingStartAttemptRef.current += 1;
     stopMic();
     stopScriptedDemo();
     setShowSettings(false);
@@ -1501,7 +1553,7 @@ export default function RoomPulseApp() {
             <button
               className="btn primary"
               type="button"
-              onClick={startNewMeetingSetup}
+              onClick={() => void startNewMeetingSetup()}
             >
               <MaterialIcon name="add" />
               New meeting
@@ -1521,7 +1573,7 @@ export default function RoomPulseApp() {
               <button
                 className="primary-action dashboard-primary-action"
                 type="button"
-                onClick={startNewMeetingSetup}
+                onClick={() => void startNewMeetingSetup()}
               >
                 <MaterialIcon name="add_circle" filled />
                 New meeting
@@ -1574,6 +1626,7 @@ export default function RoomPulseApp() {
             aria-label="Back to dashboard"
             className="icon-button"
             type="button"
+            disabled={isInitializingReview}
             onClick={returnToDashboard}
           >
             <MaterialIcon name="arrow_back" />
@@ -1887,7 +1940,7 @@ export default function RoomPulseApp() {
           onSelect={(id) => void loadPastMeetingLog(id)}
           onOpen={(id) => void openMeetingLog(id)}
           onNewMeeting={() => {
-            startNewMeetingSetup();
+            void startNewMeetingSetup();
           }}
         />
       ) : null}
@@ -2043,6 +2096,28 @@ export default function RoomPulseApp() {
             {currentOutput?.adapterNotice ? <span>{currentOutput.adapterNotice}</span> : null}
             {heartbeatError ? <span>{heartbeatError}</span> : null}
           </div>
+          {currentOutput?.cards.length ? (
+            <section className="facilitator-cues" aria-label="Current facilitator cues">
+              {currentOutput.cards.map((card) => (
+                <article className={`facilitator-cue ${card.priority}`} key={card.id}>
+                  <span>{card.kind}</span>
+                  <strong>{card.title}</strong>
+                  <p>{card.body}</p>
+                </article>
+              ))}
+            </section>
+          ) : null}
+          {timeline.length > 0 ? (
+            <section className="intervention-timeline" aria-label="Prior heartbeat interventions">
+              <div className="section-kicker">Prior interventions</div>
+              {timeline.slice(0, 3).map((entry) => (
+                <p key={entry.id}>
+                  <time>{formatClock(entry.timestamp)}</time>
+                  {entry.summary}
+                </p>
+              ))}
+            </section>
+          ) : null}
           <article className="markdown-document">
             <MarkdownDocument markdown={reviewMarkdown} />
           </article>
@@ -2197,7 +2272,7 @@ export default function RoomPulseApp() {
         <span className="bottom-divider" />
         <button
           className="pill-btn danger"
-          disabled={isEndingSession}
+          disabled={isEndingSession || isHeartbeatRunning}
           type="button"
           onClick={() => {
             void endMeetingSession();
@@ -2433,7 +2508,12 @@ function PastMeetingsDrawer({
       />
       <aside className="meetings-drawer" aria-label="Past meetings">
         <div className="drawer-head">
-          <button className="icon-button" type="button" onClick={onClose}>
+          <button
+            aria-label="Close past meetings"
+            className="icon-button"
+            type="button"
+            onClick={onClose}
+          >
             <MaterialIcon name="menu_open" />
           </button>
           <strong>Past meetings</strong>

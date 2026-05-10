@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST } from "./route";
 import { runPiHeartbeat } from "@/lib/pi-adapter";
 import type { FacilitatorOutput } from "@/lib/facilitator";
@@ -45,8 +45,13 @@ const validPayload = {
 
 describe("POST /api/heartbeat", () => {
   beforeEach(() => {
+    delete process.env.ROOMPULSE_REQUIRE_PI;
     vi.mocked(runPiHeartbeat).mockReset();
     vi.mocked(runPiHeartbeat).mockResolvedValue(output);
+  });
+
+  afterEach(() => {
+    delete process.env.ROOMPULSE_REQUIRE_PI;
   });
 
   it("returns facilitator output for a valid heartbeat payload", async () => {
@@ -81,6 +86,19 @@ describe("POST /api/heartbeat", () => {
       error: "Invalid heartbeat payload"
     });
     expect(runPiHeartbeat).not.toHaveBeenCalled();
+  });
+
+  it("marks strict Pi failures so the client does not silently fall back", async () => {
+    process.env.ROOMPULSE_REQUIRE_PI = "1";
+    vi.mocked(runPiHeartbeat).mockRejectedValue(new Error("Pi unavailable"));
+
+    const response = await POST(jsonRequest(validPayload));
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: "Pi unavailable",
+      piRequired: true
+    });
   });
 });
 

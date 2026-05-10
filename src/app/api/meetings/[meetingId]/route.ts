@@ -6,6 +6,9 @@ import {
   type PersistedMeetingState
 } from "@/lib/meeting-log-store";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 interface RouteContext {
   params: Promise<{
     meetingId: string;
@@ -76,7 +79,7 @@ export async function PATCH(request: Request, context: RouteContext) {
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Meeting state update failed" },
-      { status: 500 }
+      { status: isMeetingNotFound(error) ? 404 : 500 }
     );
   }
 }
@@ -92,19 +95,135 @@ function isPersistedMeetingState(value: unknown): value is PersistedMeetingState
   return (
     isRecord(value) &&
     meetingStatus(value.status) !== undefined &&
-    isRecord(value.meeting) &&
+    isMeeting(value.meeting) &&
     Array.isArray(value.transcript) &&
+    value.transcript.every(isTranscriptLine) &&
     typeof value.reviewMarkdown === "string" &&
     Array.isArray(value.reviewVersions) &&
+    value.reviewVersions.every(isReviewVersion) &&
     typeof value.currentReviewVersionId === "string" &&
     Array.isArray(value.timeline) &&
-    typeof value.lastHeartbeatAt === "number" &&
-    typeof value.nextHeartbeatAt === "number" &&
-    typeof value.meetingStartedAt === "number" &&
-    typeof value.heartbeatCount === "number" &&
+    value.timeline.every(isTimelineEntry) &&
+    isFiniteNumber(value.lastHeartbeatAt) &&
+    isFiniteNumber(value.nextHeartbeatAt) &&
+    isFiniteNumber(value.meetingStartedAt) &&
+    isFiniteNumber(value.heartbeatCount) &&
     typeof value.isPaused === "boolean" &&
-    typeof value.updatedAt === "number"
+    (value.activeAgendaItemId === null ||
+      typeof value.activeAgendaItemId === "string") &&
+    isFiniteNumber(value.updatedAt) &&
+    (value.endedAt === undefined ||
+      value.endedAt === null ||
+      isFiniteNumber(value.endedAt))
   );
+}
+
+function isMeeting(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+
+  return (
+    typeof value.title === "string" &&
+    typeof value.goal === "string" &&
+    typeof value.context === "string" &&
+    Array.isArray(value.agenda) &&
+    value.agenda.every(isAgendaItem) &&
+    isFiniteNumber(value.expectedParticipants) &&
+    Array.isArray(value.participants) &&
+    value.participants.every(isParticipant) &&
+    isFiniteNumber(value.heartbeatIntervalSeconds)
+  );
+}
+
+function isAgendaItem(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.title === "string" &&
+    typeof value.done === "boolean"
+  );
+}
+
+function isParticipant(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.name === "string" &&
+    (value.role === undefined || typeof value.role === "string")
+  );
+}
+
+function isTranscriptLine(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.speakerId === "string" &&
+    typeof value.speakerLabel === "string" &&
+    typeof value.text === "string" &&
+    isFiniteNumber(value.timestamp) &&
+    isTranscriptSource(value.source) &&
+    isFiniteNumber(value.confidence)
+  );
+}
+
+function isTranscriptSource(value: unknown): boolean {
+  return value === "speech" || value === "simulated" || value === "manual";
+}
+
+function isReviewVersion(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    isFiniteNumber(value.timestamp) &&
+    isReviewSource(value.source) &&
+    typeof value.markdown === "string" &&
+    typeof value.summary === "string"
+  );
+}
+
+function isReviewSource(value: unknown): boolean {
+  return (
+    value === "pi" ||
+    value === "local-fallback" ||
+    value === "initial" ||
+    value === "restored"
+  );
+}
+
+function isTimelineEntry(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    isFiniteNumber(value.timestamp) &&
+    isReviewSource(value.source) &&
+    Array.isArray(value.cards) &&
+    value.cards.every(isFacilitatorCard) &&
+    typeof value.summary === "string" &&
+    (value.reviewMarkdown === undefined ||
+      typeof value.reviewMarkdown === "string") &&
+    (value.reminder === undefined ||
+      value.reminder === null ||
+      typeof value.reminder === "string")
+  );
+}
+
+function isFacilitatorCard(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.kind === "string" &&
+    typeof value.title === "string" &&
+    typeof value.body === "string" &&
+    (value.priority === "low" ||
+      value.priority === "medium" ||
+      value.priority === "high")
+  );
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isMeetingNotFound(error: unknown): boolean {
+  return error instanceof Error && error.message === "Meeting log not found";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

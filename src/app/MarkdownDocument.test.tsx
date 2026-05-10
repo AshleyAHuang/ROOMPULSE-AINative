@@ -38,4 +38,21 @@ describe("MarkdownDocument", () => {
       within(table).getByRole("cell", { name: "Confirm launch risk" })
     ).toBeVisible();
   });
+
+  it("groups bullet lines into semantic lists", () => {
+    render(
+      <MarkdownDocument
+        markdown={[
+          "## Risks",
+          "- **Support:** coverage is open",
+          "- ~~Old launch owner~~ replaced by Speaker 2"
+        ].join("\n")}
+      />
+    );
+
+    const list = screen.getByRole("list");
+    expect(within(list).getAllByRole("listitem")).toHaveLength(2);
+    expect(within(list).getByText("Support:")).toBeVisible();
+    expect(within(list).getByText("Old launch owner")).toBeVisible();
+  });
 });

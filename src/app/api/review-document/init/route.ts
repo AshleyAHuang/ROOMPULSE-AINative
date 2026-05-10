@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import type { MeetingConfig } from "@/lib/facilitator";
 import { runPiInitialReviewDocument } from "@/lib/pi-adapter";
 
+export const runtime = "nodejs";
+
 export async function POST(request: Request) {
   let payload: unknown;
 

@@ -5,6 +5,9 @@ import {
 } from "@/lib/meeting-log-store";
 import type { MeetingConfig } from "@/lib/facilitator";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   const meetings = await listMeetingLogs();
   return NextResponse.json({ meetings });

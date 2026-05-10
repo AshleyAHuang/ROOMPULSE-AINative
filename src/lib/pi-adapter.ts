@@ -207,7 +207,7 @@ async function runPiSession(
         );
       }
     } catch (error) {
-      if (isPiTimeoutError(error) && queuedUiActions.length > 0) {
+      if (isPiTimeoutError(error) && hasQueuedReviewAction(queuedUiActions)) {
         return buildOutputFromQueuedUiActions(
           input,
           queuedUiActions,
@@ -225,7 +225,7 @@ async function runPiSession(
     try {
       output = parsePiOutput(text);
     } catch (error) {
-      if (queuedUiActions.length > 0) {
+      if (hasQueuedReviewAction(queuedUiActions)) {
         return buildOutputFromQueuedUiActions(
           input,
           queuedUiActions,
@@ -1051,6 +1051,10 @@ function buildOutputFromQueuedUiActions(
     ephemeralReminder,
     adapterNotice: `Pi tool updates applied before final JSON completed: ${notice}`
   };
+}
+
+function hasQueuedReviewAction(queuedUiActions: UiAction[]): boolean {
+  return queuedUiActions.some((action) => action.tool === "update_review_document");
 }
 
 function stringParameter(

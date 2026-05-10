@@ -5,6 +5,8 @@ import {
 } from "@/lib/facilitator";
 import { runPiHeartbeat } from "@/lib/pi-adapter";
 
+export const runtime = "nodejs";
+
 export async function POST(request: Request) {
   let payload: unknown;
 
@@ -36,7 +38,8 @@ export async function POST(request: Request) {
   } catch (error) {
     return NextResponse.json(
       {
-        error: error instanceof Error ? error.message : "Heartbeat failed"
+        error: error instanceof Error ? error.message : "Heartbeat failed",
+        piRequired: process.env.ROOMPULSE_REQUIRE_PI === "1"
       },
       { status: 500 }
     );
