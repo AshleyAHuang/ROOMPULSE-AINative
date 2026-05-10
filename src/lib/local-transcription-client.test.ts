@@ -107,10 +107,14 @@ describe("local transcription audio utilities", () => {
 
   it("does not throw when the socket closes during live speaker cap reconfigure", () => {
     const onError = vi.fn();
+    const onStatus = vi.fn();
+    const closeSocket = vi.fn();
+    const stopTrack = vi.fn();
+    const closeAudio = vi.fn();
     const client = new LocalTranscriptionClient({
       expectedParticipants: 2,
       onSegment: vi.fn(),
-      onStatus: vi.fn(),
+      onStatus,
       onError
     });
     Object.assign(client as unknown as Record<string, unknown>, {
@@ -118,7 +122,14 @@ describe("local transcription audio utilities", () => {
         readyState: WebSocket.OPEN,
         send: vi.fn(() => {
           throw new Error("socket already closing");
-        })
+        }),
+        close: closeSocket
+      },
+      stream: {
+        getTracks: () => [{ stop: stopTrack }]
+      },
+      audioContext: {
+        close: closeAudio
       }
     });
 
@@ -126,6 +137,13 @@ describe("local transcription audio utilities", () => {
     expect(onError).toHaveBeenCalledWith(
       "Local transcription speaker cap reconfigure failed"
     );
+    expect(onStatus).toHaveBeenCalledWith({
+      status: "closed",
+      message: "Local transcription stopped"
+    });
+    expect(closeSocket).toHaveBeenCalledOnce();
+    expect(stopTrack).toHaveBeenCalledOnce();
+    expect(closeAudio).toHaveBeenCalledOnce();
   });
 
   it("does not open the transcription socket after mic start is stopped while permission is pending", async () => {

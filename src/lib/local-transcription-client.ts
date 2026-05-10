@@ -202,6 +202,8 @@ export class LocalTranscriptionClient {
       );
     } catch {
       this.onError("Local transcription speaker cap reconfigure failed");
+      closeSocketQuietly(socket);
+      this.handleSocketClose(socket);
     }
   }
 
