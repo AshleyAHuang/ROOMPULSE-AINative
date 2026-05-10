@@ -132,6 +132,104 @@ describe("/api/meetings", () => {
     });
   });
 
+  it("keeps materialized transcript and review rows immutable for duplicate payload ids", async () => {
+    const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
+    const created = await createResponse.json();
+    const timestamp = Date.now();
+
+    await POST_EVENT(
+      jsonRequest({
+        type: "transcript_line",
+        timestamp,
+        payload: {
+          line: {
+            id: "line-1",
+            speakerId: "speaker-1",
+            speakerLabel: "Speaker 1",
+            text: "Original transcript text.",
+            timestamp,
+            source: "speech",
+            confidence: 0.9
+          }
+        }
+      }),
+      routeContext(created.id)
+    );
+    await POST_EVENT(
+      jsonRequest({
+        type: "transcript_line",
+        timestamp: timestamp + 1,
+        payload: {
+          line: {
+            id: "line-1",
+            speakerId: "speaker-2",
+            speakerLabel: "Speaker 2",
+            text: "Overwriting duplicate transcript text.",
+            timestamp: timestamp + 1,
+            source: "speech",
+            confidence: 0.9
+          }
+        }
+      }),
+      routeContext(created.id)
+    );
+    await POST_EVENT(
+      jsonRequest({
+        type: "heartbeat_output",
+        timestamp: timestamp + 2,
+        payload: {
+          reviewVersionId: "review-1",
+          output: {
+            source: "pi",
+            summary: "Original review.",
+            reviewMarkdown: "# Original review"
+          }
+        }
+      }),
+      routeContext(created.id)
+    );
+    await POST_EVENT(
+      jsonRequest({
+        type: "heartbeat_output",
+        timestamp: timestamp + 3,
+        payload: {
+          reviewVersionId: "review-1",
+          output: {
+            source: "pi",
+            summary: "Overwriting duplicate review.",
+            reviewMarkdown: "# Overwritten review"
+          }
+        }
+      }),
+      routeContext(created.id)
+    );
+
+    const snapshotResponse = await GET_MEETING(
+      new Request("http://localhost/api/meetings/test"),
+      routeContext(created.id)
+    );
+    await expect(snapshotResponse.json()).resolves.toMatchObject({
+      metadata: {
+        latestReviewMarkdown: "# Original review",
+        latestReviewVersionId: "review-1"
+      },
+      transcript: [
+        {
+          id: "line-1",
+          speakerId: "speaker-1",
+          text: "Original transcript text."
+        }
+      ],
+      reviewVersions: [
+        {
+          id: "review-1",
+          markdown: "# Original review",
+          summary: "Original review."
+        }
+      ]
+    });
+  });
+
   it("rejects malformed materialized events instead of silently dropping them", async () => {
     const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
     const created = await createResponse.json();

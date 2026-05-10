@@ -610,15 +610,14 @@ function materializeEvent(
   if (event.type === "transcript_line") {
     const line = lineFromPayload(event.payload);
     if (line) {
-      upsertTranscriptLine(db, meetingId, line);
+      insertTranscriptLineIfAbsent(db, meetingId, line);
     }
     return;
   }
 
   if (event.type === "heartbeat_output") {
     const version = reviewVersionFromHeartbeatPayload(event.payload, event.timestamp);
-    if (version) {
-      upsertReviewVersion(db, meetingId, version);
+    if (version && insertReviewVersionIfAbsent(db, meetingId, version)) {
       updateLatestReview(db, meetingId, version);
     }
     return;
@@ -626,8 +625,7 @@ function materializeEvent(
 
   if (event.type === "review_initialized") {
     const version = reviewVersionFromInitializedPayload(event.payload);
-    if (version) {
-      upsertReviewVersion(db, meetingId, version);
+    if (version && insertReviewVersionIfAbsent(db, meetingId, version)) {
       updateLatestReview(db, meetingId, version);
     }
     return;
@@ -635,8 +633,7 @@ function materializeEvent(
 
   if (event.type === "review_restored") {
     const version = reviewVersionFromRestorePayload(event.payload);
-    if (version) {
-      upsertReviewVersion(db, meetingId, version);
+    if (version && insertReviewVersionIfAbsent(db, meetingId, version)) {
       updateLatestReview(db, meetingId, version);
     }
     return;
@@ -695,6 +692,35 @@ function upsertTranscriptLine(
   );
 }
 
+function insertTranscriptLineIfAbsent(
+  db: DatabaseSync,
+  meetingId: string,
+  line: TranscriptLine
+): boolean {
+  const result = db.prepare(
+    `INSERT OR IGNORE INTO transcript_lines (
+      id,
+      meeting_id,
+      speaker_id,
+      speaker_label,
+      text,
+      timestamp,
+      source,
+      confidence
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    line.id,
+    meetingId,
+    line.speakerId,
+    line.speakerLabel,
+    line.text,
+    line.timestamp,
+    line.source,
+    line.confidence
+  ) as unknown as { changes: number };
+  return result.changes > 0;
+}
+
 function upsertReviewVersion(
   db: DatabaseSync,
   meetingId: string,
@@ -717,6 +743,31 @@ function upsertReviewVersion(
     version.markdown,
     version.summary
   );
+}
+
+function insertReviewVersionIfAbsent(
+  db: DatabaseSync,
+  meetingId: string,
+  version: ReviewVersion
+): boolean {
+  const result = db.prepare(
+    `INSERT OR IGNORE INTO review_versions (
+      id,
+      meeting_id,
+      timestamp,
+      source,
+      markdown,
+      summary
+    ) VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(
+    version.id,
+    meetingId,
+    version.timestamp,
+    version.source,
+    version.markdown,
+    version.summary
+  ) as unknown as { changes: number };
+  return result.changes > 0;
 }
 
 function updateLatestReview(
