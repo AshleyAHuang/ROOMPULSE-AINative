@@ -2129,6 +2129,52 @@ button {
   text-decoration-color: rgba(234, 67, 53, .5);
 }
 
+.markdown-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  margin: 18px 0;
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--radius-sm);
+  background: var(--md-surface);
+}
+
+.markdown-table-wrap table {
+  width: 100%;
+  min-width: 520px;
+  border-collapse: collapse;
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+
+.markdown-table-wrap th,
+.markdown-table-wrap td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--md-outline-variant);
+  border-right: 1px solid var(--md-outline-variant);
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown-table-wrap th:last-child,
+.markdown-table-wrap td:last-child {
+  border-right: 0;
+}
+
+.markdown-table-wrap tr:last-child td {
+  border-bottom: 0;
+}
+
+.markdown-table-wrap th {
+  background: var(--md-surface-container-low);
+  color: var(--md-on-surface);
+  font-family: var(--font-display);
+  font-weight: 500;
+}
+
+.markdown-table-wrap td {
+  color: var(--md-on-surface);
+}
+
 .markdown-check {
   display: flex;
   align-items: flex-start;

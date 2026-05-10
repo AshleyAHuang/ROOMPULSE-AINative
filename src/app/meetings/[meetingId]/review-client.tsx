@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState } from "react";
+import MarkdownDocument from "@/app/MarkdownDocument";
 import type { MeetingLogSnapshot } from "@/lib/meeting-log-store";
 
 export default function MeetingReviewClient({
@@ -188,58 +189,6 @@ function MaterialIcon({ name }: { name: string }) {
       {name}
     </span>
   );
-}
-
-function MarkdownDocument({ markdown }: { markdown: string }) {
-  return (
-    <>
-      {markdown.split("\n").map((line, index) => {
-        const key = `${index}-${line.slice(0, 12)}`;
-        if (line.startsWith("# ")) {
-          return <h1 key={key}>{renderInlineMarkdown(line.slice(2))}</h1>;
-        }
-        if (line.startsWith("## ")) {
-          return <h2 key={key}>{renderInlineMarkdown(line.slice(3))}</h2>;
-        }
-        if (line.startsWith("### ")) {
-          return <h3 key={key}>{renderInlineMarkdown(line.slice(4))}</h3>;
-        }
-        if (line.startsWith("- [x] ") || line.startsWith("- [ ] ")) {
-          const checked = line.startsWith("- [x] ");
-          return (
-            <p className="markdown-check" key={key}>
-              <input checked={checked} readOnly type="checkbox" />
-              <span>{renderInlineMarkdown(line.slice(6))}</span>
-            </p>
-          );
-        }
-        if (line.startsWith("- ")) {
-          return <li key={key}>{renderInlineMarkdown(line.slice(2))}</li>;
-        }
-        if (!line.trim()) {
-          return <div className="markdown-gap" key={key} />;
-        }
-        return <p key={key}>{renderInlineMarkdown(line)}</p>;
-      })}
-    </>
-  );
-}
-
-function renderInlineMarkdown(text: string): ReactNode[] {
-  const parts = text.split(/(\*\*[^*]+\*\*|~~[^~]+~~|`[^`]+`)/g);
-  return parts.map((part, index) => {
-    const key = `${index}-${part}`;
-    if (part.startsWith("**") && part.endsWith("**")) {
-      return <strong key={key}>{part.slice(2, -2)}</strong>;
-    }
-    if (part.startsWith("~~") && part.endsWith("~~")) {
-      return <s key={key}>{part.slice(2, -2)}</s>;
-    }
-    if (part.startsWith("`") && part.endsWith("`")) {
-      return <code key={key}>{part.slice(1, -1)}</code>;
-    }
-    return <span key={key}>{part}</span>;
-  });
 }
 
 function formatTranscript(snapshot: MeetingLogSnapshot): string {
