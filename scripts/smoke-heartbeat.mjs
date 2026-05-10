@@ -2,6 +2,11 @@ const baseUrl = process.env.ROOMPULSE_SMOKE_BASE_URL ?? "http://localhost:3000";
 const timeoutMs = Number(process.env.ROOMPULSE_SMOKE_TIMEOUT_MS ?? 30_000);
 const maxElapsedMs = Number(process.env.ROOMPULSE_SMOKE_MAX_ELAPSED_MS ?? 8_000);
 const now = Date.now();
+const provider = process.env.ROOMPULSE_PI_PROVIDER ?? "openai-codex";
+const model =
+  process.env.ROOMPULSE_PI_MODEL ??
+  (provider === "openrouter" ? "openai/gpt-4o-mini" : "gpt-5.5");
+const thinkingLevel = process.env.ROOMPULSE_PI_THINKING_LEVEL ?? "off";
 
 const payload = {
   meeting: {
@@ -97,8 +102,8 @@ try {
         source: output.source,
         summary: output.summary,
         reminder: output.ephemeralReminder ?? null,
-        model: `${process.env.ROOMPULSE_PI_PROVIDER ?? "openai-codex"}/${process.env.ROOMPULSE_PI_MODEL ?? "gpt-5.5"}`,
-        thinkingLevel: "off"
+        model: `${provider}/${model}`,
+        thinkingLevel
       },
       null,
       2
