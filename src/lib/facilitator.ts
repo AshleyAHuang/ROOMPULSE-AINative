@@ -161,32 +161,51 @@ export interface FacilitatorOutput {
 export function capFacilitatorOutput(
   output: FacilitatorOutput
 ): FacilitatorOutput {
+  const rawOutput = (isRecord(output) ? output : {}) as Record<string, unknown>;
+  const adapterNotice =
+    typeof rawOutput.adapterNotice === "string"
+      ? capText(rawOutput.adapterNotice, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH)
+      : undefined;
+
   return {
-    source: output.source,
-    cards: capCards(output.cards),
-    summary: capText(output.summary, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH),
-    nextHeartbeatHint: capText(
-      output.nextHeartbeatHint,
+    source: isFacilitatorSource(rawOutput.source)
+      ? rawOutput.source
+      : "local-fallback",
+    cards: capCards(Array.isArray(rawOutput.cards) ? rawOutput.cards : []),
+    summary: capOutputText(rawOutput.summary, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH),
+    nextHeartbeatHint: capOutputText(
+      rawOutput.nextHeartbeatHint,
       MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
     ),
-    reviewMarkdown: capText(
-      output.reviewMarkdown,
+    reviewMarkdown: capOutputText(
+      rawOutput.reviewMarkdown,
       MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH
     ),
-    agendaActions: capAgendaActions(output.agendaActions),
-    uiActions: capUiActions(output.uiActions),
+    agendaActions: capAgendaActions(
+      Array.isArray(rawOutput.agendaActions) ? rawOutput.agendaActions : []
+    ),
+    uiActions: capUiActions(
+      Array.isArray(rawOutput.uiActions) ? rawOutput.uiActions : []
+    ),
     ephemeralReminder:
-      output.ephemeralReminder === null
-        ? null
-        : capText(output.ephemeralReminder, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH),
-    adapterNotice:
-      output.adapterNotice === undefined
-        ? undefined
-        : capText(output.adapterNotice, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH)
+      typeof rawOutput.ephemeralReminder === "string"
+        ? capText(rawOutput.ephemeralReminder, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH)
+        : null,
+    ...(adapterNotice === undefined ? {} : { adapterNotice })
   };
 }
 
-function capCards(cards: FacilitatorCard[]): FacilitatorCard[] {
+function isFacilitatorSource(
+  value: unknown
+): value is FacilitatorOutput["source"] {
+  return value === "pi" || value === "openrouter" || value === "local-fallback";
+}
+
+function capOutputText(value: unknown, maxLength: number): string {
+  return typeof value === "string" ? capText(value, maxLength) : "";
+}
+
+function capCards(cards: unknown[]): FacilitatorCard[] {
   const cappedCards = cards
     .filter(isRuntimeFacilitatorCard)
     .slice(0, MAX_FACILITATOR_OUTPUT_CARDS);
@@ -256,7 +275,7 @@ function uniqueDerivedCardId(
   return candidate;
 }
 
-function capAgendaActions(actions: AgendaAction[]): AgendaAction[] {
+function capAgendaActions(actions: unknown[]): AgendaAction[] {
   const order: string[] = [];
   const byItem = new Map<string, AgendaAction>();
 
@@ -285,7 +304,7 @@ function capAgendaActions(actions: AgendaAction[]): AgendaAction[] {
     .slice(0, MAX_AGENDA_ITEMS);
 }
 
-export function capUiActions(actions: UiAction[]): UiAction[] {
+export function capUiActions(actions: unknown[]): UiAction[] {
   const normalizedActions = actions
     .map(capUiActionText)
     .filter((action): action is UiAction => Boolean(action));
@@ -308,8 +327,12 @@ export function capUiActions(actions: UiAction[]): UiAction[] {
   ];
 }
 
-function capUiActionText(action: UiAction): UiAction | null {
-  if (!isKnownUiTool(action.tool) || !isRecord(action.parameters)) {
+function capUiActionText(action: unknown): UiAction | null {
+  if (
+    !isRecord(action) ||
+    !isKnownUiTool(action.tool) ||
+    !isRecord(action.parameters)
+  ) {
     return null;
   }
 
@@ -352,11 +375,11 @@ function capUiActionText(action: UiAction): UiAction | null {
   return {
     tool: action.tool,
     parameters,
-    reason: capText(action.reason, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH)
+    reason: cappedStringParam(action.reason) ?? ""
   };
 }
 
-function isKnownUiTool(tool: string): tool is UiToolName {
+function isKnownUiTool(tool: unknown): tool is UiToolName {
   return (
     tool === "add_agenda_item" ||
     tool === "set_agenda_item" ||

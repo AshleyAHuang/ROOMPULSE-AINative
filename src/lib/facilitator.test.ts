@@ -902,6 +902,31 @@ describe("heartbeat facilitation", () => {
     ]);
   });
 
+  it("normalizes malformed top-level facilitator output fields", () => {
+    const output = {
+      source: "external-agent",
+      cards: null,
+      summary: null,
+      nextHeartbeatHint: { text: "Continue." },
+      reviewMarkdown: null,
+      agendaActions: "agenda",
+      uiActions: "actions",
+      ephemeralReminder: 42,
+      adapterNotice: { message: "bad notice" }
+    } as unknown as FacilitatorOutput;
+
+    expect(capFacilitatorOutput(output)).toEqual({
+      source: "local-fallback",
+      cards: [],
+      summary: "",
+      nextHeartbeatHint: "",
+      reviewMarkdown: "",
+      agendaActions: [],
+      uiActions: [],
+      ephemeralReminder: null
+    });
+  });
+
   it("auto-checks an agenda item when transcript says it was covered", () => {
     const updated = applyAgendaCoverage(meeting.agenda, [
       {
