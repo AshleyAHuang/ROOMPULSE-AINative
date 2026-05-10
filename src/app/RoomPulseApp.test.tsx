@@ -782,6 +782,95 @@ describe("RoomPulseApp", () => {
     );
   });
 
+  it("does not let late live demo initialization overwrite a heartbeat review", async () => {
+    let resolveInit: ((response: Response) => void) | null = null;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/meetings") {
+        return Response.json(
+          {
+            id: "demo-session",
+            title: "RoomPulse MVP readiness review",
+            goal: "Strict init can finish late.",
+            startedAt: Date.now(),
+            updatedAt: Date.now(),
+            endedAt: null,
+            status: "active",
+            isPaused: false,
+            eventCount: 0,
+            meeting: {},
+            state: null,
+            latestReviewMarkdown: "",
+            latestReviewVersionId: null
+          },
+          { status: 201 }
+        );
+      }
+      if (url.includes("/api/review-document/init")) {
+        return new Promise<Response>((resolve) => {
+          resolveInit = resolve;
+        });
+      }
+      if (url.includes("/api/heartbeat")) {
+        return Response.json({
+          source: "pi",
+          cards: [
+            {
+              id: "heartbeat-card",
+              kind: "heartbeat",
+              title: "Heartbeat applied",
+              body: "The heartbeat review is newer than initialization.",
+              priority: "medium"
+            }
+          ],
+          summary: "Heartbeat review.",
+          nextHeartbeatHint: "Continue.",
+          reviewMarkdown: "# Heartbeat review\n\nNewer content.",
+          agendaActions: [],
+          uiActions: [],
+          ephemeralReminder: null
+        });
+      }
+      if (url.includes("/events")) {
+        return Response.json({ id: "event-1" }, { status: 201 });
+      }
+      return Response.json({ meetings: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /launch live demo/i }));
+    });
+    await waitFor(() => expect(resolveInit).not.toBeNull());
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /run heartbeat/i }));
+    });
+    expect(
+      await screen.findByRole("heading", { name: /heartbeat review/i })
+    ).toBeVisible();
+
+    await act(async () => {
+      resolveInit?.(
+        Response.json({
+          source: "pi",
+          markdown: "# Late initial review\n\nOlder content.",
+          summary: "Late initialization."
+        })
+      );
+      await Promise.resolve();
+    });
+
+    expect(
+      screen.getByRole("heading", { name: /heartbeat review/i })
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("heading", { name: /late initial review/i })
+    ).not.toBeInTheDocument();
+  });
+
   it("keeps scripted transcript running while heartbeat review is pending", async () => {
     vi.useFakeTimers();
     process.env.NEXT_PUBLIC_ROOMPULSE_PI_TIMEOUT_MS = "60000";
