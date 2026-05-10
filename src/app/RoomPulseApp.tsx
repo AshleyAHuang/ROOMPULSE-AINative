@@ -160,7 +160,7 @@ export default function RoomPulseApp() {
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   const [lastHeartbeatAt, setLastHeartbeatAt] = useState(0);
   const [nextHeartbeatAt, setNextHeartbeatAt] = useState(0);
-  const [now, setNow] = useState(() => Date.now());
+  const [now, setNow] = useState(0);
   const [isHeartbeatRunning, setIsHeartbeatRunning] = useState(false);
   const [heartbeatError, setHeartbeatError] = useState<string | null>(null);
   const [micStatus, setMicStatus] = useState("Local transcription idle");
@@ -187,7 +187,7 @@ export default function RoomPulseApp() {
   const [reviewVersions, setReviewVersions] = useState<ReviewVersion[]>([
     {
       id: "initial-review",
-      timestamp: Date.now(),
+      timestamp: 0,
       source: "initial",
       markdown: createInitialReviewMarkdown(defaultMeeting),
       summary: "Initial meeting review document."
@@ -219,7 +219,7 @@ export default function RoomPulseApp() {
   const agendaItemSequenceRef = useRef(0);
   const agendaCountRef = useRef(defaultMeeting.agenda.length);
   const reviewRestoreSequenceRef = useRef(0);
-  const reviewLastUpdatedAtRef = useRef(Date.now());
+  const reviewLastUpdatedAtRef = useRef(0);
   const heartbeatIntervalSecondsRef = useRef(
     defaultMeeting.heartbeatIntervalSeconds
   );
@@ -1162,6 +1162,7 @@ export default function RoomPulseApp() {
   }, [createMeetingLogFor, logMeetingEvent, startScriptedDemo]);
 
   useEffect(() => {
+    setNow(Date.now());
     const timer = setInterval(() => {
       setNow(Date.now());
     }, 1000);
@@ -3185,10 +3186,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function formatClock(timestamp: number): string {
-  return new Intl.DateTimeFormat("en", {
+  return new Intl.DateTimeFormat("en-US", {
     hour: "numeric",
     minute: "2-digit",
-    second: "2-digit"
+    second: "2-digit",
+    timeZone: "America/Los_Angeles"
   }).format(new Date(timestamp));
 }
 
