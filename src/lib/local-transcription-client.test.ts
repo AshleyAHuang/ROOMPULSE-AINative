@@ -224,6 +224,64 @@ describe("local transcription audio utilities", () => {
     expect(stopTrack).toHaveBeenCalledOnce();
   });
 
+  it("closes a pending transcription socket when mic start is stopped during connect", async () => {
+    const stopTrack = vi.fn();
+    let socket:
+      | {
+          readyState: number;
+          onopen: (() => void) | null;
+          onerror: (() => void) | null;
+          onclose: (() => void) | null;
+          close: ReturnType<typeof vi.fn>;
+        }
+      | null = null;
+    const WebSocketMock = vi.fn(function WebSocketMock() {
+      socket = {
+        readyState: 0,
+        onopen: null,
+        onerror: null,
+        onclose: null,
+        close: vi.fn()
+      };
+      return socket;
+    });
+    Object.assign(WebSocketMock, { OPEN: 1 });
+    vi.stubGlobal("navigator", {
+      mediaDevices: {
+        getUserMedia: vi.fn().mockResolvedValue({
+          getTracks: () => [
+            {
+              onended: null,
+              stop: stopTrack
+            }
+          ]
+        })
+      }
+    });
+    vi.stubGlobal("WebSocket", WebSocketMock);
+    Object.defineProperty(window, "AudioContext", {
+      configurable: true,
+      value: vi.fn()
+    });
+
+    const client = new LocalTranscriptionClient({
+      onSegment: vi.fn(),
+      onStatus: vi.fn(),
+      onError: vi.fn()
+    });
+
+    const startPromise = client.start();
+    await Promise.resolve();
+    expect(WebSocketMock).toHaveBeenCalledOnce();
+
+    await client.stop();
+    socket?.onclose?.();
+
+    expect(socket?.close).toHaveBeenCalledOnce();
+    expect(stopTrack).toHaveBeenCalledOnce();
+    await expect(startPromise).rejects.toThrow("Microphone start cancelled.");
+  });
+
   it("rejects malformed transcript socket messages before updating the UI", () => {
     const onSegment = vi.fn();
     const onError = vi.fn();

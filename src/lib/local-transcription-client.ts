@@ -109,7 +109,9 @@ export class LocalTranscriptionClient {
         status: "connecting",
         message: "Connecting to local transcription service"
       });
-      this.socket = await openSocket(this.url);
+      this.socket = await openSocket(this.url, (pendingSocket) => {
+        this.socket = pendingSocket;
+      });
       this.throwIfStoppedDuringStart();
       const socket = this.socket;
       socket.binaryType = "arraybuffer";
@@ -158,7 +160,11 @@ export class LocalTranscriptionClient {
         message: "Microphone active; streaming audio to local transcription"
       });
     } catch (error) {
+      const wasStopped = this.stopped;
       this.stopImmediately();
+      if (wasStopped) {
+        throw new Error("Microphone start cancelled.");
+      }
       throw error;
     }
   }
@@ -440,11 +446,15 @@ function getSocketFlushTimeoutMs(): number {
     : DEFAULT_SOCKET_FLUSH_TIMEOUT_MS;
 }
 
-function openSocket(url: string): Promise<WebSocket> {
+function openSocket(
+  url: string,
+  onPendingSocket?: (socket: WebSocket) => void
+): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     let settled = false;
     let timeout = 0;
     const socket = new WebSocket(url);
+    onPendingSocket?.(socket);
     const rejectConnection = () => {
       if (settled) {
         return;
