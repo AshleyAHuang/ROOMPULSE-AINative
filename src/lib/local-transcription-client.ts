@@ -317,6 +317,7 @@ export class LocalTranscriptionClient {
   }
 
   private handleSocketClose(socket: WebSocket): void {
+    this.stopped = true;
     const shouldNotify =
       this.socket === socket ||
       this.stream !== null ||
