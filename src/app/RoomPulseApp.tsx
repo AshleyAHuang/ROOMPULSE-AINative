@@ -247,7 +247,9 @@ export default function RoomPulseApp() {
       ? 0
       : Math.round((agendaProgress.completed / agendaProgress.total) * 100);
   const activeAgendaItem =
-    meeting.agenda.find((item) => item.id === activeAgendaItemId) ??
+    meeting.agenda.find(
+      (item) => item.id === activeAgendaItemId && !item.done
+    ) ??
     agendaProgress.active ??
     meeting.agenda[0] ??
     null;

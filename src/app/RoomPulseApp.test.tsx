@@ -1,4 +1,11 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import RoomPulseApp, { previousReviewVersion } from "./RoomPulseApp";
 
@@ -254,6 +261,78 @@ describe("RoomPulseApp", () => {
       };
       expect(meeting.agenda).toHaveLength(30);
       expect(meeting.participants).toHaveLength(24);
+    });
+  });
+
+  it("moves now discussing to the next open agenda item when the active item is completed", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url === "/api/meetings" && method === "GET") {
+        return Response.json({ meetings: [] });
+      }
+      if (url.includes("/api/review-document/init")) {
+        return Response.json({
+          source: "pi",
+          markdown: "# Agenda advance",
+          summary: "Initialized."
+        });
+      }
+      if (url === "/api/meetings" && method === "POST") {
+        return Response.json(
+          {
+            id: "agenda-advance-session",
+            title: "Agenda advance",
+            goal: "Keep the active topic accurate.",
+            startedAt: Date.now(),
+            updatedAt: Date.now(),
+            endedAt: null,
+            status: "active",
+            isPaused: false,
+            eventCount: 0,
+            meeting: {},
+            state: null,
+            latestReviewMarkdown: "",
+            latestReviewVersionId: null
+          },
+          { status: 201 }
+        );
+      }
+      if (url.includes("/events")) {
+        return Response.json({ id: "event-1" }, { status: 201 });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+
+    const nowDiscussing = await screen.findByRole("region", {
+      name: /now discussing/i
+    });
+    expect(
+      within(nowDiscussing).getByRole("heading", {
+        name: /confirm the meeting goal/i
+      })
+    ).toBeVisible();
+
+    const agenda = screen.getByRole("region", { name: /^agenda$/i });
+    fireEvent.click(
+      within(agenda).getByRole("checkbox", {
+        name: /confirm the meeting goal/i
+      })
+    );
+
+    await waitFor(() => {
+      expect(
+        within(nowDiscussing).getByRole("heading", {
+          name: /list open risks and blockers/i
+        })
+      ).toBeVisible();
     });
   });
 
