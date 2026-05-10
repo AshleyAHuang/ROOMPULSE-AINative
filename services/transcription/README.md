@@ -24,8 +24,8 @@ on stable speaker examples as well as the live centroid instead of letting one
 mixed or noisy segment drag every future voice into `Speaker 1`.
 
 For better voice categorization, install the optional speaker stack and use a
-neural speaker encoder from the pyannote.audio, SpeechBrain, Resemblyzer, or
-NVIDIA NeMo/TitaNet projects:
+neural speaker encoder from the pyannote.audio, SpeechBrain, Resemblyzer,
+NVIDIA NeMo/TitaNet, or WeSpeaker projects:
 
 ```bash
 uv sync --extra speaker
@@ -39,14 +39,19 @@ ROOMPULSE_SPEAKER_EMBEDDING_BACKEND=speechbrain \
 uv sync --extra speaker-nemo
 ROOMPULSE_SPEAKER_EMBEDDING_BACKEND=nemo \
   uv run uvicorn server:app --host 127.0.0.1 --port 8765
+
+uv pip install "git+https://github.com/wenet-e2e/wespeaker.git"
+ROOMPULSE_SPEAKER_EMBEDDING_BACKEND=wespeaker \
+  uv run uvicorn server:app --host 127.0.0.1 --port 8765
 ```
 
 `ROOMPULSE_SPEAKER_EMBEDDING_BACKEND=auto` attempts pyannote first when a
 Hugging Face token is configured, then SpeechBrain, then Resemblyzer, then the
 built-in DSP embedder. Set `ROOMPULSE_NEMO_AUTO=1` to also try NeMo during
-automatic resolution. Explicit neural selections accept common aliases such as
-`pyannote-embedding`, `speechbrain-ecapa`, and `titanet`, and fall back to DSP
-per segment if the selected neural encoder cannot produce a valid embedding.
+automatic resolution. Set `ROOMPULSE_WESPEAKER_AUTO=1` to also try WeSpeaker.
+Explicit neural selections accept common aliases such as `pyannote-embedding`,
+`speechbrain-ecapa`, `titanet`, and `we-speaker`, and fall back to DSP per
+segment if the selected neural encoder cannot produce a valid embedding.
 Explicit neural backends circuit-break to DSP after repeated failures so a
 missing gated model or broken local Torch install does not stall every transcript
 window. Use `dsp` for the fastest dependency-free local path.
@@ -67,11 +72,11 @@ Useful environment variables:
 - `ROOMPULSE_TRANSCRIPTION_MIN_SECONDS`: default `2.0`
 - `ROOMPULSE_TRANSCRIPTION_MAX_SECONDS`: default `4.0`
 - `ROOMPULSE_SPEAKER_EMBEDDING_BACKEND`: `auto`, `speechbrain`, `resemblyzer`,
-  `pyannote`, or `dsp`; default `auto`
+  `pyannote`, `nemo`, `wespeaker`, or `dsp`; default `auto`
 - `ROOMPULSE_SPEAKER_DISTANCE_THRESHOLD`: lower splits speaker clusters more
   aggressively, higher merges more aggressively. Defaults to `0.14` for DSP
   embeddings, `0.32` for pyannote embeddings, `0.28` for SpeechBrain ECAPA,
-  and `0.30` for Resemblyzer.
+  `0.30` for Resemblyzer, `0.30` for NeMo/TitaNet, and `0.28` for WeSpeaker.
 - `ROOMPULSE_SPEAKER_MIN_QUALITY`: default `0.18`; short or noisy segments
   below this quality are assigned to the closest existing cluster instead of
   creating a throwaway speaker or corrupting a centroid.
@@ -93,6 +98,12 @@ Useful environment variables:
 - `ROOMPULSE_NEMO_MODEL`: default `nvidia/speakerverification_en_titanet_large`
 - `ROOMPULSE_NEMO_DEVICE`: optional Torch device override
 - `ROOMPULSE_NEMO_AUTO`: default `0`; set `1` to let auto mode try NeMo
+- `ROOMPULSE_WESPEAKER_MODEL`: default `english`
+- `ROOMPULSE_WESPEAKER_MODEL_DIR`: optional local WeSpeaker model directory
+- `ROOMPULSE_WESPEAKER_DEVICE`: default `cpu`; accepts `cpu`, `cuda`, `cuda:N`,
+  or a numeric GPU index
+- `ROOMPULSE_WESPEAKER_AUTO`: default `0`; set `1` to let auto mode try
+  WeSpeaker
 
 Health check:
 

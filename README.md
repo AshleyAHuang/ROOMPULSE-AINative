@@ -202,29 +202,37 @@ ROOMPULSE_SPEAKER_DISTANCE_THRESHOLD=0.14 npm run transcription
 ```
 
 The defaults are backend-specific: `0.14` for DSP, `0.32` for pyannote,
-`0.28` for SpeechBrain ECAPA, and `0.30` for Resemblyzer. The service also
-quality-gates speaker embeddings so short/noisy chunks do not create throwaway
-speakers or pull an existing speaker centroid toward background noise. Tune
-that with `ROOMPULSE_SPEAKER_MIN_QUALITY` when needed.
+`0.28` for SpeechBrain ECAPA, `0.30` for Resemblyzer, `0.30` for NeMo/TitaNet,
+and `0.28` for WeSpeaker. The service also quality-gates speaker embeddings so
+short/noisy chunks do not create throwaway speakers or pull an existing speaker
+centroid toward background noise. Tune that with `ROOMPULSE_SPEAKER_MIN_QUALITY`
+when needed.
 
 For stronger local voice categorization, the transcription service supports
-optional neural speaker embeddings from pyannote.audio, SpeechBrain, and
-Resemblyzer. Install the optional Python speaker stack and select the backend:
+optional neural speaker embeddings from pyannote.audio, SpeechBrain,
+Resemblyzer, NVIDIA NeMo/TitaNet, and WeSpeaker. Install the optional Python
+speaker stack and select the backend:
 
 ```bash
 cd services/transcription
 uv sync --extra speaker
 ROOMPULSE_SPEAKER_EMBEDDING_BACKEND=pyannote ROOMPULSE_PYANNOTE_AUTH_TOKEN=hf_... uv run uvicorn server:app --host 127.0.0.1 --port 8765
 ROOMPULSE_SPEAKER_EMBEDDING_BACKEND=speechbrain uv run uvicorn server:app --host 127.0.0.1 --port 8765
+uv sync --extra speaker-nemo
+ROOMPULSE_SPEAKER_EMBEDDING_BACKEND=nemo uv run uvicorn server:app --host 127.0.0.1 --port 8765
+uv pip install "git+https://github.com/wenet-e2e/wespeaker.git"
+ROOMPULSE_SPEAKER_EMBEDDING_BACKEND=wespeaker uv run uvicorn server:app --host 127.0.0.1 --port 8765
 ```
 
 `ROOMPULSE_SPEAKER_EMBEDDING_BACKEND=auto` tries pyannote first when a Hugging
 Face token is configured, then SpeechBrain, then Resemblyzer, then the built-in
-DSP embedder. The neural path gives better recurring-voice separation, while
-the DSP path is fastest and dependency-free. Explicit neural selections are
-wrapped with the DSP embedder as a per-segment fallback and circuit-break to
-DSP after repeated failures, so a missing gated model or broken Torch install
-does not stall every transcript window. `ROOMPULSE_SPEAKER_MAX_CLUSTERS`
+DSP embedder. Set `ROOMPULSE_NEMO_AUTO=1` or `ROOMPULSE_WESPEAKER_AUTO=1` to
+include those heavier backends in auto mode. The neural path gives better
+recurring-voice separation, while the DSP path is fastest and dependency-free.
+Explicit neural selections are wrapped with the DSP embedder as a per-segment
+fallback and circuit-break to DSP after repeated failures, so a missing gated
+model or broken Torch install does not stall every transcript window.
+`ROOMPULSE_SPEAKER_MAX_CLUSTERS`
 defaults to `12` to prevent noise or backend churn from creating unbounded
 `Speaker N` labels. When the optional speaker stack is installed, the service
 also uses WebRTC VAD before Whisper to reject background noise before it becomes
@@ -239,12 +247,13 @@ and RMS normalization. You can trade speed for accuracy with
 ## Speaker Recognition Limitations
 
 The MVP diarization is approximate and not biometric identity. The local service
-can use pyannote.audio embeddings, SpeechBrain ECAPA, or Resemblyzer speaker
-embeddings when installed, and otherwise uses speech-window audio features,
-MFCC-style cepstra, spectral contrast, voiced-frame spectral shape, RMS,
-zero-crossing rate, and pitch estimate to cluster recurring voice patterns into
-`Speaker 1`, `Speaker 2`, etc. Room noise, overlapping speech, microphone
-placement, and similar voices can produce incorrect labels. It does not
+can use pyannote.audio embeddings, SpeechBrain ECAPA, Resemblyzer,
+NeMo/TitaNet, or WeSpeaker speaker embeddings when installed, and otherwise
+uses speech-window audio features, MFCC-style cepstra, spectral contrast,
+voiced-frame spectral shape, RMS, zero-crossing rate, and pitch estimate to
+cluster recurring voice patterns into `Speaker 1`, `Speaker 2`, etc. Room
+noise, overlapping speech, microphone placement, and similar voices can
+produce incorrect labels. It does not
 identify named people unless a later calibration flow maps a cluster to a
 participant name.
 

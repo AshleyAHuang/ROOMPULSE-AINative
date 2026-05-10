@@ -39,6 +39,7 @@ DEFAULT_NEURAL_SPEAKER_DISTANCE_THRESHOLDS = {
     "speechbrain-ecapa": 0.28,
     "resemblyzer": 0.30,
     "nemo-titanet": 0.30,
+    "wespeaker": 0.28,
 }
 DEFAULT_NEURAL_SPEAKER_DISTANCE_THRESHOLD = 0.30
 DEFAULT_SPEAKER_MIN_QUALITY = 0.18
@@ -54,6 +55,7 @@ DEFAULT_VAD_MODE = 2
 SPEECHBRAIN_MODEL = "speechbrain/spkrec-ecapa-voxceleb"
 PYANNOTE_MODEL = "pyannote/embedding"
 NEMO_MODEL = "nvidia/speakerverification_en_titanet_large"
+WESPEAKER_MODEL = "english"
 REPEATED_NOISE_PHRASES = {
     "i am sorry",
     "i'm sorry",
@@ -301,7 +303,11 @@ class PyannoteVoiceEmbedder:
                     except OSError:
                         pass
             vector = embedding_to_numpy(embedding)
-        return VoiceEmbedding(self.name, normalize_vector(vector), voice_embedding_quality(audio))
+        return VoiceEmbedding(
+            self.name,
+            normalize_vector(vector),
+            voice_embedding_quality(audio),
+        )
 
     def _load(self):
         if self._inference is not None and self._torch is not None:
@@ -342,7 +348,11 @@ class ResemblyzerVoiceEmbedder:
             encoder, preprocess_wav = self._load()
             wav = preprocess_wav(audio.astype(np.float32), source_sr=SAMPLE_RATE)
             vector = encoder.embed_utterance(wav).astype(np.float32)
-        return VoiceEmbedding(self.name, normalize_vector(vector), voice_embedding_quality(audio))
+        return VoiceEmbedding(
+            self.name,
+            normalize_vector(vector),
+            voice_embedding_quality(audio),
+        )
 
     def _load(self):
         if self._encoder is not None and self._preprocess_wav is not None:
@@ -376,7 +386,11 @@ class NemoVoiceEmbedder:
                 except OSError:
                     pass
             vector = embedding_to_numpy(embedding)
-        return VoiceEmbedding(self.name, normalize_vector(vector), voice_embedding_quality(audio))
+        return VoiceEmbedding(
+            self.name,
+            normalize_vector(vector),
+            voice_embedding_quality(audio),
+        )
 
     def _load(self):
         if self._model is not None and self._torch is not None:
@@ -394,6 +408,49 @@ class NemoVoiceEmbedder:
             self._model.eval()
         self._torch = torch
         return self._model, self._torch
+
+
+class WeSpeakerVoiceEmbedder:
+    name = "wespeaker"
+
+    def __init__(self) -> None:
+        self._model = None
+        self._lock = threading.Lock()
+
+    def embed(self, audio: np.ndarray) -> VoiceEmbedding:
+        with self._lock:
+            model = self._load()
+            path = write_temp_wav(audio)
+            try:
+                embedding = model.extract_embedding(path)
+            finally:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+            vector = embedding_to_numpy(embedding)
+        return VoiceEmbedding(
+            self.name,
+            normalize_vector(vector),
+            voice_embedding_quality(audio),
+        )
+
+    def _load(self):
+        if self._model is not None:
+            return self._model
+
+        import wespeaker
+
+        model_path = os.getenv("ROOMPULSE_WESPEAKER_MODEL_DIR")
+        if model_path:
+            self._model = wespeaker.load_model_local(model_path)
+        else:
+            model_name = os.getenv("ROOMPULSE_WESPEAKER_MODEL", WESPEAKER_MODEL)
+            self._model = wespeaker.load_model(model_name)
+
+        if hasattr(self._model, "set_gpu"):
+            self._model.set_gpu(wespeaker_gpu_index())
+        return self._model
 
 
 class FallbackVoiceEmbedder:
@@ -445,6 +502,8 @@ class AutoVoiceEmbedder:
                 candidates.append(SpeechBrainVoiceEmbedder())
                 if os.getenv("ROOMPULSE_NEMO_AUTO", "0") == "1":
                     candidates.append(NemoVoiceEmbedder())
+                if os.getenv("ROOMPULSE_WESPEAKER_AUTO", "0") == "1":
+                    candidates.append(WeSpeakerVoiceEmbedder())
                 candidates.append(ResemblyzerVoiceEmbedder())
                 for candidate in candidates:
                     try:
@@ -492,6 +551,8 @@ def get_voice_embedder() -> VoiceEmbedder:
             voice_embedder = FallbackVoiceEmbedder(ResemblyzerVoiceEmbedder())
         elif backend == "nemo":
             voice_embedder = FallbackVoiceEmbedder(NemoVoiceEmbedder())
+        elif backend == "wespeaker":
+            voice_embedder = FallbackVoiceEmbedder(WeSpeakerVoiceEmbedder())
         elif backend == "dsp":
             voice_embedder = DspVoiceEmbedder()
         else:
@@ -523,6 +584,9 @@ def normalize_speaker_backend(raw: str | None) -> str:
         "nemo-titanet": "nemo",
         "titanet": "nemo",
         "nvidia-titanet": "nemo",
+        "we-speaker": "wespeaker",
+        "wespeaker-english": "wespeaker",
+        "wespeaker-voxceleb": "wespeaker",
         "local": "dsp",
         "features": "dsp",
     }
@@ -1028,14 +1092,16 @@ def suppress_low_energy_noise(audio: np.ndarray) -> np.ndarray:
             mode="same",
         )
 
-    gain = np.ones(audio.size, dtype=np.float32)
-    weight = np.zeros(audio.size, dtype=np.float32)
-    for start, value in zip(starts.tolist(), frame_gain.tolist()):
-        end = min(audio.size, start + frame_size)
-        gain[start:end] += value
-        weight[start:end] += 1.0
-    active = weight > 0
-    gain[active] = gain[active] / (weight[active] + 1.0)
+    centers = starts + frame_size // 2
+    if centers.size == 1:
+        return audio * float(frame_gain[0])
+    gain = np.interp(
+        np.arange(audio.size, dtype=np.float32),
+        centers.astype(np.float32),
+        frame_gain.astype(np.float32),
+        left=float(frame_gain[0]),
+        right=float(frame_gain[-1]),
+    ).astype(np.float32)
     return audio * gain
 
 
@@ -1183,6 +1249,25 @@ def speaker_backend_failure_limit() -> int:
         os.getenv("ROOMPULSE_SPEAKER_BACKEND_FAILURE_LIMIT"),
         DEFAULT_SPEAKER_BACKEND_FAILURE_LIMIT,
     )
+
+
+def wespeaker_gpu_index() -> int:
+    raw = os.getenv("ROOMPULSE_WESPEAKER_DEVICE", "cpu").strip().lower()
+    if raw in {"", "cpu", "mps"}:
+        return -1
+    if raw == "cuda":
+        return 0
+    if raw.startswith("cuda:"):
+        return parse_nonnegative_int_value(raw.split(":", 1)[1], 0)
+    return parse_nonnegative_int_value(raw, -1)
+
+
+def parse_nonnegative_int_value(raw: object, default: int) -> int:
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if value >= 0 else default
 
 
 def log_frequency_bands(

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import MeetingReviewClient from "./review-client";
 import type { MeetingLogSnapshot } from "@/lib/meeting-log-store";
@@ -56,6 +56,7 @@ describe("MeetingReviewClient", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("copies transcript through the DOM fallback when clipboard API is unavailable", async () => {
@@ -134,6 +135,38 @@ describe("MeetingReviewClient", () => {
         "Could not copy transcript"
       );
     });
+  });
+
+  it("keeps the newest copy toast visible for its full timeout", async () => {
+    vi.useFakeTimers();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+
+    render(<MeetingReviewClient snapshot={snapshot} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /copy transcript/i }));
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("status")).toHaveTextContent("Copied transcript");
+
+    await act(async () => {
+      vi.advanceTimersByTime(1_000);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /copy latest review/i }));
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("status")).toHaveTextContent("Copied review");
+
+    await act(async () => {
+      vi.advanceTimersByTime(700);
+    });
+    expect(screen.getByRole("status")).toHaveTextContent("Copied review");
+
+    await act(async () => {
+      vi.advanceTimersByTime(900);
+    });
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("exports transcript with a stable fallback filename", () => {

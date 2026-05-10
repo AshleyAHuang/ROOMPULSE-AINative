@@ -20,6 +20,7 @@ from server import (
     SpeakerClusterer,
     TranscriptionSession,
     VoiceEmbedding,
+    WeSpeakerVoiceEmbedder,
     build_dsp_voice_embedding,
     clean_transcript_text,
     cluster_voice_distance,
@@ -32,6 +33,7 @@ from server import (
     transcribe_audio,
     transcription_window_seconds,
     voice_embedding_quality,
+    wespeaker_gpu_index,
 )
 
 
@@ -175,6 +177,10 @@ class SpeakerClustererTest(unittest.TestCase):
             clusterer.distance_threshold("pyannote-embedding"),
             DEFAULT_NEURAL_SPEAKER_DISTANCE_THRESHOLDS["pyannote-embedding"],
         )
+        self.assertEqual(
+            clusterer.distance_threshold("wespeaker"),
+            DEFAULT_NEURAL_SPEAKER_DISTANCE_THRESHOLDS["wespeaker"],
+        )
 
     def test_invalid_speaker_threshold_env_falls_back_to_backend_default(self) -> None:
         previous_threshold = os.environ.get("ROOMPULSE_SPEAKER_DISTANCE_THRESHOLD")
@@ -252,6 +258,35 @@ class SpeakerClustererTest(unittest.TestCase):
 
         self.assertIsInstance(embedder, FallbackVoiceEmbedder)
         self.assertIsInstance(embedder.primary, NemoVoiceEmbedder)
+
+    def test_explicit_wespeaker_backend_can_be_selected_without_loading_model(self) -> None:
+        previous_backend = os.environ.get("ROOMPULSE_SPEAKER_EMBEDDING_BACKEND")
+        server.voice_embedder = None
+        os.environ["ROOMPULSE_SPEAKER_EMBEDDING_BACKEND"] = "we-speaker"
+        try:
+            embedder = get_voice_embedder()
+        finally:
+            server.voice_embedder = None
+            restore_env("ROOMPULSE_SPEAKER_EMBEDDING_BACKEND", previous_backend)
+
+        self.assertIsInstance(embedder, FallbackVoiceEmbedder)
+        self.assertIsInstance(embedder.primary, WeSpeakerVoiceEmbedder)
+
+    def test_wespeaker_device_env_maps_to_gpu_index(self) -> None:
+        previous_device = os.environ.get("ROOMPULSE_WESPEAKER_DEVICE")
+        try:
+            os.environ["ROOMPULSE_WESPEAKER_DEVICE"] = "cpu"
+            self.assertEqual(wespeaker_gpu_index(), -1)
+            os.environ["ROOMPULSE_WESPEAKER_DEVICE"] = "cuda"
+            self.assertEqual(wespeaker_gpu_index(), 0)
+            os.environ["ROOMPULSE_WESPEAKER_DEVICE"] = "cuda:2"
+            self.assertEqual(wespeaker_gpu_index(), 2)
+            os.environ["ROOMPULSE_WESPEAKER_DEVICE"] = "0"
+            self.assertEqual(wespeaker_gpu_index(), 0)
+            os.environ["ROOMPULSE_WESPEAKER_DEVICE"] = "bad-device"
+            self.assertEqual(wespeaker_gpu_index(), -1)
+        finally:
+            restore_env("ROOMPULSE_WESPEAKER_DEVICE", previous_device)
 
     def test_fallback_voice_embedder_keeps_clustering_when_neural_backend_fails(self) -> None:
         embedder = FallbackVoiceEmbedder(FailingVoiceEmbedder(), DspVoiceEmbedder())

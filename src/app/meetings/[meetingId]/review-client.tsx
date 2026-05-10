@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import MarkdownDocument from "@/app/MarkdownDocument";
 import type { MeetingLogSnapshot } from "@/lib/meeting-log-store";
 
@@ -10,6 +10,7 @@ export default function MeetingReviewClient({
   snapshot: MeetingLogSnapshot;
 }) {
   const [copyMessage, setCopyMessage] = useState<string | null>(null);
+  const copyMessageTimerRef = useRef<number | null>(null);
   const latestMarkdown = useMemo(() => {
     return (
       snapshot.metadata.latestReviewMarkdown ||
@@ -28,6 +29,14 @@ export default function MeetingReviewClient({
     )
   );
 
+  useEffect(() => {
+    return () => {
+      if (copyMessageTimerRef.current !== null) {
+        window.clearTimeout(copyMessageTimerRef.current);
+      }
+    };
+  }, []);
+
   async function copy(label: string, value: string) {
     try {
       await copyText(value);
@@ -35,7 +44,13 @@ export default function MeetingReviewClient({
     } catch {
       setCopyMessage(`Could not copy ${label}`);
     }
-    window.setTimeout(() => setCopyMessage(null), 1600);
+    if (copyMessageTimerRef.current !== null) {
+      window.clearTimeout(copyMessageTimerRef.current);
+    }
+    copyMessageTimerRef.current = window.setTimeout(() => {
+      copyMessageTimerRef.current = null;
+      setCopyMessage(null);
+    }, 1600);
   }
 
   function exportTranscript() {
