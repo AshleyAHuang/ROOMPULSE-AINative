@@ -1101,6 +1101,169 @@ describe("RoomPulseApp", () => {
     ).toBeVisible();
   });
 
+  it("ignores stale heartbeat results after opening another saved meeting", async () => {
+    const now = Date.now();
+    let resolveHeartbeat: ((response: Response) => void) | null = null;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/meetings" && method === "GET") {
+          return Response.json({
+            meetings: [
+              {
+                id: "other-session",
+                title: "Other active session",
+                goal: "Resume safely.",
+                startedAt: now - 60_000,
+                updatedAt: now,
+                endedAt: null,
+                status: "paused",
+                isPaused: true,
+                eventCount: 2,
+                meeting: {},
+                state: null,
+                latestReviewMarkdown: "# Other review",
+                latestReviewVersionId: "other-review"
+              }
+            ]
+          });
+        }
+        if (url.includes("/api/review-document/init")) {
+          return Response.json({
+            source: "pi",
+            markdown: "# Current session",
+            summary: "Initialized current session."
+          });
+        }
+        if (url === "/api/heartbeat") {
+          return new Promise<Response>((resolve) => {
+            resolveHeartbeat = resolve;
+          });
+        }
+        if (url === "/api/meetings" && method === "POST") {
+          return Response.json(
+            {
+              id: "current-session",
+              title: "Current session",
+              goal: "Checkpoint before leaving.",
+              startedAt: now,
+              updatedAt: now,
+              endedAt: null,
+              status: "active",
+              isPaused: false,
+              eventCount: 0,
+              meeting: {},
+              state: null,
+              latestReviewMarkdown: "",
+              latestReviewVersionId: null
+            },
+            { status: 201 }
+          );
+        }
+        if (url === "/api/meetings/current-session" && method === "PATCH") {
+          return Response.json({ id: "current-session" });
+        }
+        if (url.includes("/events")) {
+          return Response.json({ id: "event-1" }, { status: 201 });
+        }
+        if (url === "/api/meetings/other-session") {
+          return Response.json({
+            metadata: {
+              id: "other-session",
+              title: "Other active session",
+              goal: "Resume safely.",
+              startedAt: now - 60_000,
+              updatedAt: now,
+              endedAt: null,
+              status: "paused",
+              isPaused: true,
+              eventCount: 2,
+              meeting: {
+                title: "Other active session",
+                goal: "Resume safely.",
+                context: "",
+                agenda: [{ id: "a1", title: "Open", done: false }],
+                expectedParticipants: 1,
+                participants: [],
+                heartbeatIntervalSeconds: 30
+              },
+              state: null,
+              latestReviewMarkdown: "# Other review",
+              latestReviewVersionId: "other-review"
+            },
+            events: [],
+            transcript: [],
+            reviewVersions: [
+              {
+                id: "other-review",
+                timestamp: now,
+                source: "pi",
+                markdown: "# Other review",
+                summary: "Other review."
+              }
+            ]
+          });
+        }
+        return Response.json({});
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    expect(
+      await screen.findByRole("button", { name: /run heartbeat now/i })
+    ).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /run heartbeat now/i }));
+    });
+    await waitFor(() => expect(resolveHeartbeat).not.toBeNull());
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /past meetings/i }));
+    });
+    await act(async () => {
+      fireEvent.click(
+        await screen.findByRole("button", { name: /other active session/i })
+      );
+    });
+    expect(
+      await screen.findByRole("heading", { name: /other active session/i })
+    ).toBeVisible();
+
+    await act(async () => {
+      resolveHeartbeat?.(
+        Response.json({
+          source: "pi",
+          cards: [
+            {
+              id: "stale-card",
+              kind: "heartbeat",
+              title: "Stale heartbeat",
+              body: "This response belongs to the previous session.",
+              priority: "high"
+            }
+          ],
+          summary: "Stale response.",
+          nextHeartbeatHint: "Do not apply.",
+          reviewMarkdown: "# Stale heartbeat\n\nWrong session.",
+          agendaActions: [],
+          uiActions: [],
+          ephemeralReminder: null
+        })
+      );
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole("heading", { name: /other review/i })).toBeVisible();
+    expect(screen.queryByText(/stale heartbeat/i)).not.toBeInTheDocument();
+  });
+
   it("resumes the materialized latest review instead of stale persisted markdown", async () => {
     const now = Date.now();
     const meeting = {

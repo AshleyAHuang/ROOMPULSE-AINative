@@ -206,7 +206,11 @@ The defaults are backend-specific: `0.14` for DSP, `0.32` for pyannote,
 and `0.28` for WeSpeaker. The service also quality-gates speaker embeddings so
 short/noisy chunks do not create throwaway speakers or pull an existing speaker
 centroid toward background noise. Tune that with `ROOMPULSE_SPEAKER_MIN_QUALITY`
-when needed.
+when needed. Repeated quiet but distinct voiceprints are held as pending
+speaker candidates and promoted after repeated evidence, which reduces the
+common failure mode where a quiet participant keeps being folded into
+`Speaker 1`. Tune the promotion count with
+`ROOMPULSE_PENDING_SPEAKER_PROMOTION_SAMPLES`.
 
 For stronger local voice categorization, the transcription service supports
 optional neural speaker embeddings from pyannote.audio, SpeechBrain,

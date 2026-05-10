@@ -48,6 +48,9 @@ DEFAULT_SPEAKER_HARD_CLUSTER_LIMIT = 24
 DEFAULT_SPEAKER_BACKEND_FAILURE_LIMIT = 1
 DEFAULT_SPEAKER_EMBEDDING_BACKEND = "auto"
 DEFAULT_CLUSTER_EXEMPLAR_LIMIT = 6
+DEFAULT_PENDING_SPEAKER_EXEMPLAR_LIMIT = 8
+DEFAULT_PENDING_SPEAKER_PROMOTION_SAMPLES = 2
+DEFAULT_PENDING_SPEAKER_TTL_SECONDS = 45.0
 DEFAULT_BEAM_SIZE = 5
 DEFAULT_BEST_OF = 5
 DEFAULT_NO_SPEECH_THRESHOLD = 0.55
@@ -105,6 +108,7 @@ async def health() -> JSONResponse:
             "speakerEmbeddingActiveBackend": active_voice_embedder_name(),
             "speakerMaxClusters": speaker_max_clusters(),
             "speakerClusterExemplarLimit": DEFAULT_CLUSTER_EXEMPLAR_LIMIT,
+            "speakerPendingPromotionSamples": pending_speaker_promotion_samples(),
             "voiceActivityDetector": (
                 "webrtcvad"
                 if webrtcvad is not None and os.getenv("ROOMPULSE_WEBRTC_VAD", "1") != "0"
@@ -197,6 +201,16 @@ class SpeakerCluster:
     samples: int = 1
     quality_sum: float = 1.0
     exemplars: list[np.ndarray] = field(default_factory=list)
+    last_seen_at: float = field(default_factory=time.time)
+
+
+@dataclass
+class PendingSpeakerCandidate:
+    backend: str
+    centroid: np.ndarray
+    samples: int = 1
+    quality_sum: float = 0.0
+    first_seen_at: float = field(default_factory=time.time)
     last_seen_at: float = field(default_factory=time.time)
 
 
@@ -615,12 +629,14 @@ class SpeakerClusterer:
             speaker_max_clusters(),
         )
         self.clusters: list[SpeakerCluster] = []
+        self.pending_candidates: list[PendingSpeakerCandidate] = []
 
     async def assign(self, audio: np.ndarray) -> SpeakerCluster:
         speech_audio = trim_silence(audio)
         embedding = await asyncio.to_thread(self.embedder.embed, speech_audio)
         threshold = self.distance_threshold(embedding.backend)
         min_quality = speaker_min_quality()
+        self.prune_pending_candidates()
         best: tuple[float, SpeakerCluster] | None = None
         second_best_distance: float | None = None
 
@@ -640,16 +656,17 @@ class SpeakerClusterer:
         if should_create_cluster:
             if len(self.clusters) >= self.max_clusters:
                 return self.assign_to_existing_cluster(best, embedding)
-            cluster = SpeakerCluster(
-                id=f"speaker-{len(self.clusters) + 1}",
-                label=f"Speaker {len(self.clusters) + 1}",
-                backend=embedding.backend,
-                centroid=embedding.vector,
-                quality_sum=max(embedding.quality, min_quality),
-                exemplars=[embedding.vector.copy()],
-            )
-            self.clusters.append(cluster)
-            return cluster
+            return self.create_cluster(embedding, min_quality)
+
+        if (
+            best is not None
+            and best[0] > threshold
+            and embedding.quality >= min_quality * 0.35
+            and len(self.clusters) < self.max_clusters
+        ):
+            promoted = self.update_pending_candidate(embedding, threshold, min_quality)
+            if promoted is not None:
+                return promoted
 
         cluster = best[1]
         is_ambiguous = (
@@ -678,6 +695,106 @@ class SpeakerClusterer:
         cluster.samples += 1
         cluster.last_seen_at = time.time()
         return cluster
+
+    def create_cluster(
+        self,
+        embedding: VoiceEmbedding,
+        min_quality: float,
+        samples: int = 1,
+    ) -> SpeakerCluster:
+        cluster = SpeakerCluster(
+            id=f"speaker-{len(self.clusters) + 1}",
+            label=f"Speaker {len(self.clusters) + 1}",
+            backend=embedding.backend,
+            centroid=embedding.vector.copy(),
+            samples=samples,
+            quality_sum=max(embedding.quality, min_quality),
+            exemplars=[embedding.vector.copy()],
+        )
+        self.clusters.append(cluster)
+        return cluster
+
+    def update_pending_candidate(
+        self,
+        embedding: VoiceEmbedding,
+        threshold: float,
+        min_quality: float,
+    ) -> SpeakerCluster | None:
+        best: tuple[float, PendingSpeakerCandidate] | None = None
+        for candidate in self.pending_candidates:
+            if candidate.backend != embedding.backend:
+                continue
+            distance = voice_distance(candidate.centroid, embedding.vector)
+            if best is None or distance < best[0]:
+                best = (distance, candidate)
+
+        now = time.time()
+        if best is None or best[0] > threshold * 0.85:
+            candidate = PendingSpeakerCandidate(
+                backend=embedding.backend,
+                centroid=embedding.vector.copy(),
+                quality_sum=embedding.quality,
+                last_seen_at=now,
+            )
+            self.pending_candidates.append(candidate)
+            self.trim_pending_candidates()
+            return None
+
+        candidate = best[1]
+        candidate.samples += 1
+        candidate.quality_sum += embedding.quality
+        candidate.last_seen_at = now
+        update_weight = min(
+            0.35,
+            max(0.12, embedding.quality / max(candidate.quality_sum, 1e-6)),
+        )
+        candidate.centroid = (
+            candidate.centroid * (1.0 - update_weight)
+            + embedding.vector * update_weight
+        ).astype(np.float32)
+        if embedding.backend != "dsp":
+            candidate.centroid = normalize_vector(candidate.centroid)
+
+        average_quality = candidate.quality_sum / max(1, candidate.samples)
+        if (
+            candidate.samples >= pending_speaker_promotion_samples()
+            and average_quality >= min_quality * 0.45
+        ):
+            self.pending_candidates.remove(candidate)
+            return self.create_cluster(
+                VoiceEmbedding(
+                    embedding.backend,
+                    candidate.centroid,
+                    max(average_quality, min_quality),
+                ),
+                min_quality,
+                samples=candidate.samples,
+            )
+        return None
+
+    def prune_pending_candidates(self) -> None:
+        if not self.pending_candidates:
+            return
+        cutoff = time.time() - DEFAULT_PENDING_SPEAKER_TTL_SECONDS
+        self.pending_candidates = [
+            candidate
+            for candidate in self.pending_candidates
+            if candidate.last_seen_at >= cutoff
+        ]
+        self.trim_pending_candidates()
+
+    def trim_pending_candidates(self) -> None:
+        if len(self.pending_candidates) <= DEFAULT_PENDING_SPEAKER_EXEMPLAR_LIMIT:
+            return
+        self.pending_candidates.sort(
+            key=lambda candidate: (
+                candidate.samples,
+                candidate.quality_sum,
+                candidate.last_seen_at,
+            ),
+            reverse=True,
+        )
+        del self.pending_candidates[DEFAULT_PENDING_SPEAKER_EXEMPLAR_LIMIT:]
 
     def assign_to_existing_cluster(
         self,
@@ -1236,6 +1353,13 @@ def speaker_max_clusters() -> int:
             DEFAULT_SPEAKER_MAX_CLUSTERS,
         ),
         DEFAULT_SPEAKER_HARD_CLUSTER_LIMIT,
+    )
+
+
+def pending_speaker_promotion_samples() -> int:
+    return parse_positive_int(
+        os.getenv("ROOMPULSE_PENDING_SPEAKER_PROMOTION_SAMPLES"),
+        DEFAULT_PENDING_SPEAKER_PROMOTION_SAMPLES,
     )
 
 

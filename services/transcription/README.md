@@ -80,6 +80,9 @@ Useful environment variables:
 - `ROOMPULSE_SPEAKER_MIN_QUALITY`: default `0.18`; short or noisy segments
   below this quality are assigned to the closest existing cluster instead of
   creating a throwaway speaker or corrupting a centroid.
+- `ROOMPULSE_PENDING_SPEAKER_PROMOTION_SAMPLES`: default `2`; repeated quiet
+  but distinct voiceprints are promoted from pending candidates into a new
+  `Speaker N` cluster after this many matching segments.
 - `ROOMPULSE_SPEAKER_MAX_CLUSTERS`: default `12`; caps live `Speaker N`
   creation so noise or backend churn cannot create unbounded speaker labels.
   Values are hard-capped at `24`.

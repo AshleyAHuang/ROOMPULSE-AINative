@@ -207,6 +207,7 @@ export default function RoomPulseApp() {
   const currentMicSpeakerRef = useRef("Speaker 1");
   const micStartTokenRef = useRef(0);
   const isHeartbeatRunningRef = useRef(false);
+  const heartbeatRunTokenRef = useRef(0);
   const transcriptFeedRef = useRef<HTMLDivElement | null>(null);
   const demoTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const meetingLogIdRef = useRef<string | null>(null);
@@ -222,6 +223,7 @@ export default function RoomPulseApp() {
   const heartbeatIntervalSecondsRef = useRef(
     defaultMeeting.heartbeatIntervalSeconds
   );
+  const meetingStartedAtRef = useRef(0);
 
   const observedSpeakerLabels = useMemo(
     () => Array.from(new Set(transcript.map((line) => line.speakerLabel))),
@@ -320,6 +322,10 @@ export default function RoomPulseApp() {
   useEffect(() => {
     heartbeatIntervalSecondsRef.current = meeting.heartbeatIntervalSeconds;
   }, [meeting.heartbeatIntervalSeconds]);
+
+  useEffect(() => {
+    meetingStartedAtRef.current = meetingStartedAt;
+  }, [meetingStartedAt]);
 
   useEffect(() => {
     if (
@@ -571,6 +577,12 @@ export default function RoomPulseApp() {
       return;
     }
 
+    const runToken = heartbeatRunTokenRef.current + 1;
+    heartbeatRunTokenRef.current = runToken;
+    const heartbeatSessionStartedAt = meetingStartedAtRef.current;
+    const shouldApplyHeartbeatResult = () =>
+      heartbeatRunTokenRef.current === runToken &&
+      meetingStartedAtRef.current === heartbeatSessionStartedAt;
     const heartbeatNow = Date.now();
     const transcriptSnapshot = transcriptStoreRef.current.getLines();
     const speakerSnapshot = Array.from(
@@ -636,6 +648,9 @@ export default function RoomPulseApp() {
       }
 
       const output = (await response.json()) as FacilitatorOutput;
+      if (!shouldApplyHeartbeatResult()) {
+        return;
+      }
       applyHeartbeatOutput(output, heartbeatNow);
       setHeartbeatCount((count) => count + 1);
       setLastHeartbeatAt(heartbeatNow);
@@ -643,6 +658,9 @@ export default function RoomPulseApp() {
         Date.now() + heartbeatIntervalSecondsRef.current * 1000
       );
     } catch (error) {
+      if (!shouldApplyHeartbeatResult()) {
+        return;
+      }
       const message = error instanceof Error ? error.message : String(error);
       setHeartbeatError(
         error instanceof DOMException && error.name === "AbortError"
@@ -660,6 +678,9 @@ export default function RoomPulseApp() {
       }
 
       const fallbackOutput = await runLocalHeartbeatInBrowser(input);
+      if (!shouldApplyHeartbeatResult()) {
+        return;
+      }
       applyHeartbeatOutput(fallbackOutput, heartbeatNow);
       setHeartbeatCount((count) => count + 1);
       setLastHeartbeatAt(heartbeatNow);
@@ -667,8 +688,10 @@ export default function RoomPulseApp() {
         Date.now() + heartbeatIntervalSecondsRef.current * 1000
       );
     } finally {
-      setIsHeartbeatRunning(false);
-      isHeartbeatRunningRef.current = false;
+      if (heartbeatRunTokenRef.current === runToken) {
+        setIsHeartbeatRunning(false);
+        isHeartbeatRunningRef.current = false;
+      }
     }
   }, [
     applyHeartbeatOutput,
@@ -753,6 +776,12 @@ export default function RoomPulseApp() {
     setIsDemoRunning(false);
   }, []);
 
+  function invalidatePendingHeartbeat() {
+    heartbeatRunTokenRef.current += 1;
+    isHeartbeatRunningRef.current = false;
+    setIsHeartbeatRunning(false);
+  }
+
   async function openMeetingLog(id: string) {
     try {
       if (phase === "meeting" && meetingLogIdRef.current !== id) {
@@ -766,6 +795,7 @@ export default function RoomPulseApp() {
       setSelectedMeetingLog(snapshot);
 
       if (snapshot.metadata.status === "ended") {
+        invalidatePendingHeartbeat();
         navigateToMeetingReview(id);
         return;
       }
@@ -779,6 +809,8 @@ export default function RoomPulseApp() {
   }
 
   function restoreMeetingFromSnapshot(snapshot: ClientMeetingLogSnapshot) {
+    invalidatePendingHeartbeat();
+    meetingStartAttemptRef.current += 1;
     endingSessionRef.current = false;
     const restoredState = snapshot.metadata.state ?? fallbackStateFromSnapshot(snapshot);
     const restoredMeeting = restoredState.meeting;
@@ -836,7 +868,10 @@ export default function RoomPulseApp() {
     setTimeline(restoredState.timeline);
     setLastHeartbeatAt(lastBeat);
     setNextHeartbeatAt(nextBeat);
-    setMeetingStartedAt(restoredState.meetingStartedAt || snapshot.metadata.startedAt);
+    const restoredStartedAt =
+      restoredState.meetingStartedAt || snapshot.metadata.startedAt;
+    meetingStartedAtRef.current = restoredStartedAt;
+    setMeetingStartedAt(restoredStartedAt);
     setHeartbeatCount(restoredState.heartbeatCount);
     setIsPaused(paused);
     setReviewMarkdown(restoredReviewMarkdown);
@@ -969,6 +1004,9 @@ export default function RoomPulseApp() {
   ]);
 
   const launchLiveDemo = useCallback(async () => {
+    invalidatePendingHeartbeat();
+    const attemptId = meetingStartAttemptRef.current + 1;
+    meetingStartAttemptRef.current = attemptId;
     endingSessionRef.current = false;
     setIsInitializingReview(true);
     setHeartbeatError(null);
@@ -1004,6 +1042,7 @@ export default function RoomPulseApp() {
         null
     );
     setPhase("meeting");
+    meetingStartedAtRef.current = startedAt;
     setMeetingStartedAt(startedAt);
     setHeartbeatCount(0);
     setIsPaused(false);
@@ -1052,6 +1091,12 @@ export default function RoomPulseApp() {
 
     void initializeReviewDocument(demoMeeting)
       .then((initialDocument) => {
+        if (
+          meetingStartAttemptRef.current !== attemptId ||
+          meetingStartedAtRef.current !== startedAt
+        ) {
+          return;
+        }
         const initializedAt = Date.now();
         if (reviewLastUpdatedAtRef.current > startedAt) {
           return;
@@ -1099,6 +1144,9 @@ export default function RoomPulseApp() {
         );
       })
       .catch((error) => {
+        if (meetingStartAttemptRef.current !== attemptId) {
+          return;
+        }
         const message = error instanceof Error ? error.message : String(error);
         setHeartbeatError(message);
         setLogStatus(`Live demo Pi init failed: ${message}`);
@@ -1233,6 +1281,7 @@ export default function RoomPulseApp() {
   }, [buildPersistedMeetingState, meetingLogId, phase]);
 
   async function startMeeting() {
+    invalidatePendingHeartbeat();
     endingSessionRef.current = false;
     const attemptId = meetingStartAttemptRef.current + 1;
     meetingStartAttemptRef.current = attemptId;
@@ -1273,6 +1322,7 @@ export default function RoomPulseApp() {
       markdown: initialReview,
       summary: initialDocument.summary
     };
+    meetingStartedAtRef.current = startedAt;
     setMeetingStartedAt(startedAt);
     setHeartbeatCount(0);
     setIsPaused(false);
@@ -1612,6 +1662,7 @@ export default function RoomPulseApp() {
   }
 
   async function startNewMeetingSetup() {
+    invalidatePendingHeartbeat();
     meetingStartAttemptRef.current += 1;
     if (phase === "meeting") {
       await checkpointCurrentMeetingBeforeLeaving();
@@ -1639,6 +1690,7 @@ export default function RoomPulseApp() {
     setHeartbeatCount(0);
     setLastHeartbeatAt(0);
     setNextHeartbeatAt(0);
+    meetingStartedAtRef.current = 0;
     setMeetingStartedAt(0);
     setIsPaused(false);
     setMeeting(defaultMeeting);
@@ -1676,6 +1728,7 @@ export default function RoomPulseApp() {
   }
 
   function returnToDashboard() {
+    invalidatePendingHeartbeat();
     meetingStartAttemptRef.current += 1;
     stopMic();
     stopScriptedDemo();

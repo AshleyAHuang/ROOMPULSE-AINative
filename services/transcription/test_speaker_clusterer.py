@@ -166,6 +166,40 @@ class SpeakerClustererTest(unittest.TestCase):
         self.assertEqual(second.label, "Speaker 1")
         self.assertEqual(clusterer.labels(), ["Speaker 1"])
 
+    def test_repeated_quiet_distinct_voice_promotes_pending_speaker(self) -> None:
+        clusterer = SpeakerClusterer(
+            threshold=0.2,
+            embedder=QualityEmbeddingVoiceEmbedder(
+                [
+                    (
+                        np.array([1.0, 0.0, 0.0], dtype=np.float32),
+                        1.0,
+                    ),
+                    (
+                        np.array([0.0, 1.0, 0.0], dtype=np.float32),
+                        0.1,
+                    ),
+                    (
+                        np.array([0.0, 0.98, 0.02], dtype=np.float32),
+                        0.1,
+                    ),
+                ]
+            ),
+        )
+
+        first = asyncio.run(clusterer.assign(synthetic_voice(110)))
+        second = asyncio.run(
+            clusterer.assign(synthetic_voice(230, seconds=0.55))
+        )
+        third = asyncio.run(
+            clusterer.assign(synthetic_voice(232, seconds=0.55))
+        )
+
+        self.assertEqual(first.label, "Speaker 1")
+        self.assertEqual(second.label, "Speaker 1")
+        self.assertEqual(third.label, "Speaker 2")
+        self.assertEqual(clusterer.labels(), ["Speaker 1", "Speaker 2"])
+
     def test_uses_backend_specific_neural_thresholds(self) -> None:
         clusterer = SpeakerClusterer(embedder=FixedEmbeddingVoiceEmbedder([]))
 
