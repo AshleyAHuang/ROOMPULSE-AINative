@@ -861,7 +861,6 @@ export default function RoomPulseApp() {
 
     endingSessionRef.current = true;
     setIsEndingSession(true);
-    const endedAt = Date.now();
 
     const id = await waitForMeetingLogId(meetingLogIdRef, 2500);
     if (!id) {
@@ -875,6 +874,7 @@ export default function RoomPulseApp() {
     try {
       await stopMicAndFlushFinalSegment();
       stopScriptedDemo();
+      const endedAt = Date.now();
       setIsPaused(true);
       if (autosaveTimerRef.current) {
         clearTimeout(autosaveTimerRef.current);
