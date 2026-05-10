@@ -794,14 +794,16 @@ function parseOpenRouterToolCalls(
         }
       }
 
-      return {
+      const action = normalizeUiAction(
         tool,
         parameters,
-        reason:
-          typeof parameters.reason === "string" && parameters.reason.trim()
-            ? parameters.reason.trim()
-            : "OpenRouter proposed a RoomPulse UI action."
-      };
+        "OpenRouter proposed a RoomPulse UI action."
+      );
+      if (!action) {
+        throw new Error(`OpenRouter returned invalid parameters for ${tool}`);
+      }
+
+      return action;
     })
     .filter((action): action is UiAction => Boolean(action));
 }
@@ -819,6 +821,8 @@ const ALLOWED_CARD_KINDS = new Set([
 const ALLOWED_PRIORITIES = new Set(["low", "medium", "high"]);
 const MAX_PRIOR_INTERVENTIONS = 3;
 const MAX_CARDS = 5;
+const MAX_CARD_TEXT_LENGTH = 280;
+const MAX_UI_TEXT_LENGTH = 500;
 
 function buildPiPrompt(input: HeartbeatInput): string {
   const slim = buildSlimContext(input);
@@ -927,7 +931,6 @@ function parsePiOutput(text: string): FacilitatorOutput {
   const cards = Array.isArray(parsed.cards)
     ? parsed.cards
         .filter((card): card is Record<string, unknown> => isRecord(card))
-        .slice(0, MAX_CARDS)
         .map((card, index) => {
           const kind =
             typeof card.kind === "string" && ALLOWED_CARD_KINDS.has(card.kind)
@@ -938,15 +941,25 @@ function parsePiOutput(text: string): FacilitatorOutput {
             ALLOWED_PRIORITIES.has(card.priority)
               ? (card.priority as FacilitatorOutput["cards"][number]["priority"])
               : "medium";
+          const title = boundedNonEmptyString(card.title, MAX_CARD_TEXT_LENGTH);
+          const body = boundedNonEmptyString(card.body, MAX_CARD_TEXT_LENGTH);
+
+          if (!title || !body) {
+            return null;
+          }
 
           return {
             id: `${now}-pi-${index + 1}`,
             kind,
-            title: typeof card.title === "string" ? card.title : "Room cue",
-            body: typeof card.body === "string" ? card.body : "",
+            title,
+            body,
             priority
           };
         })
+        .filter(
+          (card): card is FacilitatorOutput["cards"][number] => card !== null
+        )
+        .slice(0, MAX_CARDS)
     : [];
 
   if (cards.length === 0) {
@@ -1078,15 +1091,21 @@ function parseUiActions(value: unknown): UiAction[] {
   return value
     .filter((item): item is Record<string, unknown> => isRecord(item))
     .filter((item) => typeof item.tool === "string")
-    .map((item) => ({
-      tool: item.tool as UiToolName,
-      parameters: isRecord(item.parameters) ? item.parameters : {},
-      reason:
-        typeof item.reason === "string"
-          ? item.reason
+    .map((item) => {
+      const tool = item.tool as UiToolName;
+      if (!isKnownUiTool(tool)) {
+        return null;
+      }
+
+      return normalizeUiAction(
+        tool,
+        isRecord(item.parameters) ? item.parameters : {},
+        typeof item.reason === "string" && item.reason.trim()
+          ? item.reason.trim()
           : "Pi proposed a RoomPulse UI action."
-    }))
-    .filter((action) => isKnownUiTool(action.tool));
+      );
+    })
+    .filter((action): action is UiAction => Boolean(action));
 }
 
 interface QueuedUiActionSignal {
@@ -1165,11 +1184,11 @@ function createRoomPulseUiTools(
     parameters: Record<string, unknown>,
     fallbackReason: string
   ) => {
-    const reason =
-      typeof parameters.reason === "string" && parameters.reason.trim()
-        ? parameters.reason.trim()
-        : fallbackReason;
-    const action = { tool, parameters, reason };
+    const action = normalizeUiAction(tool, parameters, fallbackReason);
+    if (!action) {
+      throw new Error(`Invalid RoomPulse UI tool call parameters for ${tool}`);
+    }
+
     queuedActions.push(action);
     queuedUiActionSignal.notify(action);
     return {
@@ -1179,7 +1198,11 @@ function createRoomPulseUiTools(
           text: `Applied RoomPulse UI action: ${tool}.`
         }
       ],
-      details: { tool, parameters, reason },
+      details: {
+        tool: action.tool,
+        parameters: action.parameters,
+        reason: action.reason
+      },
       terminate: true
     };
   };
@@ -1390,6 +1413,102 @@ function booleanParameter(
 ): boolean | null {
   const value = params?.[key];
   return typeof value === "boolean" ? value : null;
+}
+
+function normalizeUiAction(
+  tool: UiToolName,
+  parameters: Record<string, unknown>,
+  fallbackReason: string
+): UiAction | null {
+  const reason =
+    boundedNonEmptyString(parameters.reason, MAX_UI_TEXT_LENGTH) ??
+    fallbackReason;
+
+  if (tool === "update_review_document") {
+    const markdown = nonEmptyString(parameters.markdown);
+    if (!markdown) {
+      return null;
+    }
+
+    const summary = boundedNonEmptyString(parameters.summary, MAX_UI_TEXT_LENGTH);
+    return {
+      tool,
+      parameters: {
+        markdown,
+        ...(summary ? { summary } : {})
+      },
+      reason
+    };
+  }
+
+  if (tool === "add_agenda_item") {
+    const title = boundedNonEmptyString(parameters.title, MAX_UI_TEXT_LENGTH);
+    return title
+      ? {
+          tool,
+          parameters: { title },
+          reason
+        }
+      : null;
+  }
+
+  if (tool === "set_agenda_item") {
+    const itemId = boundedNonEmptyString(parameters.itemId, MAX_UI_TEXT_LENGTH);
+    const done = booleanParameter(parameters, "done");
+    return itemId && done !== null
+      ? {
+          tool,
+          parameters: { itemId, done },
+          reason
+        }
+      : null;
+  }
+
+  if (tool === "delete_agenda_item") {
+    const itemId = boundedNonEmptyString(parameters.itemId, MAX_UI_TEXT_LENGTH);
+    return itemId
+      ? {
+          tool,
+          parameters: { itemId },
+          reason
+        }
+      : null;
+  }
+
+  if (tool === "send_room_reminder") {
+    const message = boundedNonEmptyString(parameters.message, MAX_UI_TEXT_LENGTH);
+    const tone = boundedNonEmptyString(parameters.tone, MAX_UI_TEXT_LENGTH);
+    return message
+      ? {
+          tool,
+          parameters: {
+            message,
+            ...(tone ? { tone } : {})
+          },
+          reason
+        }
+      : null;
+  }
+
+  return null;
+}
+
+function nonEmptyString(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function boundedNonEmptyString(value: unknown, maxLength: number): string | null {
+  const trimmed = nonEmptyString(value);
+  if (!trimmed) {
+    return null;
+  }
+
+  return trimmed.slice(0, maxLength);
 }
 
 function createPiCardId(now: number, suffix: string): string {

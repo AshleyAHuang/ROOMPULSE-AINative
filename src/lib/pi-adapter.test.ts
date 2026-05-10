@@ -271,6 +271,47 @@ describe("Pi adapter", () => {
     expect(createAgentSession).not.toHaveBeenCalled();
   });
 
+  it("does not render empty Pi cards as room-facing facilitator output", async () => {
+    writeFileSync(
+      process.env.ROOMPULSE_CODEX_AUTH_PATH!,
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: {
+          access_token: jwtWithExpiration(1_900_000_000),
+          refresh_token: "refresh-token",
+          account_id: "acct_123"
+        }
+      })
+    );
+    session.subscribe.mockImplementation((listener: (event: unknown) => void) => {
+      listener({
+        type: "message_update",
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta: JSON.stringify({
+            cards: [
+              {
+                kind: "heartbeat",
+                title: "   ",
+                body: "   ",
+                priority: "medium"
+              }
+            ],
+            summary: "Malformed Pi cue.",
+            reviewMarkdown: "# Launch check\n\nNo usable room cue."
+          })
+        }
+      });
+    });
+
+    const output = await runPiHeartbeat(heartbeatInput);
+
+    expect(output.source).toBe("local-fallback");
+    expect(output.adapterNotice).toContain("no usable cards");
+    expect(output.cards.every((card) => card.title.trim() && card.body.trim()))
+      .toBe(true);
+  });
+
   it("returns strict Pi tool updates before final prompt resolution", async () => {
     process.env.ROOMPULSE_REQUIRE_PI = "1";
     process.env.ROOMPULSE_PI_TIMEOUT_MS = "1000";
@@ -334,6 +375,45 @@ describe("Pi adapter", () => {
     resolvePrompt?.();
   });
 
+  it("rejects empty Pi cards in strict mode instead of showing blank cues", async () => {
+    process.env.ROOMPULSE_REQUIRE_PI = "1";
+    writeFileSync(
+      process.env.ROOMPULSE_CODEX_AUTH_PATH!,
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: {
+          access_token: jwtWithExpiration(1_900_000_000),
+          refresh_token: "refresh-token",
+          account_id: "acct_123"
+        }
+      })
+    );
+    session.subscribe.mockImplementation((listener: (event: unknown) => void) => {
+      listener({
+        type: "message_update",
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta: JSON.stringify({
+            cards: [
+              {
+                kind: "reminder",
+                title: "",
+                body: "",
+                priority: "high"
+              }
+            ],
+            summary: "Malformed Pi cue.",
+            reviewMarkdown: "# Launch check\n\nNo usable room cue."
+          })
+        }
+      });
+    });
+
+    await expect(runPiHeartbeat(heartbeatInput)).rejects.toThrow(
+      "Pi adapter required but unavailable: Pi response contained no usable cards"
+    );
+  });
+
   it("runs heartbeat reviews through OpenRouter tool calls", async () => {
     process.env.ROOMPULSE_PI_PROVIDER = "openrouter";
     process.env.ROOMPULSE_PI_MODEL = "openai/gpt-4o-mini";
@@ -390,6 +470,42 @@ describe("Pi adapter", () => {
     expect(requestBody.model).toBe("openai/gpt-4o-mini");
     expect(requestBody.tools.map((tool: { function: { name: string } }) => tool.function.name))
       .toContain("update_review_document");
+  });
+
+  it("falls back when OpenRouter returns an unusable review tool call", async () => {
+    process.env.ROOMPULSE_PI_PROVIDER = "openrouter";
+    process.env.ROOMPULSE_OPENROUTER_API_KEY = "openrouter-key";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json({
+          choices: [
+            {
+              message: {
+                tool_calls: [
+                  {
+                    type: "function",
+                    function: {
+                      name: "update_review_document",
+                      arguments: JSON.stringify({
+                        summary: "OpenRouter forgot the markdown body."
+                      })
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        })
+      )
+    );
+
+    const output = await runPiHeartbeat(heartbeatInput);
+
+    expect(output.source).toBe("local-fallback");
+    expect(output.adapterNotice).toContain(
+      "OpenRouter returned invalid parameters for update_review_document"
+    );
   });
 
   it("initializes review markdown through OpenRouter JSON output", async () => {

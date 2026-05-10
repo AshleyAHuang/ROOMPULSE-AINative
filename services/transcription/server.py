@@ -646,7 +646,7 @@ def parse_positive_float(raw: str | None, default: float) -> float:
         value = float(raw)
     except ValueError:
         return default
-    return value if value > 0 else default
+    return value if math.isfinite(value) and value > 0 else default
 
 
 def parse_positive_int(raw: str | None, default: int) -> int:
