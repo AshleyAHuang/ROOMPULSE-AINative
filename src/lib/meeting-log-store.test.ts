@@ -153,4 +153,130 @@ describe("meeting log store", () => {
     expect(snapshot.transcript).toHaveLength(1);
     expect(snapshot.transcript[0]?.source).toBe("speech");
   });
+
+  it("backfills legacy event counts and latest review metadata", async () => {
+    const startedAt = Date.UTC(2026, 4, 9, 12, 0, 0);
+    const database = new DatabaseSync(join(logDir, "roompulse.sqlite"));
+    database.exec(`
+      CREATE TABLE meeting_sessions (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        goal TEXT NOT NULL,
+        started_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        meeting_json TEXT NOT NULL
+      );
+
+      CREATE TABLE meeting_events (
+        id TEXT PRIMARY KEY,
+        meeting_id TEXT NOT NULL REFERENCES meeting_sessions(id) ON DELETE CASCADE,
+        type TEXT NOT NULL,
+        timestamp INTEGER NOT NULL,
+        payload_json TEXT NOT NULL
+      );
+
+      CREATE TABLE transcript_lines (
+        id TEXT NOT NULL,
+        meeting_id TEXT NOT NULL REFERENCES meeting_sessions(id) ON DELETE CASCADE,
+        speaker_id TEXT NOT NULL,
+        speaker_label TEXT NOT NULL,
+        text TEXT NOT NULL,
+        timestamp INTEGER NOT NULL,
+        PRIMARY KEY (meeting_id, id)
+      );
+
+      CREATE TABLE review_versions (
+        id TEXT NOT NULL,
+        meeting_id TEXT NOT NULL REFERENCES meeting_sessions(id) ON DELETE CASCADE,
+        timestamp INTEGER NOT NULL,
+        markdown TEXT NOT NULL,
+        PRIMARY KEY (meeting_id, id)
+      );
+    `);
+    database
+      .prepare(
+        `INSERT INTO meeting_sessions (
+          id,
+          title,
+          goal,
+          started_at,
+          updated_at,
+          meeting_json
+        ) VALUES (?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "legacy-meeting",
+        "Legacy review",
+        "Restore old metadata",
+        startedAt,
+        startedAt + 2_000,
+        JSON.stringify(meeting)
+      );
+    database
+      .prepare(
+        `INSERT INTO meeting_events (
+          id,
+          meeting_id,
+          type,
+          timestamp,
+          payload_json
+        ) VALUES (?, ?, ?, ?, ?)`
+      )
+      .run(
+        "event-1",
+        "legacy-meeting",
+        "meeting_started",
+        startedAt,
+        JSON.stringify({ meeting })
+      );
+    database
+      .prepare(
+        `INSERT INTO meeting_events (
+          id,
+          meeting_id,
+          type,
+          timestamp,
+          payload_json
+        ) VALUES (?, ?, ?, ?, ?)`
+      )
+      .run(
+        "event-2",
+        "legacy-meeting",
+        "heartbeat_output",
+        startedAt + 1_000,
+        JSON.stringify({ output: { reviewMarkdown: "# Newer legacy review" } })
+      );
+    database
+      .prepare(
+        `INSERT INTO review_versions (
+          id,
+          meeting_id,
+          timestamp,
+          markdown
+        ) VALUES (?, ?, ?, ?)`
+      )
+      .run("review-old", "legacy-meeting", startedAt, "# Old legacy review");
+    database
+      .prepare(
+        `INSERT INTO review_versions (
+          id,
+          meeting_id,
+          timestamp,
+          markdown
+        ) VALUES (?, ?, ?, ?)`
+      )
+      .run(
+        "review-new",
+        "legacy-meeting",
+        startedAt + 1_000,
+        "# Newer legacy review"
+      );
+    database.close();
+
+    const snapshot = await readMeetingLog("legacy-meeting");
+
+    expect(snapshot.metadata.eventCount).toBe(2);
+    expect(snapshot.metadata.latestReviewVersionId).toBe("review-new");
+    expect(snapshot.metadata.latestReviewMarkdown).toBe("# Newer legacy review");
+  });
 });

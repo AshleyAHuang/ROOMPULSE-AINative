@@ -458,6 +458,46 @@ function migrateLegacySchema(db: DatabaseSync): void {
   ensureColumn(db, "transcript_lines", "confidence", "REAL NOT NULL DEFAULT 1.0");
   ensureColumn(db, "review_versions", "source", "TEXT NOT NULL DEFAULT 'pi'");
   ensureColumn(db, "review_versions", "summary", "TEXT NOT NULL DEFAULT ''");
+  backfillLegacyMaterializedMetadata(db);
+}
+
+function backfillLegacyMaterializedMetadata(db: DatabaseSync): void {
+  db.exec(`
+    UPDATE meeting_sessions
+      SET event_count = (
+        SELECT COUNT(*)
+          FROM meeting_events
+          WHERE meeting_events.meeting_id = meeting_sessions.id
+      )
+      WHERE event_count = 0
+        AND EXISTS (
+          SELECT 1
+            FROM meeting_events
+            WHERE meeting_events.meeting_id = meeting_sessions.id
+        );
+
+    UPDATE meeting_sessions
+      SET latest_review_version_id = (
+            SELECT id
+              FROM review_versions
+              WHERE review_versions.meeting_id = meeting_sessions.id
+              ORDER BY timestamp DESC, rowid DESC
+              LIMIT 1
+          ),
+          latest_review_markdown = (
+            SELECT markdown
+              FROM review_versions
+              WHERE review_versions.meeting_id = meeting_sessions.id
+              ORDER BY timestamp DESC, rowid DESC
+              LIMIT 1
+          )
+      WHERE latest_review_version_id IS NULL
+        AND EXISTS (
+          SELECT 1
+            FROM review_versions
+            WHERE review_versions.meeting_id = meeting_sessions.id
+        );
+  `);
 }
 
 function ensureColumn(
