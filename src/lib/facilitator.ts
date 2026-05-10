@@ -270,6 +270,10 @@ export function capUiActions(actions: UiAction[]): UiAction[] {
 }
 
 function capUiActionText(action: UiAction): UiAction | null {
+  if (!isKnownUiTool(action.tool)) {
+    return null;
+  }
+
   const parameters: Record<string, unknown> = {};
   if (action.tool === "send_room_reminder") {
     const message = cappedStringParam(action.parameters.message);
@@ -311,6 +315,16 @@ function capUiActionText(action: UiAction): UiAction | null {
     parameters,
     reason: capText(action.reason, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH)
   };
+}
+
+function isKnownUiTool(tool: string): tool is UiToolName {
+  return (
+    tool === "add_agenda_item" ||
+    tool === "set_agenda_item" ||
+    tool === "delete_agenda_item" ||
+    tool === "send_room_reminder" ||
+    tool === "update_review_document"
+  );
 }
 
 function cappedStringParam(value: unknown): string | undefined {

@@ -676,6 +676,11 @@ describe("heartbeat facilitation", () => {
           reason: "Missing markdown."
         },
         {
+          tool: "open_external_url" as never,
+          parameters: { url: "https://example.test" },
+          reason: "Unknown UI tool."
+        },
+        {
           tool: "send_room_reminder",
           parameters: { message: "Invite quiet voices." },
           reason: "Valid reminder."
