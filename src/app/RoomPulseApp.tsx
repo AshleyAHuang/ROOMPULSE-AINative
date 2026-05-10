@@ -1255,6 +1255,9 @@ export default function RoomPulseApp() {
       setMicStatus("Requesting browser microphone permission");
       const client = new LocalTranscriptionClient({
         onSegment: (segment) => {
+          if (micStartTokenRef.current !== startToken) {
+            return;
+          }
           currentMicSpeakerRef.current = segment.speakerLabel;
           setCurrentMicSpeaker(segment.speakerLabel);
           addTranscriptLine(
@@ -1265,6 +1268,9 @@ export default function RoomPulseApp() {
           );
         },
         onStatus: (status) => {
+          if (micStartTokenRef.current !== startToken) {
+            return;
+          }
           const observed = status.observedSpeakerLabels;
           if (observed && observed.length > 0) {
             const latest = observed[observed.length - 1];
@@ -1278,6 +1284,9 @@ export default function RoomPulseApp() {
           setMicStatus(status.message);
         },
         onError: (message) => {
+          if (micStartTokenRef.current !== startToken) {
+            return;
+          }
           setMicStatus(`Local transcription error: ${message}`);
         }
       });
