@@ -843,7 +843,7 @@ export default function RoomPulseApp() {
     setPhase("meeting");
 
     if (!paused) {
-      void startMic();
+      void startMic(restoredMeeting.expectedParticipants);
     }
   }
 
@@ -1276,7 +1276,7 @@ export default function RoomPulseApp() {
       startedAt + configuredMeeting.heartbeatIntervalSeconds * 1000
     );
     setTranscriptMode("mic");
-    void startMic();
+    void startMic(configuredMeeting.expectedParticipants);
     void createMeetingLogFor(configuredMeeting, startedAt, [
       {
         type: "meeting_started",
@@ -1297,7 +1297,9 @@ export default function RoomPulseApp() {
     setDemoLine("");
   }
 
-  async function startMic() {
+  async function startMic(
+    expectedParticipants = meeting.expectedParticipants
+  ) {
     setTranscriptMode("mic");
 
     if (isMicRunning || transcriptionClientRef.current) {
@@ -1309,7 +1311,7 @@ export default function RoomPulseApp() {
     try {
       setMicStatus("Requesting browser microphone permission");
       const client = new LocalTranscriptionClient({
-        expectedParticipants: meeting.expectedParticipants,
+        expectedParticipants,
         onSegment: (segment) => {
           if (micStartTokenRef.current !== startToken) {
             return;

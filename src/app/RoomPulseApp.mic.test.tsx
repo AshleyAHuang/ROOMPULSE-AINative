@@ -5,6 +5,7 @@ const clients = vi.hoisted(
   () =>
     [] as Array<{
       options: {
+        expectedParticipants?: number;
         onSegment: (segment: {
           id: string;
           speakerId: string;
@@ -78,6 +79,26 @@ describe("RoomPulseApp mic lifecycle", () => {
     });
 
     expect(screen.queryByText(/late microphone segment/i)).not.toBeInTheDocument();
+  });
+
+  it("starts mic capture with the configured participant count", async () => {
+    render(<RoomPulseApp />);
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: /new meeting/i })[0]);
+    });
+    fireEvent.change(screen.getByLabelText(/expected participants/i), {
+      target: { value: "7" }
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+
+    await waitFor(() => {
+      expect(clients).toHaveLength(1);
+    });
+    expect(clients[0].options.expectedParticipants).toBe(7);
   });
 
   it("keeps the microphone client alive when switching from demo back to mic", async () => {
