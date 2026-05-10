@@ -206,6 +206,7 @@ export default function RoomPulseApp() {
   const demoTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const meetingLogIdRef = useRef<string | null>(null);
   const pendingLogEventsRef = useRef<PendingMeetingLogEvent[]>([]);
+  const isFlushingLogEventsRef = useRef(false);
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const endingSessionRef = useRef(false);
   const meetingStartAttemptRef = useRef(0);
@@ -311,23 +312,60 @@ export default function RoomPulseApp() {
     );
   }, [activeAgendaItemId, agendaProgress.active, meeting.agenda]);
 
+  const flushPendingLogEvents = useCallback(async (meetingId: string) => {
+    if (isFlushingLogEventsRef.current) {
+      return;
+    }
+
+    isFlushingLogEventsRef.current = true;
+    try {
+      while (
+        pendingLogEventsRef.current.length > 0 &&
+        meetingLogIdRef.current === meetingId
+      ) {
+        const queued = pendingLogEventsRef.current.splice(0);
+        const failed: PendingMeetingLogEvent[] = [];
+
+        for (const event of queued) {
+          try {
+            await sendMeetingLogEvent(meetingId, event);
+          } catch (error) {
+            failed.push(event);
+            pendingLogEventsRef.current = [
+              ...failed,
+              ...queued.slice(queued.indexOf(event) + 1),
+              ...pendingLogEventsRef.current
+            ];
+            throw error;
+          }
+        }
+      }
+    } finally {
+      isFlushingLogEventsRef.current = false;
+    }
+  }, []);
+
   const logMeetingEvent = useCallback(
     (type: string, payload: unknown, timestamp = Date.now()) => {
       const event = { type, timestamp, payload };
+      pendingLogEventsRef.current.push(event);
       const currentMeetingLogId = meetingLogIdRef.current;
 
       if (!currentMeetingLogId) {
-        pendingLogEventsRef.current.push(event);
         return;
       }
 
-      void sendMeetingLogEvent(currentMeetingLogId, event).catch((error) => {
-        setLogStatus(
-          `Log write failed: ${error instanceof Error ? error.message : String(error)}`
-        );
-      });
+      void flushPendingLogEvents(currentMeetingLogId)
+        .then(() => {
+          setLogStatus(`Logging locally: ${currentMeetingLogId}`);
+        })
+        .catch((error) => {
+          setLogStatus(
+            `Log write failed: ${error instanceof Error ? error.message : String(error)}`
+          );
+        });
     },
-    []
+    [flushPendingLogEvents]
   );
 
   const refreshPastMeetings = useCallback(async () => {
@@ -408,13 +446,9 @@ export default function RoomPulseApp() {
         setMeetingLogId(metadata.id);
         setLogStatus(`Logging locally: ${metadata.id}`);
 
-        const queued = pendingLogEventsRef.current.splice(0);
-        await Promise.all(
-          queued.map((event) => sendMeetingLogEvent(metadata.id, event))
-        );
+        await flushPendingLogEvents(metadata.id);
         void refreshPastMeetings();
       } catch (error) {
-        pendingLogEventsRef.current = [];
         setLogStatus(
           `Meeting logging unavailable: ${
             error instanceof Error ? error.message : String(error)
@@ -422,7 +456,7 @@ export default function RoomPulseApp() {
         );
       }
     },
-    [refreshPastMeetings]
+    [flushPendingLogEvents, refreshPastMeetings]
   );
 
   const addTranscriptLine = useCallback(

@@ -413,8 +413,9 @@ describe("RoomPulseApp", () => {
     });
     expect(screen.getByRole("button", { name: /run heartbeat/i })).toBeVisible();
 
-    act(() => {
+    await act(async () => {
       vi.advanceTimersByTime(150);
+      await Promise.resolve();
     });
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /run heartbeat/i }));
@@ -426,8 +427,9 @@ describe("RoomPulseApp", () => {
       screen.getByText(/heartbeat review is running; transcript capture continues live/i)
     ).toBeVisible();
 
-    act(() => {
+    await act(async () => {
       vi.advanceTimersByTime(8_100);
+      await Promise.resolve();
     });
 
     expect(
@@ -437,8 +439,9 @@ describe("RoomPulseApp", () => {
       screen.getByRole("button", { name: /run heartbeat now/i })
     ).toBeDisabled();
 
-    act(() => {
+    await act(async () => {
       vi.advanceTimersByTime(23_000);
+      await Promise.resolve();
     });
 
     expect(
@@ -585,6 +588,91 @@ describe("RoomPulseApp", () => {
     expect(
       await screen.findByRole("heading", { name: /other active session/i })
     ).toBeVisible();
+  });
+
+  it("retries queued meeting log events after a transient event write failure", async () => {
+    let eventWrites = 0;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/meetings" && method === "GET") {
+          return Response.json({ meetings: [] });
+        }
+        if (url.includes("/api/review-document/init")) {
+          return Response.json({
+            source: "pi",
+            markdown: "# Retry logging",
+            summary: "Initialized."
+          });
+        }
+        if (url === "/api/meetings" && method === "POST") {
+          return Response.json(
+            {
+              id: "retry-session",
+              title: "Retry logging",
+              goal: "Do not drop queued events.",
+              startedAt: Date.now(),
+              updatedAt: Date.now(),
+              endedAt: null,
+              status: "active",
+              isPaused: false,
+              eventCount: 0,
+              meeting: {},
+              state: null,
+              latestReviewMarkdown: "",
+              latestReviewVersionId: null
+            },
+            { status: 201 }
+          );
+        }
+        if (url === "/api/meetings/retry-session/events") {
+          eventWrites += 1;
+          if (eventWrites === 1) {
+            return Response.json({ error: "temporary failure" }, { status: 500 });
+          }
+          return Response.json({ id: `event-${eventWrites}` }, { status: 201 });
+        }
+        return Response.json({});
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    expect(
+      await screen.findByRole("button", { name: /run heartbeat now/i })
+    ).toBeInTheDocument();
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/events"))).toBe(
+        true
+      );
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^demo$/i }));
+    });
+    fireEvent.change(screen.getByLabelText(/demo line/i), {
+      target: { value: "Retry this transcript event." }
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /add line/i }));
+    });
+
+    await waitFor(() => {
+      const eventBodies = fetchMock.mock.calls
+        .filter(([url]) => String(url) === "/api/meetings/retry-session/events")
+        .map(([, init]) => JSON.parse(String(init?.body ?? "{}")));
+      expect(eventBodies.map((event) => event.type)).toEqual([
+        "meeting_started",
+        "meeting_started",
+        "review_initialized",
+        "transcript_line"
+      ]);
+    });
   });
 
   it("clamps invalid numeric setup values before starting the room display", async () => {
