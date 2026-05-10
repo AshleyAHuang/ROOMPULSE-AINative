@@ -644,6 +644,13 @@ function inferAgendaActions(
   if (!completionSignal) {
     return [];
   }
+  const activeTitleTokens = tokenizeTitle(active.title);
+  if (
+    activeTitleTokens.length > 0 &&
+    !isCoverageCueForItem(combinedText, activeTitleTokens)
+  ) {
+    return [];
+  }
 
   return [
     {

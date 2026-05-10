@@ -146,4 +146,31 @@ describe("heartbeat facilitation", () => {
     expect(updated.find((item) => item.id === "a1")?.done).toBe(true);
     expect(updated.find((item) => item.id === "a2")?.done).toBe(false);
   });
+
+  it("does not mark the active agenda item done for unrelated decisions", async () => {
+    const input = createHeartbeatInput({
+      meeting,
+      transcript: [
+        {
+          id: "t6",
+          speakerId: "speaker-1",
+          speakerLabel: "Speaker 1",
+          text: "We decided the lunch order is settled, but we have not assigned the launch risk owner.",
+          timestamp: 6_000,
+          source: "simulated",
+          confidence: 1
+        }
+      ],
+      observedSpeakerLabels: ["Speaker 1"],
+      lastHeartbeatAt: 5_000,
+      now: 7_000,
+      priorInterventions: []
+    });
+
+    const output = await runLocalFacilitation(input);
+
+    expect(output.agendaActions).not.toContainEqual(
+      expect.objectContaining({ itemId: "a2", done: true })
+    );
+  });
 });
