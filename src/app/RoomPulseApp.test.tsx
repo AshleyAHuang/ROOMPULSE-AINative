@@ -450,6 +450,13 @@ describe("RoomPulseApp", () => {
                 tool: "update_review_document",
                 parameters: { markdown: toolMarkdown },
                 reason: "Agent edited the document through the UI tool."
+              },
+              {
+                tool: "send_room_reminder",
+                parameters: {
+                  message: "Invite the quiet speaker before moving on."
+                },
+                reason: "The agent raised a one-round room reminder."
               }
             ],
             ephemeralReminder: null
@@ -484,6 +491,9 @@ describe("RoomPulseApp", () => {
         .map(([, init]) => JSON.parse(String(init?.body ?? "{}")))
         .find((event) => event.type === "heartbeat_output");
       expect(heartbeatEvent?.payload.output.reviewMarkdown).toBe(toolMarkdown);
+      expect(heartbeatEvent?.payload.output.ephemeralReminder).toBe(
+        "Invite the quiet speaker before moving on."
+      );
     });
   });
 

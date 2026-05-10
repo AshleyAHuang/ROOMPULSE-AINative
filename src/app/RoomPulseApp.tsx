@@ -502,10 +502,17 @@ export default function RoomPulseApp() {
   const applyHeartbeatOutput = useCallback(
     (output: FacilitatorOutput, heartbeatNow: number) => {
       const finalReviewMarkdown = reviewMarkdownFromOutput(output);
+      const finalEphemeralReminder =
+        output.ephemeralReminder ?? reminderFromOutput(output);
       const finalOutput =
-        finalReviewMarkdown === output.reviewMarkdown
+        finalReviewMarkdown === output.reviewMarkdown &&
+        finalEphemeralReminder === output.ephemeralReminder
           ? output
-          : { ...output, reviewMarkdown: finalReviewMarkdown };
+          : {
+              ...output,
+              reviewMarkdown: finalReviewMarkdown,
+              ephemeralReminder: finalEphemeralReminder
+            };
 
       setCurrentOutput(finalOutput);
       reviewLastUpdatedAtRef.current = heartbeatNow;
@@ -3078,6 +3085,13 @@ function reviewMarkdownFromOutput(output: FacilitatorOutput): string {
     .reverse()
     .find((action) => action.tool === "update_review_document");
   return stringParam(reviewAction?.parameters.markdown) ?? output.reviewMarkdown;
+}
+
+function reminderFromOutput(output: FacilitatorOutput): string | null {
+  const reminderAction = [...(output.uiActions ?? [])]
+    .reverse()
+    .find((action) => action.tool === "send_room_reminder");
+  return stringParam(reminderAction?.parameters.message);
 }
 
 function booleanParam(value: unknown): boolean | null {
