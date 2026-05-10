@@ -60,4 +60,30 @@ describe("meeting log store", () => {
 
     await expect(listMeetingLogs()).resolves.toEqual([snapshot.metadata]);
   });
+
+  it("does not materialize invalid transcript payloads into the query tables", async () => {
+    const startedAt = Date.UTC(2026, 4, 9, 12, 0, 0);
+    const metadata = await createMeetingLog(meeting, startedAt);
+
+    await appendMeetingLogEvent(metadata.id, {
+      type: "transcript_line",
+      timestamp: startedAt + 1_000,
+      payload: {
+        line: {
+          id: "line-1",
+          speakerId: "",
+          speakerLabel: " ",
+          text: "This should remain only in the raw event stream.",
+          timestamp: startedAt + 1_000,
+          source: "speech",
+          confidence: 2
+        }
+      }
+    });
+
+    const snapshot = await readMeetingLog(metadata.id);
+
+    expect(snapshot.events).toHaveLength(1);
+    expect(snapshot.transcript).toEqual([]);
+  });
 });

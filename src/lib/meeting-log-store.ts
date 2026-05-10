@@ -638,12 +638,13 @@ function lineFromPayload(payload: unknown): TranscriptLine | null {
   if (!isRecord(payload) || !isRecord(payload.line)) return null;
   const line = payload.line;
   if (
-    typeof line.id !== "string" ||
-    typeof line.speakerId !== "string" ||
-    typeof line.speakerLabel !== "string" ||
+    !isNonEmptyString(line.id) ||
+    !isNonEmptyString(line.speakerId) ||
+    !isNonEmptyString(line.speakerLabel) ||
     typeof line.text !== "string" ||
-    typeof line.timestamp !== "number" ||
-    typeof line.source !== "string"
+    !isFiniteNumber(line.timestamp) ||
+    !isTranscriptSource(line.source) ||
+    !isConfidence(line.confidence)
   ) {
     return null;
   }
@@ -653,11 +654,8 @@ function lineFromPayload(payload: unknown): TranscriptLine | null {
     speakerLabel: line.speakerLabel,
     text: line.text,
     timestamp: line.timestamp,
-    source: line.source as TranscriptLine["source"],
-    confidence:
-      typeof line.confidence === "number" && Number.isFinite(line.confidence)
-        ? line.confidence
-        : 1
+    source: line.source,
+    confidence: line.confidence
   };
 }
 
@@ -671,7 +669,7 @@ function reviewVersionFromHeartbeatPayload(
 
   return {
     id:
-      typeof payload.reviewVersionId === "string"
+      isNonEmptyString(payload.reviewVersionId)
         ? payload.reviewVersionId
         : `${timestamp}-review`,
     timestamp,
@@ -685,9 +683,9 @@ function reviewVersionFromRestorePayload(payload: unknown): ReviewVersion | null
   if (!isRecord(payload) || !isRecord(payload.restoredVersion)) return null;
   const version = payload.restoredVersion;
   if (
-    typeof version.id !== "string" ||
-    typeof version.timestamp !== "number" ||
-    typeof version.source !== "string" ||
+    !isNonEmptyString(version.id) ||
+    !isFiniteNumber(version.timestamp) ||
+    !isReviewSource(version.source) ||
     typeof version.markdown !== "string" ||
     typeof version.summary !== "string"
   ) {
@@ -697,7 +695,7 @@ function reviewVersionFromRestorePayload(payload: unknown): ReviewVersion | null
   return {
     id: version.id,
     timestamp: version.timestamp,
-    source: version.source as ReviewVersion["source"],
+    source: version.source,
     markdown: version.markdown,
     summary: version.summary
   };
@@ -709,9 +707,9 @@ function reviewVersionFromInitializedPayload(
   if (!isRecord(payload) || !isRecord(payload.reviewVersion)) return null;
   const version = payload.reviewVersion;
   if (
-    typeof version.id !== "string" ||
-    typeof version.timestamp !== "number" ||
-    typeof version.source !== "string" ||
+    !isNonEmptyString(version.id) ||
+    !isFiniteNumber(version.timestamp) ||
+    !isReviewSource(version.source) ||
     typeof version.markdown !== "string" ||
     typeof version.summary !== "string"
   ) {
@@ -721,7 +719,7 @@ function reviewVersionFromInitializedPayload(
   return {
     id: version.id,
     timestamp: version.timestamp,
-    source: normalizeReviewSource(version.source),
+    source: version.source,
     markdown: version.markdown,
     summary: version.summary
   };
@@ -748,6 +746,32 @@ function normalizeReviewSource(value: unknown): ReviewVersion["source"] {
     return value;
   }
   return "local-fallback";
+}
+
+function isReviewSource(value: unknown): value is ReviewVersion["source"] {
+  return (
+    value === "pi" ||
+    value === "openrouter" ||
+    value === "local-fallback" ||
+    value === "initial" ||
+    value === "restored"
+  );
+}
+
+function isTranscriptSource(value: unknown): value is TranscriptLine["source"] {
+  return value === "speech" || value === "simulated" || value === "manual";
+}
+
+function isConfidence(value: unknown): value is number {
+  return isFiniteNumber(value) && value >= 0 && value <= 1;
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 function parseJson<T>(raw: string | null, fallback: T): T {
