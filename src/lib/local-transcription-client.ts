@@ -283,7 +283,7 @@ export function downsample(
     return new Float32Array();
   }
 
-  if (sourceSampleRate <= targetSampleRate) {
+  if (sourceSampleRate === targetSampleRate) {
     return input;
   }
 
@@ -293,7 +293,7 @@ export function downsample(
 
   for (let index = 0; index < outputLength; index += 1) {
     const sourceIndex = index * ratio;
-    const left = Math.floor(sourceIndex);
+    const left = Math.min(input.length - 1, Math.floor(sourceIndex));
     const right = Math.min(input.length - 1, left + 1);
     const weight = sourceIndex - left;
     output[index] = input[left] * (1 - weight) + input[right] * weight;

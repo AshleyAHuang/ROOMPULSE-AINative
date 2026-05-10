@@ -9,12 +9,11 @@ describe("local transcription audio utilities", () => {
     expect(Array.from(output)).toEqual([0, 0.75]);
   });
 
-  it("does not create invalid samples when the source rate is already lower", () => {
+  it("upsamples without invalid samples when the source rate is lower", () => {
     const input = new Float32Array([0, 0.25, 0.5]);
     const output = downsample(input, 8_000, 16_000);
 
-    expect(output).toBe(input);
-    expect(Array.from(output)).toEqual([0, 0.25, 0.5]);
+    expect(Array.from(output)).toEqual([0, 0.125, 0.25, 0.375, 0.5, 0.5]);
   });
 
   it("returns empty audio for impossible sample rates", () => {
