@@ -143,6 +143,68 @@ describe("local transcription audio utilities", () => {
     );
   });
 
+  it("waits for the transcription server flush acknowledgement before closing", async () => {
+    const closeSocket = vi.fn();
+    const closeAudio = vi.fn();
+    const disconnectProcessor = vi.fn();
+    const disconnectSource = vi.fn();
+    const disconnectGain = vi.fn();
+    const send = vi.fn();
+    const client = new LocalTranscriptionClient({
+      onSegment: vi.fn(),
+      onStatus: vi.fn(),
+      onError: vi.fn()
+    });
+    Object.assign(client as unknown as Record<string, unknown>, {
+      socket: {
+        readyState: WebSocket.OPEN,
+        send,
+        close: closeSocket
+      },
+      stream: {
+        getTracks: () => []
+      },
+      audioContext: {
+        close: closeAudio
+      },
+      processor: {
+        disconnect: disconnectProcessor
+      },
+      source: {
+        disconnect: disconnectSource
+      },
+      silentGain: {
+        disconnect: disconnectGain
+      }
+    });
+    const handleMessage = (
+      client as unknown as {
+        handleMessage: (event: MessageEvent) => void;
+      }
+    ).handleMessage.bind(client);
+
+    const stopPromise = client.stop();
+    await Promise.resolve();
+
+    expect(send).toHaveBeenCalledWith(JSON.stringify({ type: "flush" }));
+    expect(closeSocket).not.toHaveBeenCalled();
+
+    handleMessage({
+      data: JSON.stringify({
+        type: "engine_status",
+        status: "flushed",
+        message: "Transcription buffer flushed"
+      })
+    } as MessageEvent);
+    await stopPromise;
+
+    expect(closeSocket).toHaveBeenCalledOnce();
+    expect(closeAudio).toHaveBeenCalledOnce();
+    expect(disconnectProcessor).toHaveBeenCalledOnce();
+    expect(disconnectSource).toHaveBeenCalledOnce();
+    expect(disconnectGain).toHaveBeenCalledOnce();
+  });
+
   it("releases browser audio resources when the socket closes during stop flush", async () => {
     const stopTrack = vi.fn();
     const closeSocket = vi.fn();

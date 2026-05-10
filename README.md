@@ -247,6 +247,10 @@ high-pass filtering, low-energy noise suppression, silence trimming, Whisper VAD
 and RMS normalization. You can trade speed for accuracy with
 `ROOMPULSE_WHISPER_MODEL`, `ROOMPULSE_WHISPER_BEAM_SIZE`, and
 `ROOMPULSE_WHISPER_BEST_OF`.
+When the mic is stopped or a meeting ends, the browser waits up to 15 seconds
+for the local server's final flush acknowledgement before closing the socket.
+Tune this with `NEXT_PUBLIC_ROOMPULSE_TRANSCRIPTION_FLUSH_TIMEOUT_MS` if your
+local Whisper model needs more or less time.
 
 ## Speaker Recognition Limitations
 

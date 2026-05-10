@@ -37,7 +37,7 @@ type TranscriptionServerMessage =
 
 const TARGET_SAMPLE_RATE = 16_000;
 const SOCKET_CONNECT_TIMEOUT_MS = 4_000;
-const SOCKET_FLUSH_TIMEOUT_MS = 2_000;
+const DEFAULT_SOCKET_FLUSH_TIMEOUT_MS = 15_000;
 
 type AudioContextConstructor = new () => AudioContext;
 
@@ -98,6 +98,7 @@ export class LocalTranscriptionClient {
         this.onError("Local transcription WebSocket error");
       };
       this.socket.onclose = () => {
+        this.resolveFlushWaiter();
         this.onStatus({ status: "closed", message: "Local transcription stopped" });
       };
 
@@ -204,7 +205,7 @@ export class LocalTranscriptionClient {
         }
         resolve();
       };
-      const timeout = window.setTimeout(finish, SOCKET_FLUSH_TIMEOUT_MS);
+      const timeout = window.setTimeout(finish, getSocketFlushTimeoutMs());
       this.flushResolver = finish;
       try {
         socket.send(JSON.stringify({ type: "flush" }));
@@ -308,6 +309,18 @@ function normalizeSpeakerClusterCap(expectedParticipants: number | undefined): n
   return maxSpeakerClusters > 0
     ? Math.min(maxSpeakerClusters, MAX_EXPECTED_PARTICIPANTS)
     : null;
+}
+
+function getSocketFlushTimeoutMs(): number {
+  const raw = process.env.NEXT_PUBLIC_ROOMPULSE_TRANSCRIPTION_FLUSH_TIMEOUT_MS;
+  if (!raw) {
+    return DEFAULT_SOCKET_FLUSH_TIMEOUT_MS;
+  }
+
+  const value = Number(raw);
+  return Number.isFinite(value)
+    ? Math.max(1_000, Math.min(60_000, Math.floor(value)))
+    : DEFAULT_SOCKET_FLUSH_TIMEOUT_MS;
 }
 
 function openSocket(url: string): Promise<WebSocket> {
