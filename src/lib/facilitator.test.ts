@@ -698,6 +698,51 @@ describe("heartbeat facilitation", () => {
     ]);
   });
 
+  it("drops UI actions with malformed parameter containers while capping output", () => {
+    const output = {
+      source: "pi",
+      cards: [
+        {
+          id: "card-1",
+          kind: "heartbeat",
+          title: "Heartbeat",
+          body: "Keep going.",
+          priority: "medium"
+        }
+      ],
+      summary: "Malformed actions.",
+      nextHeartbeatHint: "Continue.",
+      reviewMarkdown: "# Review",
+      agendaActions: [],
+      uiActions: [
+        {
+          tool: "send_room_reminder",
+          parameters: null,
+          reason: "Null parameters."
+        },
+        {
+          tool: "update_review_document",
+          parameters: "markdown",
+          reason: "String parameters."
+        },
+        {
+          tool: "send_room_reminder",
+          parameters: { message: "Invite quiet voices." },
+          reason: "Valid reminder."
+        }
+      ],
+      ephemeralReminder: null
+    } as unknown as FacilitatorOutput;
+
+    expect(capFacilitatorOutput(output).uiActions).toEqual([
+      {
+        tool: "send_room_reminder",
+        parameters: { message: "Invite quiet voices." },
+        reason: "Valid reminder."
+      }
+    ]);
+  });
+
   it("deduplicates agenda actions by item id while keeping the latest state", () => {
     const output: FacilitatorOutput = {
       source: "pi",

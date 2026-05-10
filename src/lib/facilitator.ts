@@ -270,7 +270,7 @@ export function capUiActions(actions: UiAction[]): UiAction[] {
 }
 
 function capUiActionText(action: UiAction): UiAction | null {
-  if (!isKnownUiTool(action.tool)) {
+  if (!isKnownUiTool(action.tool) || !isRecord(action.parameters)) {
     return null;
   }
 
@@ -325,6 +325,10 @@ function isKnownUiTool(tool: string): tool is UiToolName {
     tool === "send_room_reminder" ||
     tool === "update_review_document"
   );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function cappedStringParam(value: unknown): string | undefined {
