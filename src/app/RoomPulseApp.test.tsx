@@ -5,6 +5,7 @@ import RoomPulseApp from "./RoomPulseApp";
 describe("RoomPulseApp", () => {
   afterEach(() => {
     delete process.env.NEXT_PUBLIC_ROOMPULSE_PI_TIMEOUT_MS;
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.useRealTimers();
   });
@@ -252,6 +253,94 @@ describe("RoomPulseApp", () => {
         .map(([, init]) => JSON.parse(String(init?.body ?? "{}")))
         .find((event) => event.type === "heartbeat_output");
       expect(heartbeatEvent?.payload.output.reviewMarkdown).toBe(toolMarkdown);
+    });
+  });
+
+  it("creates unique ids for multiple agenda items added in one heartbeat", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/meetings" && method === "GET") {
+          return Response.json({ meetings: [] });
+        }
+        if (url.includes("/api/review-document/init")) {
+          return Response.json({
+            source: "pi",
+            markdown: "# Initial review",
+            summary: "Initialized."
+          });
+        }
+        if (url === "/api/meetings" && method === "POST") {
+          return Response.json(
+            {
+              id: "meeting-agenda-add",
+              title: "Agenda add review",
+              goal: "Validate agenda tool actions.",
+              startedAt: Date.now(),
+              updatedAt: Date.now(),
+              endedAt: null,
+              status: "active",
+              isPaused: false,
+              eventCount: 0,
+              meeting: {},
+              state: null,
+              latestReviewMarkdown: "",
+              latestReviewVersionId: null
+            },
+            { status: 201 }
+          );
+        }
+        if (url.includes("/api/heartbeat")) {
+          return Response.json({
+            source: "pi",
+            cards: [],
+            summary: "Agenda items added.",
+            nextHeartbeatHint: "Continue.",
+            reviewMarkdown: "# Agenda add review",
+            agendaActions: [],
+            uiActions: [
+              {
+                tool: "add_agenda_item",
+                parameters: { title: "Confirm rollout owner" },
+                reason: "Room created a new owner follow-up."
+              },
+              {
+                tool: "add_agenda_item",
+                parameters: { title: "Confirm support coverage" },
+                reason: "Room created a new support follow-up."
+              }
+            ],
+            ephemeralReminder: null
+          });
+        }
+        if (url.includes("/events")) {
+          return Response.json({ id: "event-1" }, { status: 201 });
+        }
+        return Response.json({});
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /run heartbeat/i }));
+    });
+
+    expect(await screen.findByText(/confirm rollout owner/i)).toBeVisible();
+    expect(screen.getByText(/confirm support coverage/i)).toBeVisible();
+    await waitFor(() => {
+      const addedItems = fetchMock.mock.calls
+        .filter(([url]) => String(url).includes("/events"))
+        .map(([, init]) => JSON.parse(String(init?.body ?? "{}")))
+        .filter((event) => event.type === "agenda_item_added")
+        .map((event) => event.payload.item.id);
+      expect(new Set(addedItems).size).toBe(2);
     });
   });
 

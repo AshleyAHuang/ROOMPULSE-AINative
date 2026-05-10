@@ -210,6 +210,7 @@ export default function RoomPulseApp() {
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const endingSessionRef = useRef(false);
   const meetingStartAttemptRef = useRef(0);
+  const agendaItemSequenceRef = useRef(0);
   const reviewLastUpdatedAtRef = useRef(Date.now());
 
   const observedSpeakerLabels = useMemo(
@@ -1370,9 +1371,10 @@ export default function RoomPulseApp() {
   function addAgendaItem(title: string, reason: string) {
     const trimmed = title.trim();
     if (!trimmed) return;
+    agendaItemSequenceRef.current += 1;
 
     const item: AgendaItem = {
-      id: `agenda-${Date.now()}`,
+      id: `agenda-${Date.now()}-${agendaItemSequenceRef.current}`,
       title: trimmed,
       done: false
     };
