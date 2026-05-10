@@ -485,7 +485,10 @@ class SpeakerClusterer:
                 backend,
                 DEFAULT_NEURAL_SPEAKER_DISTANCE_THRESHOLD,
             )
-        return float(os.getenv("ROOMPULSE_SPEAKER_DISTANCE_THRESHOLD", str(default)))
+        return parse_positive_float(
+            os.getenv("ROOMPULSE_SPEAKER_DISTANCE_THRESHOLD"),
+            default,
+        )
 
 
 class TranscriptionSession:

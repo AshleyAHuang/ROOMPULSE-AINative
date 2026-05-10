@@ -163,6 +163,20 @@ class SpeakerClustererTest(unittest.TestCase):
             DEFAULT_NEURAL_SPEAKER_DISTANCE_THRESHOLDS["pyannote-embedding"],
         )
 
+    def test_invalid_speaker_threshold_env_falls_back_to_backend_default(self) -> None:
+        previous_threshold = os.environ.get("ROOMPULSE_SPEAKER_DISTANCE_THRESHOLD")
+        os.environ["ROOMPULSE_SPEAKER_DISTANCE_THRESHOLD"] = "not-a-number"
+        try:
+            clusterer = SpeakerClusterer(embedder=DspVoiceEmbedder())
+            threshold = clusterer.distance_threshold("dsp")
+        finally:
+            if previous_threshold is None:
+                os.environ.pop("ROOMPULSE_SPEAKER_DISTANCE_THRESHOLD", None)
+            else:
+                os.environ["ROOMPULSE_SPEAKER_DISTANCE_THRESHOLD"] = previous_threshold
+
+        self.assertEqual(threshold, server.DEFAULT_DSP_SPEAKER_DISTANCE_THRESHOLD)
+
     def test_embedding_quality_scores_short_quiet_audio_lower(self) -> None:
         clean = voice_embedding_quality(synthetic_voice(150, seconds=1.6))
         quiet = voice_embedding_quality(synthetic_voice(150, seconds=0.3) * 0.03)
