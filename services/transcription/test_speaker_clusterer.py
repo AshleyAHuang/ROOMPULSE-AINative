@@ -199,6 +199,7 @@ class SpeakerClustererTest(unittest.TestCase):
         self.assertEqual(second.label, "Speaker 1")
         self.assertEqual(third.label, "Speaker 2")
         self.assertEqual(clusterer.labels(), ["Speaker 1", "Speaker 2"])
+        self.assertGreaterEqual(clusterer.clusters[1].quality_sum, 0.2)
 
     def test_uses_backend_specific_neural_thresholds(self) -> None:
         clusterer = SpeakerClusterer(embedder=FixedEmbeddingVoiceEmbedder([]))

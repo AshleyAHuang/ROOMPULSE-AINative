@@ -701,6 +701,7 @@ class SpeakerClusterer:
         embedding: VoiceEmbedding,
         min_quality: float,
         samples: int = 1,
+        quality_sum: float | None = None,
     ) -> SpeakerCluster:
         cluster = SpeakerCluster(
             id=f"speaker-{len(self.clusters) + 1}",
@@ -708,7 +709,10 @@ class SpeakerClusterer:
             backend=embedding.backend,
             centroid=embedding.vector.copy(),
             samples=samples,
-            quality_sum=max(embedding.quality, min_quality),
+            quality_sum=max(
+                embedding.quality if quality_sum is None else quality_sum,
+                min_quality,
+            ),
             exemplars=[embedding.vector.copy()],
         )
         self.clusters.append(cluster)
@@ -769,6 +773,7 @@ class SpeakerClusterer:
                 ),
                 min_quality,
                 samples=candidate.samples,
+                quality_sum=candidate.quality_sum,
             )
         return None
 
