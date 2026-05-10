@@ -1321,9 +1321,10 @@ export default function RoomPulseApp() {
 
     const startToken = micStartTokenRef.current + 1;
     micStartTokenRef.current = startToken;
+    let client: LocalTranscriptionClient | null = null;
     try {
       setMicStatus("Requesting browser microphone permission");
-      const client = new LocalTranscriptionClient({
+      client = new LocalTranscriptionClient({
         expectedParticipants,
         onSegment: (segment) => {
           if (micStartTokenRef.current !== startToken) {
@@ -1372,9 +1373,15 @@ export default function RoomPulseApp() {
       }
       setIsMicRunning(true);
     } catch (error) {
-      void cleanupMicResources();
-      setIsMicRunning(false);
-      setMicStatus(error instanceof Error ? error.message : String(error));
+      if (transcriptionClientRef.current === client) {
+        void cleanupMicResources();
+      } else {
+        void client?.stop();
+      }
+      if (micStartTokenRef.current === startToken) {
+        setIsMicRunning(false);
+        setMicStatus(error instanceof Error ? error.message : String(error));
+      }
     }
   }
 
