@@ -110,12 +110,65 @@ describe("RoomPulseApp", () => {
     expect(
       await screen.findByRole("button", { name: /run heartbeat/i })
     ).toBeInTheDocument();
-    expect(
-      screen.getAllByRole("heading", { name: /launch readiness review/i }).length
-    ).toBeGreaterThan(0);
+    await waitFor(() => {
+      expect(
+        screen.getAllByRole("heading", { name: /launch readiness review/i })
+          .length
+      ).toBeGreaterThan(0);
+    });
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/review-document/init",
       expect.objectContaining({ method: "POST" })
+    );
+  });
+
+  it("enters the live demo immediately while strict Pi initialization is pending", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/review-document/init")) {
+        return new Promise<Response>(() => undefined);
+      }
+      if (url === "/api/meetings") {
+        return Response.json(
+          {
+            id: "demo-session",
+            title: "RoomPulse MVP readiness review",
+            goal: "Strict init is pending.",
+            startedAt: Date.now(),
+            updatedAt: Date.now(),
+            endedAt: null,
+            status: "active",
+            isPaused: false,
+            eventCount: 0,
+            meeting: {},
+            state: null,
+            latestReviewMarkdown: "",
+            latestReviewVersionId: null
+          },
+          { status: 201 }
+        );
+      }
+      if (url.includes("/events")) {
+        return Response.json({ id: "event-1" }, { status: 201 });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+
+    fireEvent.click(screen.getByRole("button", { name: /launch live demo/i }));
+
+    expect(
+      await screen.findByRole("button", { name: /run heartbeat/i })
+    ).toBeInTheDocument();
+    expect(
+      screen.getAllByRole("heading", {
+        name: /roompulse mvp readiness review/i
+      }).length
+    ).toBeGreaterThan(0);
+    expect(screen.getAllByText(/strict pi initialization/i).length).toBeGreaterThan(
+      0
     );
   });
 

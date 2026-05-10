@@ -890,23 +890,13 @@ export default function RoomPulseApp() {
       heartbeatIntervalSeconds: DEMO_HEARTBEAT_INTERVAL_SECONDS
     };
     const startedAt = Date.now();
-    let initialDocument: InitialReviewDocument;
-    try {
-      initialDocument = await initializeReviewDocument(demoMeeting);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setHeartbeatError(message);
-      setLogStatus(`Live demo blocked: ${message}`);
-      setIsInitializingReview(false);
-      return;
-    }
-    const initialReview = initialDocument.markdown;
+    const initialReview = createPendingReviewMarkdown(demoMeeting);
     const initialVersion: ReviewVersion = {
-      id: `${startedAt}-initial-review`,
+      id: `${startedAt}-pending-review`,
       timestamp: startedAt,
-      source: initialDocument.source,
+      source: "initial",
       markdown: initialReview,
-      summary: initialDocument.summary
+      summary: "Strict Pi initialization is running."
     };
 
     setMeeting(demoMeeting);
@@ -924,7 +914,7 @@ export default function RoomPulseApp() {
     setCurrentReviewVersionId(initialVersion.id);
     setEphemeralReminder(null);
     setCurrentOutput({
-      source: initialDocument.source,
+      source: "pi",
       cards: [
         {
           id: "demo-armed",
@@ -935,7 +925,7 @@ export default function RoomPulseApp() {
           priority: "medium"
         }
       ],
-      summary: initialDocument.summary,
+      summary: "Strict Pi initialization is running.",
       nextHeartbeatHint: `First pulse will arrive at ${demoMeeting.heartbeatIntervalSeconds} seconds.`,
       reviewMarkdown: initialReview,
       agendaActions: [],
@@ -952,11 +942,6 @@ export default function RoomPulseApp() {
         type: "meeting_started",
         timestamp: startedAt,
         payload: { meeting: demoMeeting, mode: "scripted-demo" }
-      },
-      {
-        type: "review_initialized",
-        timestamp: startedAt,
-        payload: { reviewVersion: initialVersion }
       }
     ]);
     setIsInitializingReview(false);
@@ -964,7 +949,62 @@ export default function RoomPulseApp() {
       () => startScriptedDemo(demoMeeting.heartbeatIntervalSeconds),
       120
     );
-  }, [createMeetingLogFor, startScriptedDemo]);
+
+    void initializeReviewDocument(demoMeeting)
+      .then((initialDocument) => {
+        const initializedAt = Date.now();
+        const initializedVersion: ReviewVersion = {
+          id: `${initializedAt}-initial-review`,
+          timestamp: initializedAt,
+          source: initialDocument.source,
+          markdown: initialDocument.markdown,
+          summary: initialDocument.summary
+        };
+        setReviewMarkdown(initialDocument.markdown);
+        setReviewVersions((versions) => [initializedVersion, ...versions]);
+        setCurrentReviewVersionId(initializedVersion.id);
+        setCurrentOutput((current) => ({
+          source: initialDocument.source,
+          cards:
+            current?.cards.length
+              ? current.cards
+              : [
+                  {
+                    id: "demo-armed",
+                    kind: "heartbeat",
+                    title: "Transcript armed",
+                    body:
+                      "Scripted transcript starts in moments; heartbeat facilitation will run through Pi.",
+                    priority: "medium"
+                  }
+                ],
+          summary: initialDocument.summary,
+          nextHeartbeatHint:
+            current?.nextHeartbeatHint ??
+            `First pulse will arrive at ${demoMeeting.heartbeatIntervalSeconds} seconds.`,
+          reviewMarkdown: initialDocument.markdown,
+          agendaActions: current?.agendaActions ?? [],
+          uiActions: current?.uiActions ?? [],
+          ephemeralReminder: current?.ephemeralReminder ?? null,
+          adapterNotice: initialDocument.adapterNotice
+        }));
+        logMeetingEvent(
+          "review_initialized",
+          { reviewVersion: initializedVersion },
+          initializedAt
+        );
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        setHeartbeatError(message);
+        setLogStatus(`Live demo Pi init failed: ${message}`);
+        logMeetingEvent(
+          "review_initialization_failed",
+          { message },
+          Date.now()
+        );
+      });
+  }, [createMeetingLogFor, logMeetingEvent, startScriptedDemo]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -2396,6 +2436,40 @@ function normalizeInitialReviewDocument(
     adapterNotice:
       typeof value.adapterNotice === "string" ? value.adapterNotice : undefined
   };
+}
+
+function createPendingReviewMarkdown(meeting: MeetingConfig): string {
+  const agendaItems = meeting.agenda.length
+    ? meeting.agenda.map((item) => `- [ ] ${item.title}`).join("\n")
+    : "- [ ] Open discussion";
+  const participants = meeting.participants.length
+    ? meeting.participants
+        .map((participant) =>
+          participant.role
+            ? `- ${participant.name} - ${participant.role}`
+            : `- ${participant.name}`
+        )
+        .join("\n")
+    : `- Expected voices: ${meeting.expectedParticipants}`;
+
+  return [
+    `# ${meeting.title}`,
+    "",
+    "## Goal",
+    meeting.goal,
+    "",
+    "## Agenda",
+    agendaItems,
+    "",
+    "## Participants",
+    participants,
+    "",
+    "## Strict Pi initialization",
+    "The live demo has started. The Pi agent is generating the initial markdown document and will replace this placeholder when the strict initialization call returns.",
+    "",
+    "## Live notes",
+    "- Transcript is starting now."
+  ].join("\n");
 }
 
 function parseAgenda(value: string): AgendaItem[] {
