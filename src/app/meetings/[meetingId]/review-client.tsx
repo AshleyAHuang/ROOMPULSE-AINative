@@ -29,8 +29,12 @@ export default function MeetingReviewClient({
   );
 
   async function copy(label: string, value: string) {
-    await navigator.clipboard.writeText(value);
-    setCopied(label);
+    try {
+      await copyText(value);
+      setCopied(label);
+    } catch {
+      setCopied(`${label} failed`);
+    }
     window.setTimeout(() => setCopied(null), 1600);
   }
 
@@ -41,9 +45,11 @@ export default function MeetingReviewClient({
     const href = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = href;
-    anchor.download = `${snapshot.metadata.title.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}-transcript.txt`;
+    anchor.download = `${downloadSlug(snapshot.metadata.title)}-transcript.txt`;
+    document.body.append(anchor);
     anchor.click();
-    URL.revokeObjectURL(href);
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(href), 0);
   }
 
   return (
@@ -209,6 +215,37 @@ function formatTranscript(snapshot: MeetingLogSnapshot): string {
     (line) => `[${formatClock(line.timestamp)}] ${line.speakerLabel}: ${line.text}`
   );
   return [...header, ...lines, ""].join("\n");
+}
+
+async function copyText(value: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.append(textarea);
+  textarea.select();
+  try {
+    if (!document.execCommand("copy")) {
+      throw new Error("Copy command failed");
+    }
+  } finally {
+    textarea.remove();
+  }
+}
+
+function downloadSlug(title: string): string {
+  return (
+    title
+      .replace(/[^a-z0-9]+/gi, "-")
+      .replace(/^-|-$/g, "")
+      .toLowerCase() || "roompulse-meeting"
+  );
 }
 
 function formatClock(timestamp: number): string {
