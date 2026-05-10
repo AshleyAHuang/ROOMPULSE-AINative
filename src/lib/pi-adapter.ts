@@ -14,7 +14,7 @@ import {
 
 const DEFAULT_PI_TIMEOUT_MS = 25_000;
 const DEFAULT_CODEX_PROVIDER = "openai-codex";
-const DEFAULT_CODEX_MODEL = "gpt-5.5";
+const DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark";
 const DEFAULT_THINKING_LEVEL = "minimal";
 const CODEX_AUTH_CLAIM = "https://api.openai.com/auth";
 

@@ -96,7 +96,7 @@ By default, RoomPulse uses Pi's OpenAI Codex subscription provider:
 
 ```bash
 ROOMPULSE_PI_PROVIDER=openai-codex
-ROOMPULSE_PI_MODEL=gpt-5.5
+ROOMPULSE_PI_MODEL=gpt-5.3-codex-spark
 ROOMPULSE_PI_THINKING_LEVEL=minimal
 ```
 
@@ -110,7 +110,7 @@ Useful adapter overrides:
 
 ```bash
 ROOMPULSE_PI_PROVIDER=openai-codex
-ROOMPULSE_PI_MODEL=gpt-5.5
+ROOMPULSE_PI_MODEL=gpt-5.3-codex-spark
 ROOMPULSE_PI_THINKING_LEVEL=minimal
 ROOMPULSE_PI_TIMEOUT_MS=25000
 ROOMPULSE_CODEX_AUTH_PATH=/path/to/codex/auth.json

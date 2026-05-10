@@ -111,7 +111,7 @@ describe("Pi adapter", () => {
     ModelRegistry.create.mockReturnValue(modelRegistry);
     modelRegistry.find.mockReturnValue({
       provider: "openai-codex",
-      id: "gpt-5.5"
+      id: "gpt-5.3-codex-spark"
     });
     modelRegistry.hasConfiguredAuth.mockReturnValue(true);
     SessionManager.inMemory.mockReturnValue(sessionManager);
@@ -174,13 +174,16 @@ describe("Pi adapter", () => {
       accountId: "acct_123"
     });
     expect(ModelRegistry.create).toHaveBeenCalledWith(authStorage);
-    expect(modelRegistry.find).toHaveBeenCalledWith("openai-codex", "gpt-5.5");
+    expect(modelRegistry.find).toHaveBeenCalledWith(
+      "openai-codex",
+      "gpt-5.3-codex-spark"
+    );
     expect(SessionManager.inMemory).toHaveBeenCalledWith(process.cwd());
     expect(createAgentSession).toHaveBeenCalledWith(
       expect.objectContaining({
         authStorage,
         modelRegistry,
-        model: { provider: "openai-codex", id: "gpt-5.5" },
+        model: { provider: "openai-codex", id: "gpt-5.3-codex-spark" },
         sessionManager,
         noTools: "builtin",
         customTools: expect.any(Array),
