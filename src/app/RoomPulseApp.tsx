@@ -2796,6 +2796,7 @@ function fallbackStateFromSnapshot(
     snapshot.reviewVersions[0]?.markdown ||
     createInitialReviewMarkdown(meeting);
   const now = Date.now();
+  const lastHeartbeatAt = latestHeartbeatTimestamp(snapshot);
 
   return {
     status: snapshot.metadata.status,
@@ -2808,9 +2809,8 @@ function fallbackStateFromSnapshot(
       snapshot.reviewVersions[0]?.id ??
       `${snapshot.metadata.startedAt}-initial-review`,
     timeline: [],
-    lastHeartbeatAt: snapshot.metadata.updatedAt,
-    nextHeartbeatAt:
-      snapshot.metadata.updatedAt + meeting.heartbeatIntervalSeconds * 1000,
+    lastHeartbeatAt,
+    nextHeartbeatAt: lastHeartbeatAt + meeting.heartbeatIntervalSeconds * 1000,
     meetingStartedAt: snapshot.metadata.startedAt,
     heartbeatCount: snapshot.events.filter(
       (event) => event.type === "heartbeat_output"
@@ -2824,6 +2824,13 @@ function fallbackStateFromSnapshot(
     updatedAt: now,
     endedAt: snapshot.metadata.endedAt
   };
+}
+
+function latestHeartbeatTimestamp(snapshot: ClientMeetingLogSnapshot): number {
+  const latestHeartbeat = [...snapshot.events]
+    .reverse()
+    .find((event) => event.type === "heartbeat_output");
+  return latestHeartbeat?.timestamp ?? snapshot.metadata.startedAt;
 }
 
 function mergeTranscriptLines(

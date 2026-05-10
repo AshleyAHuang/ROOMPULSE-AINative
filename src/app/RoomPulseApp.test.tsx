@@ -952,6 +952,157 @@ describe("RoomPulseApp", () => {
     ).toHaveValue("new-review");
   });
 
+  it("resumes stateless sessions from the latest heartbeat instead of updatedAt", async () => {
+    const now = Date.now();
+    const lastHeartbeatAt = now - 60_000;
+    const meeting = {
+      title: "Stateless resume",
+      goal: "Review the fresh transcript delta.",
+      context: "",
+      agenda: [{ id: "a1", title: "Open", done: false }],
+      expectedParticipants: 1,
+      participants: [],
+      heartbeatIntervalSeconds: 30
+    };
+    let heartbeatPayload: Record<string, unknown> | null = null;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url === "/api/meetings") {
+        return Response.json({
+          meetings: [
+            {
+              id: "stateless-session",
+              title: meeting.title,
+              goal: meeting.goal,
+              startedAt: now - 120_000,
+              updatedAt: now,
+              endedAt: null,
+              status: "active",
+              isPaused: false,
+              eventCount: 3,
+              meeting,
+              state: null,
+              latestReviewMarkdown: "# Stateless resume",
+              latestReviewVersionId: "review-1"
+            }
+          ]
+        });
+      }
+      if (url === "/api/meetings/stateless-session") {
+        if (method === "PATCH") {
+          return Response.json({ id: "stateless-session" });
+        }
+        return Response.json({
+          metadata: {
+            id: "stateless-session",
+            title: meeting.title,
+            goal: meeting.goal,
+            startedAt: now - 120_000,
+            updatedAt: now,
+            endedAt: null,
+            status: "active",
+            isPaused: false,
+            eventCount: 3,
+            meeting,
+            state: null,
+            latestReviewMarkdown: "# Stateless resume",
+            latestReviewVersionId: "review-1"
+          },
+          events: [
+            {
+              id: "event-1",
+              type: "meeting_started",
+              timestamp: now - 120_000,
+              payload: { meeting }
+            },
+            {
+              id: "event-2",
+              type: "heartbeat_output",
+              timestamp: lastHeartbeatAt,
+              payload: {
+                reviewVersionId: "review-1",
+                output: {
+                  source: "pi",
+                  summary: "Previous heartbeat.",
+                  reviewMarkdown: "# Stateless resume"
+                }
+              }
+            },
+            {
+              id: "event-3",
+              type: "transcript_line",
+              timestamp: now - 10_000,
+              payload: {}
+            }
+          ],
+          transcript: [
+            {
+              id: "line-after-heartbeat",
+              speakerId: "speaker-1",
+              speakerLabel: "Speaker 1",
+              text: "This line should be in the next heartbeat delta.",
+              timestamp: now - 10_000,
+              source: "speech",
+              confidence: 0.9
+            }
+          ],
+          reviewVersions: [
+            {
+              id: "review-1",
+              timestamp: lastHeartbeatAt,
+              source: "pi",
+              markdown: "# Stateless resume",
+              summary: "Previous heartbeat."
+            }
+          ]
+        });
+      }
+      if (url === "/api/heartbeat") {
+        heartbeatPayload = JSON.parse(String(init?.body ?? "{}"));
+        return Response.json({
+          source: "pi",
+          cards: [
+            {
+              id: "card-1",
+              kind: "heartbeat",
+              title: "Reviewed",
+              body: "Reviewed the delta.",
+              priority: "medium"
+            }
+          ],
+          summary: "Reviewed delta.",
+          nextHeartbeatHint: "Continue.",
+          reviewMarkdown: "# Stateless resume\n\nReviewed.",
+          agendaActions: [],
+          uiActions: [],
+          ephemeralReminder: null
+        });
+      }
+      if (url.includes("/events")) {
+        return Response.json({ id: "event-1" }, { status: 201 });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    expect(await screen.findByText(/stateless resume/i)).toBeVisible();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^resume$/i }));
+    });
+    expect(
+      await screen.findByRole("button", { name: /run heartbeat now/i })
+    ).toBeVisible();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /run heartbeat now/i }));
+    });
+
+    await waitFor(() => {
+      expect(heartbeatPayload?.lastHeartbeatAt).toBe(lastHeartbeatAt);
+    });
+  });
+
   it("retries queued meeting log events after a transient event write failure", async () => {
     let eventWrites = 0;
     const fetchMock = vi.fn(
