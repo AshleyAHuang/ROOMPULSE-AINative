@@ -315,9 +315,10 @@ export function createUiToolDefinitions(
       name: "update_review_document",
       label: "Update review document",
       description:
-        "Replace the live markdown review document with the complete non-destructive revision for this heartbeat.",
+        "Replace the live markdown review document with the complete non-destructive revision for this heartbeat, editing every relevant section in place.",
       parameters: {
-        markdown: "complete markdown document",
+        markdown:
+          "complete markdown document; preserve resolved or removed material with Markdown strikethrough instead of deleting it",
         summary: "short version summary"
       }
     },
@@ -575,7 +576,7 @@ export function createInitialReviewMarkdown(meeting: MeetingConfig): string {
     participants,
     "",
     "## Live Review",
-    "_RoomPulse will revise this document every heartbeat. Removed or superseded claims should be struck through, not deleted._"
+    "_RoomPulse revises the full document every heartbeat. Removed, resolved, merged, or superseded meeting content should be struck through, not deleted._"
   ].join("\n");
 }
 

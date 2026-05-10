@@ -367,13 +367,16 @@ Respond with one JSON object only, matching:
 }
 
 Rules:
-- First update the markdown document: produce the complete revised document in "reviewMarkdown" before deciding any UI tool JSONs.
+- First update the markdown document: read the entire currentReviewMarkdown, then produce the complete revised document in "reviewMarkdown" before deciding any UI tool JSONs.
+- Treat reviewMarkdown as the room's living meeting artifact, not a heartbeat append log. Revise all relevant sections in place each heartbeat, including title, goal, context, agenda, participants, decisions, risks, and action items when the transcript supports changes.
 - Then respond with tool-call JSONs in "uiActions" only for the exposed RoomPulse tools: markdown document edits, agenda changes, and one-round reminders.
 - Maximum ${MAX_CARDS} cards. Prefer fewer, sharper cards over many shallow ones.
 - Each "title" is at most 6 words. Each "body" is one sentence under 140 characters.
 - Cards should reflect what is happening NOW: surface risks, ask for owners, flag agenda drift, nudge quiet voices, capture decisions or actions.
 - Do not invent participants. Only refer to "Speaker N" labels you can see.
 - Update reviewMarkdown non-destructively: do not delete or rewrite away prior useful lines; when superseding or removing a claim, use Markdown strikethrough and add the replacement nearby.
+- If the topic changes, a decision resolves an item, or the room drops/merges an agenda item, keep the historical item visible with Markdown strikethrough instead of deleting it from the document.
+- Use "update_review_document" when you revise the visible markdown; its markdown parameter should match the full "reviewMarkdown" document.
 - Only include agendaActions or agenda uiActions when the transcript clearly supports adding, completing, reopening, or deleting an agenda item.
 - The reminder tool is only for a quiet reminder during this heartbeat round. Do not use it for persistent document content.
 - Do not control microphone, scripted demo, pause/resume, heartbeat interval, expected participant count, or past meeting loading. Those are user controls, not Pi tools.
@@ -594,9 +597,9 @@ function createRoomPulseUiTools(queuedActions: UiAction[]) {
       name: "update_review_document",
       label: "Update review document",
       description:
-        "Replace the live markdown review document with a complete non-destructive revision.",
+        "Replace the live markdown review document with a complete non-destructive revision across every relevant section.",
       promptSnippet:
-        "update_review_document: replace the live markdown document after applying non-destructive edits.",
+        "update_review_document: replace the full live markdown document after editing title, agenda, decisions, risks, actions, and notes as needed; strike through removed or superseded content instead of deleting it.",
       parameters: Type.Object({
         markdown: Type.String(),
         summary: Type.Optional(Type.String()),

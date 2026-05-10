@@ -41,21 +41,30 @@ covers launch risks” or “done with owners.”
 
 ## Local Meeting Logs
 
-RoomPulse stores meeting logs locally on the Next.js server under
-`.roompulse/meetings/`. This directory is git-ignored. Each meeting gets:
+RoomPulse stores session history locally on the Next.js server in SQLite at
+`.roompulse/roompulse.sqlite`. The `.roompulse/` directory is git-ignored.
+The database stores:
 
-- `metadata.json`: title, goal, start time, current event count, and setup context.
-- `events.jsonl`: append-only event stream for meeting start, transcript lines,
-  heartbeat outputs, agenda changes, review restores, pause toggles, and demo
+- `meeting_sessions`: title, goal, status, pause state, latest review document,
+  setup context, and the resumable live UI state.
+- `meeting_events`: append-only event stream for meeting start, transcript lines,
+  heartbeat outputs, agenda changes, review restores, pause toggles, and end
   events.
+- `transcript_lines`: queryable raw transcript rows.
+- `review_versions`: every markdown document version produced by the
+  facilitator or restored by the user.
 
-The setup screen includes a **Past meetings** panel that lists local logs and
-opens a compact event preview. Backend endpoints:
+The setup screen and sidebar list persisted sessions. Active or paused sessions
+can be resumed after a page reload; ended sessions open a review page with
+copy/export controls for the transcript and latest markdown review.
+
+Backend endpoints:
 
 ```text
 GET  /api/meetings
 POST /api/meetings
 GET  /api/meetings/{meetingId}
+PATCH /api/meetings/{meetingId}
 POST /api/meetings/{meetingId}/events
 ```
 
@@ -190,10 +199,11 @@ npm run dev:strict
 
 - `src/app/RoomPulseApp.tsx`: setup feeder, room display, heartbeat loop, demo transcript, and mic controls.
 - `src/app/api/heartbeat/route.ts`: server heartbeat endpoint.
-- `src/app/api/meetings/route.ts`: local meeting log list/create endpoint.
-- `src/app/api/meetings/[meetingId]/route.ts`: local meeting log read endpoint.
+- `src/app/api/meetings/route.ts`: SQLite session list/create endpoint.
+- `src/app/api/meetings/[meetingId]/route.ts`: SQLite session read/update endpoint.
 - `src/app/api/meetings/[meetingId]/events/route.ts`: append-only meeting event endpoint.
-- `src/lib/meeting-log-store.ts`: filesystem-backed meeting log writer/reader.
+- `src/app/meetings/[meetingId]/page.tsx`: ended-session review page.
+- `src/lib/meeting-log-store.ts`: SQLite session, transcript, and review-version store.
 - `src/lib/local-transcription-client.ts`: browser mic capture, downsampling, PCM streaming, and transcript event handling.
 - `src/lib/pi-adapter.ts`: Pi SDK adapter with deterministic fallback.
 - `src/lib/facilitator.ts`: heartbeat input shaping and local facilitator output.

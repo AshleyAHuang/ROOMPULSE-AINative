@@ -35,6 +35,7 @@ import {
 
 type Phase = "setup" | "meeting";
 type TranscriptMode = "demo" | "mic";
+type MeetingStatus = "active" | "paused" | "ended";
 
 interface ClientMeetingLogMetadata {
   id: string;
@@ -42,7 +43,14 @@ interface ClientMeetingLogMetadata {
   goal: string;
   startedAt: number;
   updatedAt: number;
+  endedAt: number | null;
+  status: MeetingStatus;
+  isPaused: boolean;
   eventCount: number;
+  meeting: MeetingConfig;
+  state: PersistedMeetingState | null;
+  latestReviewMarkdown: string;
+  latestReviewVersionId: string | null;
 }
 
 interface ClientMeetingLogEvent {
@@ -55,6 +63,27 @@ interface ClientMeetingLogEvent {
 interface ClientMeetingLogSnapshot {
   metadata: ClientMeetingLogMetadata;
   events: ClientMeetingLogEvent[];
+  transcript: TranscriptLine[];
+  reviewVersions: ReviewVersion[];
+}
+
+interface PersistedMeetingState {
+  status: MeetingStatus;
+  meeting: MeetingConfig;
+  transcript: TranscriptLine[];
+  reviewMarkdown: string;
+  reviewVersions: ReviewVersion[];
+  currentReviewVersionId: string;
+  timeline: TimelineEntry[];
+  lastHeartbeatAt: number;
+  nextHeartbeatAt: number;
+  meetingStartedAt: number;
+  heartbeatCount: number;
+  isPaused: boolean;
+  currentOutput: FacilitatorOutput | null;
+  activeAgendaItemId: string | null;
+  updatedAt: number;
+  endedAt?: number | null;
 }
 
 interface PendingMeetingLogEvent {
@@ -164,6 +193,8 @@ export default function RoomPulseApp() {
   const demoTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const meetingLogIdRef = useRef<string | null>(null);
   const pendingLogEventsRef = useRef<PendingMeetingLogEvent[]>([]);
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const endingSessionRef = useRef(false);
 
   const observedSpeakerLabels = useMemo(
     () => Array.from(new Set(transcript.map((line) => line.speakerLabel))),
@@ -198,6 +229,45 @@ export default function RoomPulseApp() {
     agendaProgress.active ??
     meeting.agenda[0] ??
     null;
+
+  const buildPersistedMeetingState = useCallback(
+    (overrides: Partial<PersistedMeetingState> = {}): PersistedMeetingState => {
+      const updatedAt = Date.now();
+      return {
+        status: isPaused ? "paused" : "active",
+        meeting,
+        transcript,
+        reviewMarkdown,
+        reviewVersions,
+        currentReviewVersionId,
+        timeline,
+        lastHeartbeatAt,
+        nextHeartbeatAt,
+        meetingStartedAt,
+        heartbeatCount,
+        isPaused,
+        currentOutput,
+        activeAgendaItemId,
+        updatedAt,
+        ...overrides
+      };
+    },
+    [
+      activeAgendaItemId,
+      currentOutput,
+      currentReviewVersionId,
+      heartbeatCount,
+      isPaused,
+      lastHeartbeatAt,
+      meeting,
+      meetingStartedAt,
+      nextHeartbeatAt,
+      reviewMarkdown,
+      reviewVersions,
+      timeline,
+      transcript
+    ]
+  );
 
   useEffect(() => {
     if (
@@ -260,9 +330,18 @@ export default function RoomPulseApp() {
           goal: error instanceof Error ? error.message : String(error),
           startedAt: Date.now(),
           updatedAt: Date.now(),
-          eventCount: 0
+          endedAt: null,
+          status: "active",
+          isPaused: false,
+          eventCount: 0,
+          meeting: defaultMeeting,
+          state: null,
+          latestReviewMarkdown: "",
+          latestReviewVersionId: null
         },
-        events: []
+        events: [],
+        transcript: [],
+        reviewVersions: []
       });
     }
   }, []);
@@ -490,6 +569,174 @@ export default function RoomPulseApp() {
     setIsDemoRunning(false);
   }, []);
 
+  async function openMeetingLog(id: string) {
+    try {
+      const response = await fetch(`/api/meetings/${encodeURIComponent(id)}`);
+      if (!response.ok) {
+        throw new Error(`Meeting log returned ${response.status}`);
+      }
+      const snapshot = (await response.json()) as ClientMeetingLogSnapshot;
+      setSelectedMeetingLog(snapshot);
+
+      if (snapshot.metadata.status === "ended") {
+        navigateToMeetingReview(id);
+        return;
+      }
+
+      restoreMeetingFromSnapshot(snapshot);
+    } catch (error) {
+      setLogStatus(
+        `Meeting restore failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  function restoreMeetingFromSnapshot(snapshot: ClientMeetingLogSnapshot) {
+    endingSessionRef.current = false;
+    const restoredState = snapshot.metadata.state ?? fallbackStateFromSnapshot(snapshot);
+    const restoredMeeting = restoredState.meeting;
+    const restoredTranscript =
+      restoredState.transcript.length > 0
+        ? restoredState.transcript
+        : snapshot.transcript;
+    const restoredVersions =
+      restoredState.reviewVersions.length > 0
+        ? restoredState.reviewVersions
+        : snapshot.reviewVersions;
+    const restoredReviewMarkdown =
+      restoredState.reviewMarkdown ||
+      snapshot.metadata.latestReviewMarkdown ||
+      restoredVersions[0]?.markdown ||
+      createInitialReviewMarkdown(restoredMeeting);
+    const paused =
+      snapshot.metadata.status === "paused" || restoredState.isPaused;
+    const nowMs = Date.now();
+    const lastBeat = restoredState.lastHeartbeatAt || snapshot.metadata.startedAt;
+    const nextBeat = paused
+      ? restoredState.nextHeartbeatAt
+      : nowMs +
+        Math.max(
+          0,
+          restoredMeeting.heartbeatIntervalSeconds * 1000 -
+            Math.max(0, nowMs - lastBeat)
+        );
+
+    stopMic();
+    stopScriptedDemo();
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+
+    transcriptStoreRef.current.replace(restoredTranscript);
+    meetingLogIdRef.current = snapshot.metadata.id;
+    setMeetingLogId(snapshot.metadata.id);
+    setMeeting(restoredMeeting);
+    setMeetingDraft(restoredMeeting);
+    setAgendaText(restoredMeeting.agenda.map((item) => item.title).join("\n"));
+    setParticipantsText(
+      restoredMeeting.participants
+        .map((participant) =>
+          participant.role
+            ? `${participant.name} - ${participant.role}`
+            : participant.name
+        )
+        .join("\n")
+    );
+    setTranscript(restoredTranscript);
+    setTranscriptMode("mic");
+    setCurrentOutput(restoredState.currentOutput);
+    setTimeline(restoredState.timeline);
+    setLastHeartbeatAt(lastBeat);
+    setNextHeartbeatAt(nextBeat);
+    setMeetingStartedAt(restoredState.meetingStartedAt || snapshot.metadata.startedAt);
+    setHeartbeatCount(restoredState.heartbeatCount);
+    setIsPaused(paused);
+    setReviewMarkdown(restoredReviewMarkdown);
+    setReviewVersions(
+      restoredVersions.length > 0
+        ? restoredVersions
+        : [
+            {
+              id: `${snapshot.metadata.startedAt}-initial-review`,
+              timestamp: snapshot.metadata.startedAt,
+              source: "initial",
+              markdown: restoredReviewMarkdown,
+              summary: "Initial meeting review document."
+            }
+          ]
+    );
+    setCurrentReviewVersionId(
+      restoredState.currentReviewVersionId ||
+        restoredVersions[0]?.id ||
+        `${snapshot.metadata.startedAt}-initial-review`
+    );
+    setActiveAgendaItemId(
+      restoredState.activeAgendaItemId ??
+        restoredMeeting.agenda.find((item) => !item.done)?.id ??
+        restoredMeeting.agenda[0]?.id ??
+        null
+    );
+    setEphemeralReminder(null);
+    setHeartbeatError(null);
+    setSelectedMeetingLog(snapshot);
+    setIsPastMeetingsOpen(false);
+    setLogStatus(`Resumed session: ${snapshot.metadata.id}`);
+    setPhase("meeting");
+
+    if (!paused) {
+      void startMic();
+    }
+  }
+
+  async function endMeetingSession() {
+    endingSessionRef.current = true;
+    const id = meetingLogIdRef.current;
+    const endedAt = Date.now();
+    const state = buildPersistedMeetingState({
+      status: "ended",
+      isPaused: true,
+      endedAt,
+      updatedAt: endedAt
+    });
+
+    stopMic();
+    stopScriptedDemo();
+    setIsPaused(true);
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+
+    if (!id) {
+      setPhase("setup");
+      return;
+    }
+
+    setLogStatus("Ending session...");
+    try {
+      await sendMeetingLogEvent(id, {
+        type: "meeting_ended",
+        timestamp: endedAt,
+        payload: { endedAt }
+      });
+      await sendMeetingState(id, {
+        status: "ended",
+        isPaused: true,
+        endedAt,
+        updatedAt: endedAt,
+        state
+      });
+      await refreshPastMeetings();
+      navigateToMeetingReview(id);
+    } catch (error) {
+      endingSessionRef.current = false;
+      setLogStatus(
+        `End session failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
   const startScriptedDemo = useCallback(() => {
     stopScriptedDemo();
     stopMic();
@@ -531,6 +778,7 @@ export default function RoomPulseApp() {
   ]);
 
   const launchLiveDemo = useCallback(() => {
+    endingSessionRef.current = false;
     const demoMeeting: MeetingConfig = {
       title: "Launch readiness review",
       goal: "Leave with owners for every open launch risk.",
@@ -696,7 +944,39 @@ export default function RoomPulseApp() {
     }
   }, [phase, refreshPastMeetings]);
 
+  useEffect(() => {
+    if (phase !== "meeting" || !meetingLogId || endingSessionRef.current) {
+      return;
+    }
+
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current);
+    }
+
+    const state = buildPersistedMeetingState();
+    autosaveTimerRef.current = setTimeout(() => {
+      void sendMeetingState(meetingLogId, {
+        status: state.status,
+        isPaused: state.isPaused,
+        updatedAt: state.updatedAt,
+        state
+      }).catch((error) => {
+        setLogStatus(
+          `Session save failed: ${error instanceof Error ? error.message : String(error)}`
+        );
+      });
+    }, 350);
+
+    return () => {
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = null;
+      }
+    };
+  }, [buildPersistedMeetingState, meetingLogId, phase]);
+
   function startMeeting() {
+    endingSessionRef.current = false;
     const expectedParticipants = clampFiniteNumber(
       meetingDraft.expectedParticipants,
       1,
@@ -1210,11 +1490,11 @@ export default function RoomPulseApp() {
                     <button
                       key={pastMeeting.id}
                       type="button"
-                      onClick={() => void loadPastMeetingLog(pastMeeting.id)}
+                      onClick={() => void openMeetingLog(pastMeeting.id)}
                     >
                       <strong>{pastMeeting.title}</strong>
                       <span>
-                        {pastMeeting.eventCount} events -{" "}
+                        {pastMeeting.status} - {pastMeeting.eventCount} events -{" "}
                         {formatClock(pastMeeting.startedAt)}
                       </span>
                     </button>
@@ -1322,6 +1602,7 @@ export default function RoomPulseApp() {
           onClose={() => setIsPastMeetingsOpen(false)}
           onRefresh={() => void refreshPastMeetings()}
           onSelect={(id) => void loadPastMeetingLog(id)}
+          onOpen={(id) => void openMeetingLog(id)}
           onNewMeeting={() => {
             setIsPastMeetingsOpen(false);
             stopMic();
@@ -1629,9 +1910,7 @@ export default function RoomPulseApp() {
           className="pill-btn danger"
           type="button"
           onClick={() => {
-            stopMic();
-            stopScriptedDemo();
-            setPhase("setup");
+            void endMeetingSession();
           }}
         >
           <MaterialIcon name="call_end" filled />
@@ -1737,6 +2016,7 @@ function PastMeetingsDrawer({
   onClose,
   onRefresh,
   onSelect,
+  onOpen,
   onNewMeeting
 }: {
   meetings: ClientMeetingLogMetadata[];
@@ -1744,6 +2024,7 @@ function PastMeetingsDrawer({
   onClose: () => void;
   onRefresh: () => void;
   onSelect: (id: string) => void;
+  onOpen: (id: string) => void;
   onNewMeeting: () => void;
 }) {
   return (
@@ -1777,13 +2058,13 @@ function PastMeetingsDrawer({
                 className="drawer-row"
                 key={meetingLog.id}
                 type="button"
-                onClick={() => onSelect(meetingLog.id)}
+                onClick={() => onOpen(meetingLog.id)}
               >
-                <span className="drawer-dot" />
+                <span className={`drawer-dot ${meetingLog.status}`} />
                 <span>
                   <strong>{meetingLog.title}</strong>
                   <small>
-                    {formatClock(meetingLog.startedAt)} -{" "}
+                    {meetingLog.status} - {formatClock(meetingLog.startedAt)} -{" "}
                     {meetingLog.eventCount} events
                   </small>
                 </span>
@@ -1801,6 +2082,22 @@ function PastMeetingsDrawer({
                 {event.type.replaceAll("_", " ")}
               </span>
             ))}
+            <button
+              className="btn outlined"
+              type="button"
+              onClick={() => onOpen(selectedMeetingLog.metadata.id)}
+            >
+              <MaterialIcon
+                name={
+                  selectedMeetingLog.metadata.status === "ended"
+                    ? "article"
+                    : "play_arrow"
+                }
+              />
+              {selectedMeetingLog.metadata.status === "ended"
+                ? "Open review"
+                : "Resume session"}
+            </button>
           </div>
         ) : null}
         <div className="drawer-foot">
@@ -1847,6 +2144,75 @@ async function sendMeetingLogEvent(
   if (!response.ok) {
     throw new Error(`Meeting event log returned ${response.status}`);
   }
+}
+
+async function sendMeetingState(
+  meetingLogId: string,
+  payload: {
+    status?: MeetingStatus;
+    isPaused?: boolean;
+    endedAt?: number | null;
+    updatedAt?: number;
+    state?: PersistedMeetingState;
+  }
+) {
+  const response = await fetch(
+    `/api/meetings/${encodeURIComponent(meetingLogId)}`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(`Meeting state save returned ${response.status}`);
+  }
+}
+
+function navigateToMeetingReview(meetingLogId: string) {
+  window.location.assign(`/meetings/${encodeURIComponent(meetingLogId)}`);
+}
+
+function fallbackStateFromSnapshot(
+  snapshot: ClientMeetingLogSnapshot
+): PersistedMeetingState {
+  const meeting = snapshot.metadata.meeting;
+  const reviewMarkdown =
+    snapshot.metadata.latestReviewMarkdown ||
+    snapshot.reviewVersions[0]?.markdown ||
+    createInitialReviewMarkdown(meeting);
+  const now = Date.now();
+
+  return {
+    status: snapshot.metadata.status,
+    meeting,
+    transcript: snapshot.transcript,
+    reviewMarkdown,
+    reviewVersions: snapshot.reviewVersions,
+    currentReviewVersionId:
+      snapshot.metadata.latestReviewVersionId ??
+      snapshot.reviewVersions[0]?.id ??
+      `${snapshot.metadata.startedAt}-initial-review`,
+    timeline: [],
+    lastHeartbeatAt: snapshot.metadata.updatedAt,
+    nextHeartbeatAt:
+      snapshot.metadata.updatedAt + meeting.heartbeatIntervalSeconds * 1000,
+    meetingStartedAt: snapshot.metadata.startedAt,
+    heartbeatCount: snapshot.events.filter(
+      (event) => event.type === "heartbeat_output"
+    ).length,
+    isPaused: snapshot.metadata.isPaused,
+    currentOutput: null,
+    activeAgendaItemId:
+      meeting.agenda.find((item) => !item.done)?.id ??
+      meeting.agenda[0]?.id ??
+      null,
+    updatedAt: now,
+    endedAt: snapshot.metadata.endedAt
+  };
 }
 
 async function runLocalHeartbeatInBrowser(input: ReturnType<typeof createHeartbeatInput>) {
