@@ -13,6 +13,7 @@ import {
   MAX_FACILITATOR_OUTPUT_TEXT_LENGTH,
   MAX_FACILITATOR_OUTPUT_UI_ACTIONS,
   MAX_HEARTBEAT_INTERVAL_SECONDS,
+  MAX_HEARTBEAT_INPUT_TEXT_LENGTH,
   MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH,
   MAX_PARTICIPANT_ENTRIES,
   MIN_HEARTBEAT_INTERVAL_SECONDS
@@ -244,7 +245,7 @@ function isTranscriptLine(value: unknown): boolean {
     isBoundedNonEmptyString(value.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
     isBoundedNonEmptyString(value.speakerId, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
     isSafeSpeakerLabel(value.speakerLabel) &&
-    typeof value.text === "string" &&
+    isBoundedString(value.text, MAX_HEARTBEAT_INPUT_TEXT_LENGTH) &&
     isValidTimestamp(value.timestamp) &&
     isTranscriptSource(value.source) &&
     isConfidence(value.confidence)
