@@ -149,10 +149,10 @@ export class LocalTranscriptionClient {
   }
 
   async stop(): Promise<void> {
+    this.disconnectAudioGraph();
     try {
       await this.flushOpenSocket();
     } finally {
-      this.disconnectAudioGraph();
       this.closeResources();
     }
   }

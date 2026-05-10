@@ -210,6 +210,72 @@ describe("local transcription audio utilities", () => {
     expect(disconnectGain).toHaveBeenCalledOnce();
   });
 
+  it("disconnects browser audio before requesting the final socket flush", async () => {
+    const order: string[] = [];
+    const closeSocket = vi.fn();
+    const closeAudio = vi.fn();
+    const send = vi.fn((payload: string) => {
+      if (payload === JSON.stringify({ type: "flush" })) {
+        order.push("flush");
+      }
+    });
+    const client = new LocalTranscriptionClient({
+      onSegment: vi.fn(),
+      onStatus: vi.fn(),
+      onError: vi.fn()
+    });
+    Object.assign(client as unknown as Record<string, unknown>, {
+      socket: {
+        readyState: WebSocket.OPEN,
+        send,
+        close: closeSocket
+      },
+      stream: {
+        getTracks: () => []
+      },
+      audioContext: {
+        close: closeAudio
+      },
+      processor: {
+        disconnect: vi.fn(() => order.push("processor-disconnected"))
+      },
+      source: {
+        disconnect: vi.fn(() => order.push("source-disconnected"))
+      },
+      silentGain: {
+        disconnect: vi.fn(() => order.push("gain-disconnected"))
+      }
+    });
+    const handleMessage = (
+      client as unknown as {
+        handleMessage: (event: MessageEvent) => void;
+      }
+    ).handleMessage.bind(client);
+
+    const stopPromise = client.stop();
+    await Promise.resolve();
+
+    expect(order).toEqual([
+      "processor-disconnected",
+      "source-disconnected",
+      "gain-disconnected",
+      "flush"
+    ]);
+    expect(closeSocket).not.toHaveBeenCalled();
+
+    handleMessage({
+      data: JSON.stringify({
+        type: "engine_status",
+        status: "flushed",
+        message: "Transcription buffer flushed"
+      })
+    } as MessageEvent);
+    await stopPromise;
+
+    expect(closeSocket).toHaveBeenCalledOnce();
+    expect(closeAudio).toHaveBeenCalledOnce();
+  });
+
   it("releases browser audio resources when the socket closes during stop flush", async () => {
     const stopTrack = vi.fn();
     const closeSocket = vi.fn();
