@@ -543,6 +543,57 @@ describe("Pi adapter", () => {
     expect(requestBody.response_format).toEqual({ type: "json_object" });
   });
 
+  it("falls back when OpenRouter initial review is not valid JSON", async () => {
+    process.env.ROOMPULSE_PI_PROVIDER = "openrouter";
+    process.env.ROOMPULSE_OPENROUTER_API_KEY = "openrouter-key";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json({
+          choices: [
+            {
+              message: {
+                content: "# Raw markdown without the required JSON envelope"
+              }
+            }
+          ]
+        })
+      )
+    );
+
+    const output = await runPiInitialReviewDocument(meeting);
+
+    expect(output.source).toBe("local-fallback");
+    expect(output.markdown).toBe(createInitialReviewMarkdown(meeting));
+    expect(output.adapterNotice).toContain(
+      "Pi initial review was not valid JSON"
+    );
+  });
+
+  it("throws in strict mode when OpenRouter initial review is missing markdown", async () => {
+    process.env.ROOMPULSE_REQUIRE_PI = "1";
+    process.env.ROOMPULSE_PI_PROVIDER = "openrouter";
+    process.env.ROOMPULSE_OPENROUTER_API_KEY = "openrouter-key";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({ summary: "Missing markdown." })
+              }
+            }
+          ]
+        })
+      )
+    );
+
+    await expect(runPiInitialReviewDocument(meeting)).rejects.toThrow(
+      "Pi adapter required but unavailable: Pi initial review did not include markdown"
+    );
+  });
+
   it("marks RoomPulse UI tool results as turn-terminating", async () => {
     writeFileSync(
       process.env.ROOMPULSE_CODEX_AUTH_PATH!,

@@ -875,33 +875,29 @@ function parseInitialReviewOutput(
   text: string,
   meeting: MeetingConfig
 ): InitialReviewDocument {
-  const fallbackMarkdown = createInitialReviewMarkdown(meeting);
   let parsed: unknown;
 
   try {
     parsed = JSON.parse(extractJsonObject(text));
-  } catch {
-    return {
-      source: "pi",
-      markdown: text.trim() || fallbackMarkdown,
-      summary: "Pi initialized the meeting review document."
-    };
+  } catch (error) {
+    throw new Error(
+      `Pi initial review was not valid JSON: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
   }
 
   if (!isRecord(parsed)) {
-    return {
-      source: "pi",
-      markdown: fallbackMarkdown,
-      summary: "Pi initialized the meeting review document."
-    };
+    throw new Error("Pi initial review was not a JSON object");
+  }
+
+  if (typeof parsed.markdown !== "string" || !parsed.markdown.trim()) {
+    throw new Error("Pi initial review did not include markdown");
   }
 
   return {
     source: "pi",
-    markdown:
-      typeof parsed.markdown === "string" && parsed.markdown.trim()
-        ? parsed.markdown
-        : fallbackMarkdown,
+    markdown: parsed.markdown,
     summary:
       typeof parsed.summary === "string" && parsed.summary.trim()
         ? parsed.summary
