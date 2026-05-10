@@ -1544,6 +1544,83 @@ describe("RoomPulseApp", () => {
     ).toHaveValue("new-review");
   });
 
+  it("resumes metadata-only reviews with a selectable fallback version id", async () => {
+    const now = Date.now();
+    const startedAt = now - 60_000;
+    const meeting = {
+      title: "Metadata-only session",
+      goal: "Recover review metadata safely.",
+      context: "",
+      agenda: [{ id: "a1", title: "Open", done: false }],
+      expectedParticipants: 1,
+      participants: [],
+      heartbeatIntervalSeconds: 30
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/meetings") {
+        return Response.json({
+          meetings: [
+            {
+              id: "metadata-only-session",
+              title: meeting.title,
+              goal: meeting.goal,
+              startedAt,
+              updatedAt: now,
+              endedAt: null,
+              status: "paused",
+              isPaused: true,
+              eventCount: 1,
+              meeting,
+              state: null,
+              latestReviewMarkdown: "# Metadata-only review",
+              latestReviewVersionId: "missing-review"
+            }
+          ]
+        });
+      }
+      if (url === "/api/meetings/metadata-only-session") {
+        return Response.json({
+          metadata: {
+            id: "metadata-only-session",
+            title: meeting.title,
+            goal: meeting.goal,
+            startedAt,
+            updatedAt: now,
+            endedAt: null,
+            status: "paused",
+            isPaused: true,
+            eventCount: 1,
+            meeting,
+            state: null,
+            latestReviewMarkdown: "# Metadata-only review",
+            latestReviewVersionId: "missing-review"
+          },
+          events: [],
+          transcript: [],
+          reviewVersions: []
+        });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: /refresh/i })[0]);
+    });
+    await act(async () => {
+      fireEvent.click(
+        await screen.findByRole("button", { name: /^resume$/i })
+      );
+    });
+
+    expect(await screen.findByText(/metadata-only review/i)).toBeVisible();
+    expect(
+      screen.getByRole("combobox", { name: /review versions/i })
+    ).toHaveValue(`${startedAt}-initial-review`);
+  });
+
   it("resumes stateless sessions from the latest heartbeat instead of updatedAt", async () => {
     const now = Date.now();
     const lastHeartbeatAt = now - 60_000;
@@ -1809,9 +1886,13 @@ describe("RoomPulseApp", () => {
       fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
     });
 
-    expect(
-      await screen.findByText(`${MAX_HEARTBEAT_INTERVAL_SECONDS}s`)
-    ).toBeVisible();
+    const countdown = await screen.findByLabelText("Heartbeat countdown");
+    const seconds = Number(
+      within(countdown).getByText(/\d+/).textContent?.trim()
+    );
+    expect(seconds).toBeGreaterThanOrEqual(MAX_HEARTBEAT_INTERVAL_SECONDS - 1);
+    expect(seconds).toBeLessThanOrEqual(MAX_HEARTBEAT_INTERVAL_SECONDS);
+    expect(countdown).toHaveTextContent(/s pulse/i);
   });
 
   it("hides the stop mic control until mic mode is active", async () => {

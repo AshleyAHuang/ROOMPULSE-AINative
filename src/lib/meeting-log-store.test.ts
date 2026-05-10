@@ -253,6 +253,51 @@ describe("meeting log store", () => {
     expect(snapshot.metadata.state).toBeNull();
   });
 
+  it("drops persisted state with a missing current review version", async () => {
+    const startedAt = Date.UTC(2026, 4, 9, 12, 0, 0);
+    const metadata = await createMeetingLog(meeting, startedAt);
+    const database = new DatabaseSync(join(logDir, "roompulse.sqlite"));
+    database
+      .prepare(
+        `UPDATE meeting_sessions
+          SET state_json = ?
+          WHERE id = ?`
+      )
+      .run(
+        JSON.stringify({
+          status: "active",
+          meeting,
+          transcript: [],
+          reviewMarkdown: "# Review",
+          reviewVersions: [
+            {
+              id: "review-1",
+              timestamp: startedAt,
+              source: "initial",
+              markdown: "# Review",
+              summary: "Initial."
+            }
+          ],
+          currentReviewVersionId: "missing-review",
+          timeline: [],
+          lastHeartbeatAt: startedAt,
+          nextHeartbeatAt: startedAt + 30_000,
+          meetingStartedAt: startedAt,
+          heartbeatCount: 0,
+          isPaused: false,
+          currentOutput: null,
+          activeAgendaItemId: null,
+          updatedAt: startedAt
+        }),
+        metadata.id
+      );
+    database.close();
+
+    const snapshot = await readMeetingLog(metadata.id);
+
+    expect(snapshot.metadata.state).toBeNull();
+  });
+
   it("rejects persisted meeting JSON and state with excessive participant counts", async () => {
     const startedAt = Date.UTC(2026, 4, 9, 12, 0, 0);
     const metadata = await createMeetingLog(meeting, startedAt);

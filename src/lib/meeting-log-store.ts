@@ -1105,6 +1105,10 @@ function isChronologicallyCoherentState(
       state.endedAt <= updatedAt) &&
     state.transcript.every((line) => line.timestamp <= updatedAt) &&
     state.reviewVersions.every((version) => version.timestamp <= updatedAt) &&
+    (state.reviewVersions.length === 0 ||
+      state.reviewVersions.some(
+        (version) => version.id === state.currentReviewVersionId
+      )) &&
     state.timeline.every((entry) => entry.timestamp <= updatedAt)
   );
 }

@@ -19,9 +19,9 @@ ROOMPULSE_WHISPER_MODEL=tiny.en uv run uvicorn server:app --host 127.0.0.1 --por
 
 Speaker clustering uses the deterministic local DSP embedder unless a stronger
 speaker-embedding backend is installed and selected. The production clusterer
-keeps a bounded voiceprint exemplar set per `Speaker N`, so matching is based
-on stable speaker examples as well as the live centroid instead of letting one
-mixed or noisy segment drag every future voice into `Speaker 1`.
+keeps a bounded voiceprint exemplar set per `Speaker N` and matches against a
+small top-k exemplar consensus plus the live centroid, so one mixed or noisy
+segment cannot drag every future voice into `Speaker 1`.
 When browser mic capture is restarted during the same meeting, RoomPulse sends
 a `speakerLabelOffset` reset control so the fresh WebSocket session continues
 with the next `Speaker N` label instead of colliding with earlier transcript

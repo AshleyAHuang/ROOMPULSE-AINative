@@ -48,6 +48,7 @@ DEFAULT_SPEAKER_HARD_CLUSTER_LIMIT = 24
 DEFAULT_SPEAKER_BACKEND_FAILURE_LIMIT = 1
 DEFAULT_SPEAKER_EMBEDDING_BACKEND = "auto"
 DEFAULT_CLUSTER_EXEMPLAR_LIMIT = 6
+DEFAULT_CLUSTER_EXEMPLAR_MATCH_TOP_K = 3
 DEFAULT_PENDING_SPEAKER_EXEMPLAR_LIMIT = 8
 DEFAULT_PENDING_SPEAKER_PROMOTION_SAMPLES = 2
 DEFAULT_PENDING_SPEAKER_TTL_SECONDS = 45.0
@@ -108,6 +109,7 @@ async def health() -> JSONResponse:
             "speakerEmbeddingActiveBackend": active_voice_embedder_name(),
             "speakerMaxClusters": speaker_max_clusters(),
             "speakerClusterExemplarLimit": DEFAULT_CLUSTER_EXEMPLAR_LIMIT,
+            "speakerClusterExemplarMatchTopK": DEFAULT_CLUSTER_EXEMPLAR_MATCH_TOP_K,
             "speakerPendingPromotionSamples": pending_speaker_promotion_samples(),
             "voiceActivityDetector": (
                 "webrtcvad"
@@ -1574,10 +1576,17 @@ def cluster_voice_distance(cluster: SpeakerCluster, vector: np.ndarray) -> float
     if not exemplar_distances:
         return centroid_distance
 
-    nearest_exemplar_distance = min(exemplar_distances)
+    exemplar_distances.sort()
+    nearest_exemplar_count = min(
+        DEFAULT_CLUSTER_EXEMPLAR_MATCH_TOP_K,
+        len(exemplar_distances),
+    )
+    nearest_exemplar_distance = float(
+        np.mean(exemplar_distances[:nearest_exemplar_count])
+    )
     return min(
         centroid_distance,
-        nearest_exemplar_distance * 0.78 + centroid_distance * 0.22,
+        nearest_exemplar_distance * 0.72 + centroid_distance * 0.28,
     )
 
 

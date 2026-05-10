@@ -241,9 +241,9 @@ export default function RoomPulseApp() {
     () => getAgendaProgress(meeting.agenda),
     [meeting.agenda]
   );
-  const countdownSeconds = Math.max(
-    0,
-    Math.ceil((nextHeartbeatAt - now) / 1000)
+  const countdownSeconds = Math.min(
+    meeting.heartbeatIntervalSeconds,
+    Math.max(0, Math.ceil((nextHeartbeatAt - now) / 1000))
   );
   const meetingElapsedSeconds = Math.max(
     0,
@@ -826,6 +826,22 @@ export default function RoomPulseApp() {
       snapshot.metadata.latestReviewMarkdown ||
       restoredState.reviewMarkdown ||
       createInitialReviewMarkdown(restoredMeeting);
+    const fallbackReviewVersion: ReviewVersion = {
+      id: `${snapshot.metadata.startedAt}-initial-review`,
+      timestamp: snapshot.metadata.startedAt,
+      source: "initial",
+      markdown: restoredReviewMarkdown,
+      summary: "Initial meeting review document."
+    };
+    const effectiveReviewVersions =
+      restoredVersions.length > 0 ? restoredVersions : [fallbackReviewVersion];
+    const effectiveReviewVersionId =
+      latestRestoredVersion?.id ??
+      (effectiveReviewVersions.some(
+        (version) => version.id === restoredState.currentReviewVersionId
+      )
+        ? restoredState.currentReviewVersionId
+        : effectiveReviewVersions[0]?.id ?? fallbackReviewVersion.id);
     const paused =
       snapshot.metadata.status === "paused" || restoredState.isPaused;
     const nowMs = Date.now();
@@ -875,24 +891,8 @@ export default function RoomPulseApp() {
     setHeartbeatCount(restoredState.heartbeatCount);
     setIsPaused(paused);
     setReviewMarkdown(restoredReviewMarkdown);
-    setReviewVersions(
-      restoredVersions.length > 0
-        ? restoredVersions
-        : [
-            {
-              id: `${snapshot.metadata.startedAt}-initial-review`,
-              timestamp: snapshot.metadata.startedAt,
-              source: "initial",
-              markdown: restoredReviewMarkdown,
-              summary: "Initial meeting review document."
-            }
-          ]
-    );
-    setCurrentReviewVersionId(
-      latestRestoredVersion?.id ||
-        restoredState.currentReviewVersionId ||
-        `${snapshot.metadata.startedAt}-initial-review`
-    );
+    setReviewVersions(effectiveReviewVersions);
+    setCurrentReviewVersionId(effectiveReviewVersionId);
     setActiveAgendaItemId(
       restoredState.activeAgendaItemId ??
         restoredMeeting.agenda.find((item) => !item.done)?.id ??

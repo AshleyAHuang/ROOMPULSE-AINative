@@ -545,6 +545,7 @@ describe("/api/meetings", () => {
     const invalidStates = [
       { ...baseState, heartbeatCount: -1 },
       { ...baseState, currentReviewVersionId: "" },
+      { ...baseState, currentReviewVersionId: "missing-review" },
       {
         ...baseState,
         reviewVersions: [{ ...baseState.reviewVersions[0], id: " " }]
