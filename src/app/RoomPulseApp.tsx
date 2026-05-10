@@ -211,6 +211,7 @@ export default function RoomPulseApp() {
   const endingSessionRef = useRef(false);
   const meetingStartAttemptRef = useRef(0);
   const agendaItemSequenceRef = useRef(0);
+  const reviewRestoreSequenceRef = useRef(0);
   const reviewLastUpdatedAtRef = useRef(Date.now());
 
   const observedSpeakerLabels = useMemo(
@@ -1478,8 +1479,9 @@ export default function RoomPulseApp() {
 
   function restoreReviewVersion(version: ReviewVersion) {
     const restoredAt = Date.now();
+    reviewRestoreSequenceRef.current += 1;
     const restoredVersion: ReviewVersion = {
-      id: `${restoredAt}-restored-${version.id}`,
+      id: `${restoredAt}-restored-${reviewRestoreSequenceRef.current}-${version.id}`,
       timestamp: restoredAt,
       source: "restored",
       markdown: version.markdown,
@@ -2806,7 +2808,9 @@ function previousReviewVersion(
   currentMarkdown: string
 ): ReviewVersion | undefined {
   const historical = versions.filter((version) => version.source !== "restored");
-  const restoredSourceId = currentId.match(/^\d+-restored-(.+)$/)?.[1];
+  const restoredSourceId =
+    currentId.match(/^\d+-restored-\d+-(.+)$/)?.[1] ??
+    currentId.match(/^\d+-restored-(.+)$/)?.[1];
   const activeHistoricalId = restoredSourceId ?? currentId;
   const activeIndex = historical.findIndex(
     (version) => version.id === activeHistoricalId

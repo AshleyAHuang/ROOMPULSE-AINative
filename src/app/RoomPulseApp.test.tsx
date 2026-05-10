@@ -344,6 +344,91 @@ describe("RoomPulseApp", () => {
     });
   });
 
+  it("creates unique ids when restoring the same review version repeatedly", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_700_000_010_000);
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/meetings" && method === "GET") {
+          return Response.json({ meetings: [] });
+        }
+        if (url.includes("/api/review-document/init")) {
+          return Response.json({
+            source: "pi",
+            markdown: "# Initial review",
+            summary: "Initialized."
+          });
+        }
+        if (url === "/api/meetings" && method === "POST") {
+          return Response.json(
+            {
+              id: "meeting-review-restore",
+              title: "Review restore",
+              goal: "Validate review version ids.",
+              startedAt: Date.now(),
+              updatedAt: Date.now(),
+              endedAt: null,
+              status: "active",
+              isPaused: false,
+              eventCount: 0,
+              meeting: {},
+              state: null,
+              latestReviewMarkdown: "",
+              latestReviewVersionId: null
+            },
+            { status: 201 }
+          );
+        }
+        if (url.includes("/api/heartbeat")) {
+          return Response.json({
+            source: "pi",
+            cards: [],
+            summary: "Heartbeat review.",
+            nextHeartbeatHint: "Continue.",
+            reviewMarkdown: "# Heartbeat review",
+            agendaActions: [],
+            uiActions: [],
+            ephemeralReminder: null
+          });
+        }
+        if (url.includes("/events")) {
+          return Response.json({ id: "event-1" }, { status: 201 });
+        }
+        return Response.json({});
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /run heartbeat/i }));
+    });
+
+    const initialVersionId = "1700000010000-initial-review";
+    const versionSelect = screen.getByLabelText(/review versions/i);
+    await act(async () => {
+      fireEvent.change(versionSelect, { target: { value: initialVersionId } });
+    });
+    await act(async () => {
+      fireEvent.change(versionSelect, { target: { value: initialVersionId } });
+    });
+
+    await waitFor(() => {
+      const restoredIds = fetchMock.mock.calls
+        .filter(([url]) => String(url).includes("/events"))
+        .map(([, init]) => JSON.parse(String(init?.body ?? "{}")))
+        .filter((event) => event.type === "review_restored")
+        .map((event) => event.payload.restoredVersion.id);
+      expect(restoredIds).toHaveLength(2);
+      expect(new Set(restoredIds).size).toBe(2);
+    });
+  });
+
   it("launches the live demo from the setup screen", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
