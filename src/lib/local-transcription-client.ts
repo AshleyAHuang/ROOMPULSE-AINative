@@ -152,14 +152,18 @@ export class LocalTranscriptionClient {
       this.processor.connect(this.silentGain);
       this.silentGain.connect(this.audioContext.destination);
       this.throwIfStoppedDuringStart();
-      socket.send(
-        JSON.stringify(
-          createResetControlMessage(
-            this.expectedParticipants,
-            this.speakerLabelOffset
+      try {
+        socket.send(
+          JSON.stringify(
+            createResetControlMessage(
+              this.expectedParticipants,
+              this.speakerLabelOffset
+            )
           )
-        )
-      );
+        );
+      } catch {
+        throw new Error("Local transcription reset send failed");
+      }
       this.onStatus({
         status: "streaming",
         message: "Microphone active; streaming audio to local transcription"

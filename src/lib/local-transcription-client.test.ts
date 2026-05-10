@@ -786,6 +786,80 @@ describe("local transcription audio utilities", () => {
     expect(closeAudio).toHaveBeenCalledOnce();
   });
 
+  it("normalizes initial reset send failures as local transcription start failures", async () => {
+    let socket: PendingSocketMock | null = null;
+    const closeSocket = vi.fn();
+    const stopTrack = vi.fn();
+    const closeAudio = vi.fn();
+    const WebSocketMock = vi.fn(function WebSocketMock() {
+      socket = {
+        readyState: WebSocket.OPEN,
+        onopen: null,
+        onerror: null,
+        onclose: null,
+        send: vi.fn(() => {
+          throw new Error("socket already closing");
+        }),
+        close: closeSocket
+      } as PendingSocketMock;
+      return socket;
+    });
+    Object.assign(WebSocketMock, { OPEN: 1 });
+    vi.stubGlobal("navigator", {
+      mediaDevices: {
+        getUserMedia: vi.fn().mockResolvedValue({
+          getTracks: () => [
+            {
+              onended: null,
+              stop: stopTrack
+            }
+          ]
+        })
+      }
+    });
+    vi.stubGlobal("WebSocket", WebSocketMock);
+    Object.defineProperty(window, "AudioContext", {
+      configurable: true,
+      value: vi.fn(function AudioContextMock() {
+        return {
+          sampleRate: 48_000,
+          destination: {},
+          createMediaStreamSource: vi.fn(() => ({
+            connect: vi.fn(),
+            disconnect: vi.fn()
+          })),
+          createScriptProcessor: vi.fn(() => ({
+            onaudioprocess: null,
+            connect: vi.fn(),
+            disconnect: vi.fn()
+          })),
+          createGain: vi.fn(() => ({
+            gain: { value: 1 },
+            connect: vi.fn(),
+            disconnect: vi.fn()
+          })),
+          close: closeAudio
+        };
+      })
+    });
+
+    const client = new LocalTranscriptionClient({
+      onSegment: vi.fn(),
+      onStatus: vi.fn(),
+      onError: vi.fn()
+    });
+    const startPromise = client.start();
+    await Promise.resolve();
+    capturedPendingSocket(socket)?.onopen?.();
+
+    await expect(startPromise).rejects.toThrow(
+      "Local transcription reset send failed"
+    );
+    expect(stopTrack).toHaveBeenCalledOnce();
+    expect(closeAudio).toHaveBeenCalledOnce();
+    expect(closeSocket).toHaveBeenCalledOnce();
+  });
+
   it("still resolves stop when the socket throws while closing after flush", async () => {
     const closeSocket = vi.fn(() => {
       throw new Error("socket close failed");
