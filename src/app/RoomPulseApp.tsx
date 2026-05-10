@@ -627,6 +627,9 @@ export default function RoomPulseApp() {
         process.env.NEXT_PUBLIC_ROOMPULSE_REQUIRE_PI === "1" ||
         (error as Error & { piRequired?: boolean })?.piRequired === true
       ) {
+        setNextHeartbeatAt(
+          Date.now() + meeting.heartbeatIntervalSeconds * 1000
+        );
         return;
       }
 
