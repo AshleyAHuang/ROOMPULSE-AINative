@@ -851,20 +851,6 @@ export default function RoomPulseApp() {
     endingSessionRef.current = true;
     setIsEndingSession(true);
     const endedAt = Date.now();
-    const state = buildPersistedMeetingState({
-      status: "ended",
-      isPaused: true,
-      endedAt,
-      updatedAt: endedAt
-    });
-
-    stopMic();
-    stopScriptedDemo();
-    setIsPaused(true);
-    if (autosaveTimerRef.current) {
-      clearTimeout(autosaveTimerRef.current);
-      autosaveTimerRef.current = null;
-    }
 
     const id = await waitForMeetingLogId(meetingLogIdRef, 2500);
     if (!id) {
@@ -876,6 +862,20 @@ export default function RoomPulseApp() {
 
     setLogStatus("Ending session...");
     try {
+      await stopMicAndFlushFinalSegment();
+      stopScriptedDemo();
+      setIsPaused(true);
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = null;
+      }
+      await flushPendingLogEvents(id);
+      const state = buildPersistedMeetingState({
+        status: "ended",
+        isPaused: true,
+        endedAt,
+        updatedAt: endedAt
+      });
       await sendMeetingLogEvent(id, {
         type: "meeting_ended",
         timestamp: endedAt,
@@ -1097,7 +1097,7 @@ export default function RoomPulseApp() {
 
   useEffect(() => {
     return () => {
-      cleanupMicResources();
+      void cleanupMicResources();
     };
   }, []);
 
@@ -1337,7 +1337,7 @@ export default function RoomPulseApp() {
       }
       setIsMicRunning(true);
     } catch (error) {
-      cleanupMicResources();
+      void cleanupMicResources();
       setIsMicRunning(false);
       setMicStatus(error instanceof Error ? error.message : String(error));
     }
@@ -1345,17 +1345,26 @@ export default function RoomPulseApp() {
 
   function stopMic() {
     micStartTokenRef.current += 1;
-    cleanupMicResources();
+    void cleanupMicResources();
     currentMicSpeakerRef.current = "Speaker 1";
     setCurrentMicSpeaker("Speaker 1");
     setIsMicRunning(false);
     setMicStatus("Local transcription idle");
   }
 
-  function cleanupMicResources() {
+  async function stopMicAndFlushFinalSegment() {
+    await cleanupMicResources();
+    micStartTokenRef.current += 1;
+    currentMicSpeakerRef.current = "Speaker 1";
+    setCurrentMicSpeaker("Speaker 1");
+    setIsMicRunning(false);
+    setMicStatus("Local transcription idle");
+  }
+
+  async function cleanupMicResources() {
     const client = transcriptionClientRef.current;
     transcriptionClientRef.current = null;
-    void client?.stop();
+    await client?.stop();
   }
 
   function updateAgendaItem(id: string, done: boolean) {
