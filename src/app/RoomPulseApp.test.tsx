@@ -66,6 +66,59 @@ describe("RoomPulseApp", () => {
     expect(screen.getByText(/2 versions/i)).toBeVisible();
   });
 
+  it("launches the live demo from the setup screen", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/review-document/init")) {
+        return Response.json({
+          source: "pi",
+          markdown: "# Launch readiness review\n\n## Agenda\n- [ ] Confirm the meeting goal",
+          summary: "Initialized demo review."
+        });
+      }
+      if (url === "/api/meetings") {
+        return Response.json(
+          {
+            id: "demo-session",
+            title: "Launch readiness review",
+            goal: "Leave with owners for every open launch risk.",
+            startedAt: Date.now(),
+            updatedAt: Date.now(),
+            endedAt: null,
+            status: "active",
+            isPaused: false,
+            eventCount: 0,
+            meeting: {},
+            state: null,
+            latestReviewMarkdown: "",
+            latestReviewVersionId: null
+          },
+          { status: 201 }
+        );
+      }
+      if (url.includes("/events")) {
+        return Response.json({ id: "event-1" }, { status: 201 });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+
+    fireEvent.click(screen.getByRole("button", { name: /launch live demo/i }));
+
+    expect(
+      await screen.findByRole("button", { name: /run heartbeat/i })
+    ).toBeInTheDocument();
+    expect(
+      screen.getAllByRole("heading", { name: /launch readiness review/i }).length
+    ).toBeGreaterThan(0);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/review-document/init",
+      expect.objectContaining({ method: "POST" })
+    );
+  });
+
   it("clamps invalid numeric setup values before starting the room display", async () => {
     render(<RoomPulseApp />);
 

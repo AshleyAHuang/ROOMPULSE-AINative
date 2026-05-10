@@ -20,7 +20,7 @@ Open `http://localhost:3000`.
 ### Hackathon demo
 
 The fastest path is the **Launch live demo** button on the setup screen. It
-loads a launch-readiness meeting and runs a 75-second hard-coded transcript
+loads a launch-readiness meeting and runs a roughly 20-minute hard-coded transcript
 stream. The transcript is scripted; heartbeat reviews, agenda changes, and
 reminders still go through the Pi heartbeat path each time, with local fallback
 only when Pi is unavailable.

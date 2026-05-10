@@ -800,7 +800,9 @@ export default function RoomPulseApp() {
     }
   }
 
-  const startScriptedDemo = useCallback(() => {
+  const startScriptedDemo = useCallback((
+    heartbeatIntervalSeconds = meeting.heartbeatIntervalSeconds
+  ) => {
     stopScriptedDemo();
     stopMic();
     setTranscriptMode("demo");
@@ -819,7 +821,7 @@ export default function RoomPulseApp() {
 
     const startedAt = Date.now();
     setLastHeartbeatAt(startedAt);
-    setNextHeartbeatAt(startedAt + meeting.heartbeatIntervalSeconds * 1000);
+    setNextHeartbeatAt(startedAt + heartbeatIntervalSeconds * 1000);
 
     for (const beat of DEMO_SCRIPT) {
       const timer = setTimeout(() => {
@@ -831,7 +833,7 @@ export default function RoomPulseApp() {
     const finalTimer = setTimeout(() => {
       setIsDemoRunning(false);
       demoTimeoutsRef.current = [];
-    }, DEMO_DURATION_MS + meeting.heartbeatIntervalSeconds * 1000);
+    }, DEMO_DURATION_MS + heartbeatIntervalSeconds * 1000);
     demoTimeoutsRef.current.push(finalTimer);
   }, [
     addTranscriptLine,
@@ -842,6 +844,7 @@ export default function RoomPulseApp() {
 
   const launchLiveDemo = useCallback(async () => {
     endingSessionRef.current = false;
+    setIsInitializingReview(true);
     const demoMeeting: MeetingConfig = {
       title: "Launch readiness review",
       goal: "Leave with owners for every open launch risk.",
@@ -857,9 +860,7 @@ export default function RoomPulseApp() {
       heartbeatIntervalSeconds: DEMO_HEARTBEAT_INTERVAL_SECONDS
     };
     const startedAt = Date.now();
-    setIsInitializingReview(true);
     const initialDocument = await initializeReviewDocument(demoMeeting);
-    setIsInitializingReview(false);
     const initialReview = initialDocument.markdown;
     const initialVersion: ReviewVersion = {
       id: `${startedAt}-initial-review`,
@@ -919,7 +920,11 @@ export default function RoomPulseApp() {
         payload: { reviewVersion: initialVersion }
       }
     ]);
-    setTimeout(() => startScriptedDemo(), 120);
+    setIsInitializingReview(false);
+    setTimeout(
+      () => startScriptedDemo(demoMeeting.heartbeatIntervalSeconds),
+      120
+    );
   }, [createMeetingLogFor, startScriptedDemo]);
 
   useEffect(() => {
@@ -1473,9 +1478,10 @@ export default function RoomPulseApp() {
               <button
                 type="button"
                 className="demo-launch-button"
+                disabled={isInitializingReview}
                 onClick={() => void launchLiveDemo()}
               >
-                Launch live demo
+                {isInitializingReview ? "Starting demo..." : "Launch live demo"}
               </button>
             </section>
             <div className="section-kicker">Launch check</div>
@@ -1940,7 +1946,7 @@ export default function RoomPulseApp() {
         <button
           className={`pill-btn ${isDemoRunning ? "toggled" : ""}`}
           type="button"
-          onClick={isDemoRunning ? stopScriptedDemo : startScriptedDemo}
+          onClick={isDemoRunning ? stopScriptedDemo : () => startScriptedDemo()}
         >
           <MaterialIcon name={isDemoRunning ? "stop_circle" : "movie"} filled />
           {isDemoRunning ? "Stop demo" : "Script demo"}
@@ -1949,7 +1955,7 @@ export default function RoomPulseApp() {
         <button
           aria-label="Run heartbeat now"
           className="pill-btn primary"
-          disabled={isHeartbeatRunning || isEndingSession}
+          disabled={isHeartbeatRunning || isEndingSession || isInitializingReview}
           type="button"
           onClick={() => void runHeartbeat()}
         >
