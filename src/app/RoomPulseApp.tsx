@@ -1071,6 +1071,7 @@ export default function RoomPulseApp() {
     }
 
     setLogStatus("Ending session...");
+    let meetingEndLogged = false;
     try {
       await stopMicAndFlushFinalSegment();
       stopScriptedDemo();
@@ -1093,6 +1094,7 @@ export default function RoomPulseApp() {
         timestamp: endedAt,
         payload: { endedAt }
       });
+      meetingEndLogged = true;
       await sendMeetingState(id, {
         status: "ended",
         isPaused: true,
@@ -1104,6 +1106,18 @@ export default function RoomPulseApp() {
       setReviewHandoffUrl(`/meetings/${encodeURIComponent(id)}`);
       navigateToMeetingReview(id);
     } catch (error) {
+      if (meetingEndLogged) {
+        const handoffUrl = `/meetings/${encodeURIComponent(id)}`;
+        endingSessionRef.current = false;
+        setIsEndingSession(false);
+        setReviewHandoffUrl(handoffUrl);
+        setLogStatus(
+          `Meeting ended; final state save failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+        return;
+      }
       endingSessionRef.current = false;
       setIsEndingSession(false);
       setLogStatus(

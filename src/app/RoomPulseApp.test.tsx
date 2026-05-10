@@ -3521,6 +3521,82 @@ describe("RoomPulseApp", () => {
     ).toHaveLength(1);
   });
 
+  it("hands off to review when final state save fails after meeting end is logged", async () => {
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/meetings" && method === "GET") {
+          return Response.json({ meetings: [] });
+        }
+        if (url.includes("/api/review-document/init")) {
+          return Response.json({
+            source: "pi",
+            markdown: "# End state failure",
+            summary: "Initialized end state failure session."
+          });
+        }
+        if (url === "/api/meetings" && method === "POST") {
+          return Response.json(
+            {
+              id: "end-state-failure",
+              title: "End state failure",
+              goal: "Still reach review.",
+              startedAt: Date.now(),
+              updatedAt: Date.now(),
+              endedAt: null,
+              status: "active",
+              isPaused: false,
+              eventCount: 0,
+              meeting: {},
+              state: null,
+              latestReviewMarkdown: "",
+              latestReviewVersionId: null
+            },
+            { status: 201 }
+          );
+        }
+        if (url === "/api/meetings/end-state-failure/events") {
+          return Response.json({ id: "event-ok" }, { status: 201 });
+        }
+        if (url === "/api/meetings/end-state-failure" && method === "PATCH") {
+          return Response.json({ error: "state save failed" }, { status: 500 });
+        }
+        return Response.json({});
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    const endButton = await screen.findByRole("button", {
+      name: /end & review/i
+    });
+
+    await act(async () => {
+      fireEvent.click(endButton);
+      for (let index = 0; index < 8; index += 1) {
+        await Promise.resolve();
+      }
+    });
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url) === "/api/meetings/end-state-failure" &&
+            init?.method === "PATCH"
+        )
+      ).toBe(true);
+    });
+    expect(
+      screen.getByRole("link", { name: /open review\/export/i })
+    ).toHaveAttribute("href", "/meetings/end-state-failure");
+  });
+
   it("ignores stale heartbeat results after opening another saved meeting", async () => {
     const now = Date.now();
     let resolveHeartbeat: ((response: Response) => void) | null = null;
