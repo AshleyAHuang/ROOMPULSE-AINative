@@ -4,6 +4,9 @@ RoomPulse is a local-first, room-visible AI meeting facilitator. It is not a pri
 
 ## Quick Start
 
+Requires Node.js 24 or newer. RoomPulse uses the built-in `node:sqlite`
+module for local meeting sessions.
+
 ```bash
 npm install
 npm run transcription

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import type {
   MeetingConfig,
   ReviewVersion,
@@ -348,7 +348,8 @@ function getDatabase(): DatabaseSync {
   }
 
   mkdirSync(dirname(path), { recursive: true });
-  const db = new DatabaseSync(path);
+  const DatabaseSyncCtor = loadDatabaseSync();
+  const db = new DatabaseSyncCtor(path);
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA foreign_keys = ON");
   db.exec(`
@@ -408,6 +409,27 @@ function getDatabase(): DatabaseSync {
 
   cache = { path, db };
   return db;
+}
+
+type DatabaseSyncConstructor = new (path: string) => DatabaseSync;
+
+function loadDatabaseSync(): DatabaseSyncConstructor {
+  const getBuiltinModule = process.getBuiltinModule as
+    | ((id: string) => unknown)
+    | undefined;
+  const sqlite = getBuiltinModule?.("node:sqlite") as
+    | {
+        DatabaseSync?: DatabaseSyncConstructor;
+      }
+    | undefined;
+
+  if (!sqlite?.DatabaseSync) {
+    throw new Error(
+      "node:sqlite is unavailable. Run RoomPulse with Node.js 24 or newer."
+    );
+  }
+
+  return sqlite.DatabaseSync;
 }
 
 function databasePath(): string {
