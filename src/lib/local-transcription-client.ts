@@ -142,8 +142,10 @@ export class LocalTranscriptionClient {
           try {
             this.socket.send(pcm);
           } catch {
+            const failedSocket = this.socket;
             this.onError("Local transcription audio send failed");
-            this.handleSocketClose(this.socket);
+            closeSocketQuietly(failedSocket);
+            this.handleSocketClose(failedSocket);
           }
         }
       };

@@ -782,6 +782,7 @@ describe("local transcription audio utilities", () => {
       status: "closed",
       message: "Local transcription stopped"
     });
+    expect(closeSocket).toHaveBeenCalledOnce();
     expect(stopTrack).toHaveBeenCalledOnce();
     expect(closeAudio).toHaveBeenCalledOnce();
   });
