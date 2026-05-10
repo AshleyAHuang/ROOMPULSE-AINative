@@ -28,11 +28,10 @@ only when Pi is unavailable.
 Local run flow:
 
 1. Fill the setup/context feeder with title, goal, context, agenda, expected participant count, optional names/roles, and heartbeat interval.
-2. Click **Initialize document** if you want Pi to prepare the initial markdown review before the room display opens. Start Meeting also does this automatically if the current setup has not been initialized yet.
-3. Start the meeting.
-4. Click `Mic` and allow browser microphone access for local real-time transcription, or use demo transcript mode to add lines from `Speaker 1`, `Speaker 2`, etc.
-5. Click `Run heartbeat` to trigger the server-side facilitator adapter.
-6. Watch the three-panel room display update:
+2. Start the meeting. RoomPulse makes one initialization API call to generate the first markdown review document from the final setup input.
+3. Click `Mic` and allow browser microphone access for local real-time transcription, or use demo transcript mode to add lines from `Speaker 1`, `Speaker 2`, etc.
+4. Click `Run heartbeat` to trigger the server-side facilitator adapter.
+5. Watch the three-panel room display update:
    - left: live raw transcript
    - center: a versioned AI review markdown document
    - right: agenda, participation, and a quiet one-heartbeat reminder
