@@ -84,6 +84,28 @@ describe("POST /api/review-document/init", () => {
     expect(runPiInitialReviewDocument).not.toHaveBeenCalled();
   });
 
+  it("rejects duplicate agenda ids before calling the agent", async () => {
+    vi.mocked(runPiInitialReviewDocument).mockReset();
+
+    const response = await POST(
+      jsonRequest({
+        meeting: {
+          ...validMeeting,
+          agenda: [
+            { id: "duplicate", title: "First", done: false },
+            { id: "duplicate", title: "Second", done: false }
+          ]
+        }
+      })
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid meeting payload"
+    });
+    expect(runPiInitialReviewDocument).not.toHaveBeenCalled();
+  });
+
   it("marks failed initialization as Pi-required when strict mode is enabled", async () => {
     process.env.ROOMPULSE_REQUIRE_PI = "1";
     vi.mocked(runPiInitialReviewDocument).mockRejectedValue(

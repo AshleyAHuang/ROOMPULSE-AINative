@@ -139,6 +139,27 @@ describe("POST /api/heartbeat", () => {
     expect(runPiHeartbeat).not.toHaveBeenCalled();
   });
 
+  it("rejects duplicate agenda ids before creating heartbeat input", async () => {
+    const response = await POST(
+      jsonRequest({
+        ...validPayload,
+        meeting: {
+          ...validPayload.meeting,
+          agenda: [
+            { id: "duplicate", title: "First", done: false },
+            { id: "duplicate", title: "Second", done: false }
+          ]
+        }
+      })
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid heartbeat payload"
+    });
+    expect(runPiHeartbeat).not.toHaveBeenCalled();
+  });
+
   it("rejects malformed prior interventions before creating heartbeat input", async () => {
     const response = await POST(
       jsonRequest({

@@ -107,6 +107,7 @@ function isMeeting(value: unknown): boolean {
     Array.isArray(value.agenda) &&
     value.agenda.length <= MAX_AGENDA_ITEMS &&
     value.agenda.every(isAgendaItem) &&
+    hasUniqueAgendaIds(value.agenda) &&
     isIntegerInRange(value.expectedParticipants, 1, MAX_EXPECTED_PARTICIPANTS) &&
     Array.isArray(value.participants) &&
     value.participants.length <= MAX_PARTICIPANT_ENTRIES &&
@@ -126,6 +127,13 @@ function isAgendaItem(value: unknown): boolean {
     isNonEmptyString(value.title) &&
     typeof value.done === "boolean"
   );
+}
+
+function hasUniqueAgendaIds(agenda: unknown[]): boolean {
+  const ids = agenda.map((item) =>
+    isRecord(item) && typeof item.id === "string" ? item.id.trim() : ""
+  );
+  return new Set(ids).size === ids.length;
 }
 
 function isParticipant(value: unknown): boolean {

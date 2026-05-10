@@ -780,6 +780,25 @@ describe("/api/meetings", () => {
     });
   });
 
+  it("rejects duplicate agenda ids before tools can target the wrong item", async () => {
+    const response = await POST(
+      jsonRequest({
+        meeting: {
+          ...validMeeting,
+          agenda: [
+            { id: "duplicate", title: "First", done: false },
+            { id: "duplicate", title: "Second", done: false }
+          ]
+        }
+      })
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid meeting payload"
+    });
+  });
+
   it("rejects excessive expected participant counts before UI replay can allocate them", async () => {
     const createResponse = await POST(
       jsonRequest({
