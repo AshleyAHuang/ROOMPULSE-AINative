@@ -14,8 +14,9 @@ export class TranscriptStore {
 
   addLine(input: AddTranscriptLineInput): TranscriptLine {
     const timestamp = input.timestamp ?? Date.now();
+    const id = this.createLineId(timestamp);
     const line: TranscriptLine = {
-      id: `${timestamp}-${this.lines.length + 1}`,
+      id,
       speakerId: input.speakerId,
       speakerLabel: input.speakerLabel,
       text: input.text.trim(),
@@ -46,5 +47,18 @@ export class TranscriptStore {
 
   clear(): void {
     this.lines = [];
+  }
+
+  private createLineId(timestamp: number): string {
+    const existingIds = new Set(this.lines.map((line) => line.id));
+    let suffix = this.lines.length + 1;
+    let id = `${timestamp}-${suffix}`;
+
+    while (existingIds.has(id)) {
+      suffix += 1;
+      id = `${timestamp}-${suffix}`;
+    }
+
+    return id;
   }
 }
