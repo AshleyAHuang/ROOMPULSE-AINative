@@ -610,6 +610,52 @@ class SpeakerClustererTest(unittest.TestCase):
         self.assertEqual(transcript["observedSpeakerLabels"], ["Speaker 1"])
         self.assertEqual(messages[-1].get("status"), "listening")
 
+    def test_concurrent_flushes_do_not_overlap_transcription_or_clustering(self) -> None:
+        async def run() -> tuple[int, list[dict]]:
+            websocket = FakeWebSocket()
+            session = TranscriptionSession(websocket)
+            session.min_seconds = 0.1
+            session.max_seconds = 0.5
+            await session.append_audio(float32_to_pcm16(synthetic_voice(150, seconds=1.2)))
+
+            previous_model = server.ensure_model_loaded
+            previous_transcribe = server.transcribe_audio
+            active_transcribes = 0
+            max_active_transcribes = 0
+
+            async def fake_model():
+                return object()
+
+            async def fake_transcribe(_model, _audio, _language):
+                nonlocal active_transcribes, max_active_transcribes
+                active_transcribes += 1
+                max_active_transcribes = max(max_active_transcribes, active_transcribes)
+                await asyncio.sleep(0.01)
+                active_transcribes -= 1
+                return "serialized transcript"
+
+            server.ensure_model_loaded = fake_model
+            server.transcribe_audio = fake_transcribe
+            try:
+                await asyncio.gather(session.flush(force=True), session.flush(force=True))
+            finally:
+                server.ensure_model_loaded = previous_model
+                server.transcribe_audio = previous_transcribe
+
+            return max_active_transcribes, websocket.messages
+
+        max_active, messages = asyncio.run(run())
+        transcripts = [
+            message for message in messages if message.get("type") == "final_transcript"
+        ]
+
+        self.assertEqual(max_active, 1)
+        self.assertEqual(len(transcripts), 2)
+        self.assertEqual(
+            [message["speakerLabel"] for message in transcripts],
+            ["Speaker 1", "Speaker 1"],
+        )
+
 
 class FixedEmbeddingVoiceEmbedder:
     name = "test-neural"

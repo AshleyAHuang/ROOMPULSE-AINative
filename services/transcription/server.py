@@ -662,6 +662,7 @@ class TranscriptionSession:
         self.websocket = websocket
         self.buffer = bytearray()
         self.buffer_lock = asyncio.Lock()
+        self.flush_lock = asyncio.Lock()
         self.closed = False
         self.clusterer = SpeakerClusterer()
         self.sequence = 0
@@ -705,61 +706,62 @@ class TranscriptionSession:
             await self.flush(force=False)
 
     async def flush(self, force: bool) -> None:
-        min_bytes = seconds_to_bytes(self.min_seconds)
-        max_bytes = seconds_to_bytes(self.max_seconds)
+        async with self.flush_lock:
+            min_bytes = seconds_to_bytes(self.min_seconds)
+            max_bytes = seconds_to_bytes(self.max_seconds)
 
-        async with self.buffer_lock:
-            if len(self.buffer) < min_bytes and not force:
-                return
-            if not self.buffer:
-                return
-            take = min(len(self.buffer), max_bytes)
-            if take < min_bytes and not force:
-                return
-            raw = bytes(self.buffer[:take])
-            del self.buffer[:take]
+            async with self.buffer_lock:
+                if len(self.buffer) < min_bytes and not force:
+                    return
+                if not self.buffer:
+                    return
+                take = min(len(self.buffer), max_bytes)
+                if take < min_bytes and not force:
+                    return
+                raw = bytes(self.buffer[:take])
+                del self.buffer[:take]
 
-        audio = prepare_speech_audio(pcm16_to_float32(raw))
-        if not has_speech(audio):
-            return
+            audio = prepare_speech_audio(pcm16_to_float32(raw))
+            if not has_speech(audio):
+                return
 
-        await self.send_status("transcribing", "Transcribing speech segment")
-        try:
-            local_model = await ensure_model_loaded()
-            text = await transcribe_audio(local_model, audio, self.language)
-        except Exception as exc:
-            await self.send_error(f"Transcription failed: {exc}")
+            await self.send_status("transcribing", "Transcribing speech segment")
+            try:
+                local_model = await ensure_model_loaded()
+                text = await transcribe_audio(local_model, audio, self.language)
+            except Exception as exc:
+                await self.send_error(f"Transcription failed: {exc}")
+                await self.send_status("listening", "Listening")
+                return
+            if not text:
+                await self.send_status("listening", "Listening")
+                return
+
+            self.sequence += 1
+            try:
+                speaker = await self.clusterer.assign(audio)
+                speaker_id = speaker.id
+                speaker_label = speaker.label
+                observed_speaker_labels = self.clusterer.labels()
+            except Exception as exc:
+                await self.send_error(f"Speaker clustering failed: {exc}")
+                speaker_id = "speaker-1"
+                speaker_label = "Speaker 1"
+                observed_speaker_labels = self.clusterer.labels() or [speaker_label]
+            duration_ms = round((len(audio) / SAMPLE_RATE) * 1000)
+            await self.websocket.send_json(
+                {
+                    "type": "final_transcript",
+                    "id": f"local-{int(time.time() * 1000)}-{self.sequence}",
+                    "speakerId": speaker_id,
+                    "speakerLabel": speaker_label,
+                    "text": text,
+                    "confidence": 0.9,
+                    "durationMs": duration_ms,
+                    "observedSpeakerLabels": observed_speaker_labels,
+                }
+            )
             await self.send_status("listening", "Listening")
-            return
-        if not text:
-            await self.send_status("listening", "Listening")
-            return
-
-        self.sequence += 1
-        try:
-            speaker = await self.clusterer.assign(audio)
-            speaker_id = speaker.id
-            speaker_label = speaker.label
-            observed_speaker_labels = self.clusterer.labels()
-        except Exception as exc:
-            await self.send_error(f"Speaker clustering failed: {exc}")
-            speaker_id = "speaker-1"
-            speaker_label = "Speaker 1"
-            observed_speaker_labels = self.clusterer.labels() or [speaker_label]
-        duration_ms = round((len(audio) / SAMPLE_RATE) * 1000)
-        await self.websocket.send_json(
-            {
-                "type": "final_transcript",
-                "id": f"local-{int(time.time() * 1000)}-{self.sequence}",
-                "speakerId": speaker_id,
-                "speakerLabel": speaker_label,
-                "text": text,
-                "confidence": 0.9,
-                "durationMs": duration_ms,
-                "observedSpeakerLabels": observed_speaker_labels,
-            }
-        )
-        await self.send_status("listening", "Listening")
 
     async def send_status(self, status: str, message: str) -> None:
         await self.websocket.send_json(
