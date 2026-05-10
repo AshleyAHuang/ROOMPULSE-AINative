@@ -15,6 +15,7 @@ import {
   MAX_HEARTBEAT_INTERVAL_SECONDS,
   MAX_PARTICIPANT_ENTRIES,
   MIN_HEARTBEAT_INTERVAL_SECONDS,
+  capFacilitatorOutput,
   createHeartbeatInput,
   createInitialReviewMarkdown,
   getAgendaProgress,
@@ -26,7 +27,11 @@ import {
   type TranscriptLine,
   type UiAction
 } from "@/lib/facilitator";
-import { createParticipationStatus } from "@/lib/speaker-tracker";
+import {
+  createParticipationStatus,
+  normalizeObservedSpeakerLabels,
+  normalizeSpeakerLabel
+} from "@/lib/speaker-tracker";
 import { LocalTranscriptionClient } from "@/lib/local-transcription-client";
 import { TranscriptStore } from "@/lib/transcript-store";
 import {
@@ -132,6 +137,7 @@ const demoSnippets = [
 ];
 
 const DEFAULT_CLIENT_PI_TIMEOUT_MS = 25_000;
+const MAX_HEARTBEAT_OUTPUT_CARDS = 5;
 
 export default function RoomPulseApp() {
   const [phase, setPhase] = useState<Phase>("dashboard");
@@ -204,10 +210,18 @@ export default function RoomPulseApp() {
 
   const transcriptStoreRef = useRef(new TranscriptStore());
   const transcriptionClientRef = useRef<LocalTranscriptionClient | null>(null);
+  const transcriptModeRef = useRef<TranscriptMode>("mic");
+  const phaseRef = useRef<Phase>("dashboard");
   const currentMicSpeakerRef = useRef("Speaker 1");
   const micStartTokenRef = useRef(0);
+  const micStopRequestedRef = useRef(false);
+  const micReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
   const isHeartbeatRunningRef = useRef(false);
   const heartbeatRunTokenRef = useRef(0);
+  const heartbeatAbortControllerRef = useRef<AbortController | null>(null);
+  const isPausedRef = useRef(false);
   const transcriptFeedRef = useRef<HTMLDivElement | null>(null);
   const demoTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const meetingLogIdRef = useRef<string | null>(null);
@@ -216,18 +230,22 @@ export default function RoomPulseApp() {
   const flushLogEventsPromiseRef = useRef<Promise<void> | null>(null);
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const endingSessionRef = useRef(false);
+  const meetingStartInFlightRef = useRef(false);
   const meetingStartAttemptRef = useRef(0);
   const agendaItemSequenceRef = useRef(0);
   const agendaCountRef = useRef(defaultMeeting.agenda.length);
+  const heartbeatReviewSequenceRef = useRef(0);
   const reviewRestoreSequenceRef = useRef(0);
   const reviewLastUpdatedAtRef = useRef(0);
   const heartbeatIntervalSecondsRef = useRef(
     defaultMeeting.heartbeatIntervalSeconds
   );
+  const expectedParticipantsRef = useRef(defaultMeeting.expectedParticipants);
   const meetingStartedAtRef = useRef(0);
 
   const observedSpeakerLabels = useMemo(
-    () => Array.from(new Set(transcript.map((line) => line.speakerLabel))),
+    () =>
+      normalizeObservedSpeakerLabels(transcript.map((line) => line.speakerLabel)),
     [transcript]
   );
   const participation = useMemo(
@@ -321,12 +339,38 @@ export default function RoomPulseApp() {
   }, [meeting.agenda.length]);
 
   useEffect(() => {
+    phaseRef.current = phase;
+  }, [phase]);
+
+  useEffect(() => {
+    transcriptModeRef.current = transcriptMode;
+  }, [transcriptMode]);
+
+  useEffect(() => {
     heartbeatIntervalSecondsRef.current = meeting.heartbeatIntervalSeconds;
   }, [meeting.heartbeatIntervalSeconds]);
 
   useEffect(() => {
+    expectedParticipantsRef.current = meeting.expectedParticipants;
+  }, [meeting.expectedParticipants]);
+
+  useEffect(() => {
+    isPausedRef.current = isPaused;
+  }, [isPaused]);
+
+  useEffect(() => {
     meetingStartedAtRef.current = meetingStartedAt;
   }, [meetingStartedAt]);
+
+  function setPhaseState(nextPhase: Phase) {
+    phaseRef.current = nextPhase;
+    setPhase(nextPhase);
+  }
+
+  function setTranscriptModeState(nextMode: TranscriptMode) {
+    transcriptModeRef.current = nextMode;
+    setTranscriptMode(nextMode);
+  }
 
   useEffect(() => {
     if (
@@ -505,10 +549,11 @@ export default function RoomPulseApp() {
         return;
       }
 
-      const speakerId = speakerLabel.toLowerCase().replace(/\s+/g, "-");
+      const safeSpeakerLabel = normalizeSpeakerLabel(speakerLabel) ?? "Speaker 1";
+      const speakerId = safeSpeakerLabel.toLowerCase().replace(/\s+/g, "-");
       const line = transcriptStoreRef.current.addLine({
         speakerId,
-        speakerLabel,
+        speakerLabel: safeSpeakerLabel,
         text: trimmed,
         source,
         confidence
@@ -521,6 +566,8 @@ export default function RoomPulseApp() {
 
   const applyHeartbeatOutput = useCallback(
     (output: FacilitatorOutput, heartbeatNow: number) => {
+      heartbeatReviewSequenceRef.current += 1;
+      const reviewVersionId = `${heartbeatNow}-review-r${heartbeatReviewSequenceRef.current}`;
       const finalReviewMarkdown = reviewMarkdownFromOutput(output);
       const finalEphemeralReminder =
         output.ephemeralReminder ?? reminderFromOutput(output);
@@ -537,10 +584,10 @@ export default function RoomPulseApp() {
       setCurrentOutput(finalOutput);
       reviewLastUpdatedAtRef.current = heartbeatNow;
       setReviewMarkdown(finalReviewMarkdown);
-      setCurrentReviewVersionId(`${heartbeatNow}-review`);
+      setCurrentReviewVersionId(reviewVersionId);
       setReviewVersions((versions) => [
         {
-          id: `${heartbeatNow}-review`,
+          id: reviewVersionId,
           timestamp: heartbeatNow,
           source: finalOutput.source,
           markdown: finalReviewMarkdown,
@@ -571,7 +618,7 @@ export default function RoomPulseApp() {
         "heartbeat_output",
         {
           output: finalOutput,
-          reviewVersionId: `${heartbeatNow}-review`
+          reviewVersionId
         },
         heartbeatNow
       );
@@ -580,7 +627,12 @@ export default function RoomPulseApp() {
   );
 
   const runHeartbeat = useCallback(async () => {
-    if (isHeartbeatRunningRef.current || phase !== "meeting" || isPaused) {
+    if (
+      isHeartbeatRunningRef.current ||
+      endingSessionRef.current ||
+      phase !== "meeting" ||
+      isPausedRef.current
+    ) {
       return;
     }
 
@@ -613,26 +665,29 @@ export default function RoomPulseApp() {
     isHeartbeatRunningRef.current = true;
     setHeartbeatError(null);
 
+    let controller: AbortController | null = null;
     try {
-      const controller = new AbortController();
+      const activeController = new AbortController();
+      controller = activeController;
+      heartbeatAbortControllerRef.current = activeController;
       const timeout = window.setTimeout(() => {
-        controller.abort();
+        activeController.abort();
       }, getClientPiTimeoutMs());
       const response = await fetch("/api/heartbeat", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
         },
-        signal: controller.signal,
+        signal: activeController.signal,
         body: JSON.stringify({
-          meeting,
-          transcript: transcriptSnapshot,
-          observedSpeakerLabels: speakerSnapshot,
+          meeting: input.meeting,
+          transcript: input.transcript,
+          observedSpeakerLabels: input.participation.observedLabels,
           lastHeartbeatAt,
           now: heartbeatNow,
-          priorInterventions: timeline,
-          currentReviewMarkdown: reviewMarkdown,
-          reviewVersions,
+          priorInterventions: input.priorInterventions,
+          currentReviewMarkdown: input.currentReviewMarkdown,
+          reviewVersions: input.reviewVersions,
           meetingStartedAt,
           isPaused,
           heartbeatCount
@@ -654,7 +709,25 @@ export default function RoomPulseApp() {
         throw heartbeatError;
       }
 
-      const output = (await response.json()) as FacilitatorOutput;
+      const routeOutput = normalizeHeartbeatRouteOutput(await response.json());
+      if (!routeOutput) {
+        throw new Error("Heartbeat route returned invalid facilitator output");
+      }
+      if (isClientStrictPiRequired() && routeOutput.source === "local-fallback") {
+        throw new Error(
+          strictPiFallbackMessage("Pi heartbeat", routeOutput.adapterNotice)
+        );
+      }
+      const output =
+        routeOutput.source === "local-fallback"
+          ? {
+              ...(await runLocalHeartbeatInBrowser({
+                ...input,
+                currentReviewMarkdown: reviewMarkdown
+              })),
+              adapterNotice: routeOutput.adapterNotice
+            }
+          : routeOutput;
       if (!shouldApplyHeartbeatResult()) {
         return;
       }
@@ -675,7 +748,7 @@ export default function RoomPulseApp() {
           : message
       );
       if (
-        process.env.NEXT_PUBLIC_ROOMPULSE_REQUIRE_PI === "1" ||
+        isClientStrictPiRequired() ||
         (error as Error & { piRequired?: boolean })?.piRequired === true
       ) {
         setNextHeartbeatAt(
@@ -684,7 +757,10 @@ export default function RoomPulseApp() {
         return;
       }
 
-      const fallbackOutput = await runLocalHeartbeatInBrowser(input);
+      const fallbackOutput = await runLocalHeartbeatInBrowser({
+        ...input,
+        currentReviewMarkdown: reviewMarkdown
+      });
       if (!shouldApplyHeartbeatResult()) {
         return;
       }
@@ -695,6 +771,12 @@ export default function RoomPulseApp() {
         Date.now() + heartbeatIntervalSecondsRef.current * 1000
       );
     } finally {
+      if (
+        controller &&
+        heartbeatAbortControllerRef.current?.signal === controller.signal
+      ) {
+        heartbeatAbortControllerRef.current = null;
+      }
       if (heartbeatRunTokenRef.current === runToken) {
         setIsHeartbeatRunning(false);
         isHeartbeatRunningRef.current = false;
@@ -751,12 +833,17 @@ export default function RoomPulseApp() {
         await response.json(),
         configuredMeeting
       );
+      if (isClientStrictPiRequired() && document.source === "local-fallback") {
+        throw new Error(
+          strictPiFallbackMessage("Pi initial review", document.adapterNotice)
+        );
+      }
 
       return document;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (
-        process.env.NEXT_PUBLIC_ROOMPULSE_REQUIRE_PI === "1" ||
+        isClientStrictPiRequired() ||
         (error as Error & { piRequired?: boolean })?.piRequired === true
       ) {
         throw new Error(
@@ -785,6 +872,8 @@ export default function RoomPulseApp() {
 
   function invalidatePendingHeartbeat() {
     heartbeatRunTokenRef.current += 1;
+    heartbeatAbortControllerRef.current?.abort();
+    heartbeatAbortControllerRef.current = null;
     isHeartbeatRunningRef.current = false;
     setIsHeartbeatRunning(false);
   }
@@ -820,16 +909,41 @@ export default function RoomPulseApp() {
 
   function restoreMeetingFromSnapshot(snapshot: ClientMeetingLogSnapshot) {
     invalidatePendingHeartbeat();
+    meetingStartInFlightRef.current = false;
     meetingStartAttemptRef.current += 1;
     endingSessionRef.current = false;
     const restoredState = snapshot.metadata.state ?? fallbackStateFromSnapshot(snapshot);
-    const restoredMeeting = restoredState.meeting;
+    const restoredMeeting = meetingWithLoggedAgendaState(
+      restoredState.meeting,
+      snapshot.events
+    );
     const restoredTranscript = mergeTranscriptLines(
       restoredState.transcript,
       snapshot.transcript
     );
-    const restoredVersions =
+    const materializedVersions =
       mergeReviewVersions(restoredState.reviewVersions, snapshot.reviewVersions);
+    const loggedReviewVersions = heartbeatReviewVersionsFromEvents(
+      snapshot.events
+    ).filter(
+      (loggedVersion) =>
+        !materializedVersions.some((version) =>
+          isSameMaterializedReviewVersion(version, loggedVersion)
+        )
+    );
+    const restoredVersions = mergeReviewVersions(
+      materializedVersions,
+      loggedReviewVersions
+    );
+    const restoredTimeline = mergeTimelineEntriesWithEvents(
+      restoredState.timeline,
+      snapshot.events
+    );
+    const restoredCurrentOutput = mergeCurrentOutputWithHeartbeatEvents(
+      restoredState.currentOutput,
+      restoredState.timeline,
+      snapshot.events
+    );
     const latestRestoredVersion = restoredVersions[0] ?? null;
     const restoredReviewMarkdown =
       latestRestoredVersion?.markdown ||
@@ -853,9 +967,12 @@ export default function RoomPulseApp() {
         ? restoredState.currentReviewVersionId
         : effectiveReviewVersions[0]?.id ?? fallbackReviewVersion.id);
     const paused =
-      snapshot.metadata.status === "paused" || restoredState.isPaused;
+      snapshot.metadata.status === "paused" || snapshot.metadata.isPaused;
     const nowMs = Date.now();
-    const lastBeat = restoredState.lastHeartbeatAt || snapshot.metadata.startedAt;
+    const lastBeat = Math.max(
+      restoredState.lastHeartbeatAt || snapshot.metadata.startedAt,
+      latestHeartbeatTimestamp(snapshot)
+    );
     const nextBeat = paused
       ? restoredState.nextHeartbeatAt
       : nowMs +
@@ -889,32 +1006,42 @@ export default function RoomPulseApp() {
         .join("\n")
     );
     setTranscript(restoredTranscript);
-    setTranscriptMode("mic");
-    setCurrentOutput(restoredState.currentOutput);
-    setTimeline(restoredState.timeline);
+    setTranscriptModeState("mic");
+    setCurrentOutput(restoredCurrentOutput);
+    setTimeline(restoredTimeline);
     setLastHeartbeatAt(lastBeat);
     setNextHeartbeatAt(nextBeat);
     const restoredStartedAt =
       restoredState.meetingStartedAt || snapshot.metadata.startedAt;
     meetingStartedAtRef.current = restoredStartedAt;
     setMeetingStartedAt(restoredStartedAt);
-    setHeartbeatCount(restoredState.heartbeatCount);
+    setHeartbeatCount(
+      Math.max(
+        restoredState.heartbeatCount,
+        heartbeatEventCount(snapshot.events),
+        restoredTimeline.length
+      )
+    );
+    isPausedRef.current = paused;
     setIsPaused(paused);
     setReviewMarkdown(restoredReviewMarkdown);
     setReviewVersions(effectiveReviewVersions);
     setCurrentReviewVersionId(effectiveReviewVersionId);
     setActiveAgendaItemId(
-      restoredState.activeAgendaItemId ??
-        restoredMeeting.agenda.find((item) => !item.done)?.id ??
-        restoredMeeting.agenda[0]?.id ??
-        null
+      restoredMeeting.agenda.some(
+        (item) => item.id === restoredState.activeAgendaItemId && !item.done
+      )
+        ? restoredState.activeAgendaItemId
+        : restoredMeeting.agenda.find((item) => !item.done)?.id ??
+          restoredMeeting.agenda[0]?.id ??
+          null
     );
     setEphemeralReminder(null);
     setHeartbeatError(null);
     setSelectedMeetingLog(snapshot);
     setIsPastMeetingsOpen(false);
     setLogStatus(`Resumed session: ${snapshot.metadata.id}`);
-    setPhase("meeting");
+    setPhaseState("meeting");
 
     if (!paused) {
       void startMic(restoredMeeting.expectedParticipants);
@@ -922,14 +1049,9 @@ export default function RoomPulseApp() {
   }
 
   async function endMeetingSession() {
-    if (isEndingSession) {
+    if (isEndingSession || endingSessionRef.current) {
       return;
     }
-    if (isHeartbeatRunningRef.current) {
-      setLogStatus("Wait for the current heartbeat review to finish before ending.");
-      return;
-    }
-
     endingSessionRef.current = true;
     setIsEndingSession(true);
 
@@ -941,11 +1063,17 @@ export default function RoomPulseApp() {
       return;
     }
 
+    if (isHeartbeatRunningRef.current) {
+      setLogStatus("Cancelling current heartbeat before ending session...");
+      invalidatePendingHeartbeat();
+    }
+
     setLogStatus("Ending session...");
     try {
       await stopMicAndFlushFinalSegment();
       stopScriptedDemo();
       const endedAt = Date.now();
+      isPausedRef.current = true;
       setIsPaused(true);
       if (autosaveTimerRef.current) {
         clearTimeout(autosaveTimerRef.current);
@@ -987,7 +1115,7 @@ export default function RoomPulseApp() {
   ) => {
     stopScriptedDemo();
     stopMic();
-    setTranscriptMode("demo");
+    setTranscriptModeState("demo");
     setIsDemoRunning(true);
     logMeetingEvent("scripted_demo_started", {
       durationMs: DEMO_DURATION_MS,
@@ -1014,6 +1142,10 @@ export default function RoomPulseApp() {
   ]);
 
   const launchLiveDemo = useCallback(async () => {
+    if (meetingStartInFlightRef.current) {
+      return;
+    }
+    meetingStartInFlightRef.current = true;
     invalidatePendingHeartbeat();
     const attemptId = meetingStartAttemptRef.current + 1;
     meetingStartAttemptRef.current = attemptId;
@@ -1051,10 +1183,11 @@ export default function RoomPulseApp() {
         demoMeeting.agenda[0]?.id ??
         null
     );
-    setPhase("meeting");
+    setPhaseState("meeting");
     meetingStartedAtRef.current = startedAt;
     setMeetingStartedAt(startedAt);
     setHeartbeatCount(0);
+    isPausedRef.current = false;
     setIsPaused(false);
     reviewLastUpdatedAtRef.current = startedAt;
     setReviewMarkdown(initialReview);
@@ -1172,13 +1305,18 @@ export default function RoomPulseApp() {
   }, [createMeetingLogFor, logMeetingEvent, startScriptedDemo]);
 
   useEffect(() => {
-    setNow(Date.now());
-    const timer = setInterval(() => {
+    const refreshClock = () => {
       setNow(Date.now());
-    }, 1000);
+    };
+    refreshClock();
+    const timer = setInterval(refreshClock, 1000);
+    document.addEventListener("visibilitychange", refreshClock);
+    window.addEventListener("focus", refreshClock);
 
     return () => {
       clearInterval(timer);
+      document.removeEventListener("visibilitychange", refreshClock);
+      window.removeEventListener("focus", refreshClock);
     };
   }, []);
 
@@ -1196,7 +1334,28 @@ export default function RoomPulseApp() {
 
   useEffect(() => {
     return () => {
+      micStopRequestedRef.current = true;
+      clearMicReconnectTimer();
       void cleanupMicResources();
+    };
+  }, []);
+
+  useEffect(() => {
+    const mediaDevices = navigator.mediaDevices;
+    if (
+      !mediaDevices?.addEventListener ||
+      !mediaDevices.removeEventListener
+    ) {
+      return;
+    }
+
+    const handleDeviceChange = () => {
+      void restartMicAfterDeviceChange();
+    };
+    mediaDevices.addEventListener("devicechange", handleDeviceChange);
+
+    return () => {
+      mediaDevices.removeEventListener("devicechange", handleDeviceChange);
     };
   }, []);
 
@@ -1218,31 +1377,41 @@ export default function RoomPulseApp() {
   }, [stopScriptedDemo]);
 
   useEffect(() => {
+    let active = true;
     let permissionStatus: PermissionStatus | null = null;
 
     async function readMicPermission() {
       if (!navigator.permissions?.query) {
-        setMicPermissionStatus("permission API unavailable");
+        if (active) {
+          setMicPermissionStatus("permission API unavailable");
+        }
         return;
       }
 
       try {
-        permissionStatus = await navigator.permissions.query({
+        const queriedPermissionStatus = await navigator.permissions.query({
           name: "microphone" as PermissionName
         });
+        if (!active) {
+          return;
+        }
+        permissionStatus = queriedPermissionStatus;
         const update = () => {
           setMicPermissionStatus(permissionStatus?.state ?? "permission unknown");
         };
         update();
         permissionStatus.onchange = update;
       } catch {
-        setMicPermissionStatus("permission API unavailable");
+        if (active) {
+          setMicPermissionStatus("permission API unavailable");
+        }
       }
     }
 
     void readMicPermission();
 
     return () => {
+      active = false;
       if (permissionStatus) {
         permissionStatus.onchange = null;
       }
@@ -1295,6 +1464,10 @@ export default function RoomPulseApp() {
   }, [buildPersistedMeetingState, meetingLogId, phase]);
 
   async function startMeeting() {
+    if (meetingStartInFlightRef.current) {
+      return;
+    }
+    meetingStartInFlightRef.current = true;
     invalidatePendingHeartbeat();
     endingSessionRef.current = false;
     const attemptId = meetingStartAttemptRef.current + 1;
@@ -1307,18 +1480,22 @@ export default function RoomPulseApp() {
       initialDocument = await initializeReviewDocument(configuredMeeting);
     } catch (error) {
       if (meetingStartAttemptRef.current !== attemptId) {
+        meetingStartInFlightRef.current = false;
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
       setHeartbeatError(message);
       setLogStatus(`Meeting start blocked: ${message}`);
       setIsInitializingReview(false);
+      meetingStartInFlightRef.current = false;
       return;
     }
     if (meetingStartAttemptRef.current !== attemptId) {
+      meetingStartInFlightRef.current = false;
       return;
     }
     setIsInitializingReview(false);
+    meetingStartInFlightRef.current = false;
 
     setMeeting(configuredMeeting);
     setActiveAgendaItemId(
@@ -1326,7 +1503,7 @@ export default function RoomPulseApp() {
         configuredMeeting.agenda[0]?.id ??
         null
     );
-    setPhase("meeting");
+    setPhaseState("meeting");
     const startedAt = Date.now();
     const initialReview = initialDocument.markdown;
     const initialVersion: ReviewVersion = {
@@ -1339,6 +1516,7 @@ export default function RoomPulseApp() {
     meetingStartedAtRef.current = startedAt;
     setMeetingStartedAt(startedAt);
     setHeartbeatCount(0);
+    isPausedRef.current = false;
     setIsPaused(false);
     reviewLastUpdatedAtRef.current = startedAt;
     setReviewMarkdown(initialReview);
@@ -1368,7 +1546,7 @@ export default function RoomPulseApp() {
     setNextHeartbeatAt(
       startedAt + configuredMeeting.heartbeatIntervalSeconds * 1000
     );
-    setTranscriptMode("mic");
+    setTranscriptModeState("mic");
     void startMic(configuredMeeting.expectedParticipants);
     void createMeetingLogFor(configuredMeeting, startedAt, [
       {
@@ -1390,15 +1568,50 @@ export default function RoomPulseApp() {
     setDemoLine("");
   }
 
+  function clearMicReconnectTimer() {
+    if (micReconnectTimerRef.current) {
+      clearTimeout(micReconnectTimerRef.current);
+      micReconnectTimerRef.current = null;
+    }
+  }
+
+  function scheduleMicReconnect(expectedParticipants: number) {
+    if (
+      micStopRequestedRef.current ||
+      transcriptModeRef.current !== "mic" ||
+      phaseRef.current !== "meeting" ||
+      endingSessionRef.current ||
+      micReconnectTimerRef.current
+    ) {
+      return;
+    }
+
+    setMicStatus("Reconnecting local transcription stream");
+    micReconnectTimerRef.current = setTimeout(() => {
+      micReconnectTimerRef.current = null;
+      if (
+        micStopRequestedRef.current ||
+        transcriptModeRef.current !== "mic" ||
+        phaseRef.current !== "meeting" ||
+        endingSessionRef.current
+      ) {
+        return;
+      }
+      void startMic(expectedParticipants);
+    }, 100);
+  }
+
   async function startMic(
     expectedParticipants = meeting.expectedParticipants
   ) {
-    setTranscriptMode("mic");
+    setTranscriptModeState("mic");
 
     if (isMicRunning || transcriptionClientRef.current) {
       return;
     }
 
+    clearMicReconnectTimer();
+    micStopRequestedRef.current = false;
     const startToken = micStartTokenRef.current + 1;
     micStartTokenRef.current = startToken;
     let client: LocalTranscriptionClient | null = null;
@@ -1415,11 +1628,13 @@ export default function RoomPulseApp() {
           if (micStartTokenRef.current !== startToken) {
             return;
           }
-          currentMicSpeakerRef.current = segment.speakerLabel;
-          setCurrentMicSpeaker(segment.speakerLabel);
+          const safeSpeakerLabel =
+            normalizeSpeakerLabel(segment.speakerLabel) ?? "Speaker 1";
+          currentMicSpeakerRef.current = safeSpeakerLabel;
+          setCurrentMicSpeaker(safeSpeakerLabel);
           addTranscriptLine(
             segment.text,
-            segment.speakerLabel,
+            safeSpeakerLabel,
             "speech",
             segment.confidence
           );
@@ -1430,13 +1645,19 @@ export default function RoomPulseApp() {
           }
           const observed = status.observedSpeakerLabels;
           if (observed && observed.length > 0) {
-            const latest = observed[observed.length - 1];
-            currentMicSpeakerRef.current = latest;
-            setCurrentMicSpeaker(latest);
+            const latest = latestNormalizedSpeakerLabel(observed);
+            if (latest) {
+              currentMicSpeakerRef.current = latest;
+              setCurrentMicSpeaker(latest);
+            }
           }
           if (status.status === "closed") {
             setIsMicRunning(false);
             transcriptionClientRef.current = null;
+            scheduleMicReconnect(expectedParticipants);
+            if (!micStopRequestedRef.current) {
+              return;
+            }
           }
           setMicStatus(status.message);
         },
@@ -1458,6 +1679,7 @@ export default function RoomPulseApp() {
       }
       setIsMicRunning(true);
     } catch (error) {
+      micStopRequestedRef.current = true;
       if (transcriptionClientRef.current === client) {
         void cleanupMicResources();
       } else {
@@ -1471,6 +1693,8 @@ export default function RoomPulseApp() {
   }
 
   function stopMic() {
+    micStopRequestedRef.current = true;
+    clearMicReconnectTimer();
     micStartTokenRef.current += 1;
     void cleanupMicResources();
     currentMicSpeakerRef.current = "Speaker 1";
@@ -1479,7 +1703,40 @@ export default function RoomPulseApp() {
     setMicStatus("Local transcription idle");
   }
 
+  async function restartMicAfterDeviceChange() {
+    if (
+      micStopRequestedRef.current ||
+      transcriptModeRef.current !== "mic" ||
+      phaseRef.current !== "meeting" ||
+      endingSessionRef.current ||
+      !transcriptionClientRef.current
+    ) {
+      return;
+    }
+
+    micStopRequestedRef.current = true;
+    clearMicReconnectTimer();
+    micStartTokenRef.current += 1;
+    const restartToken = micStartTokenRef.current;
+    setIsMicRunning(false);
+    setMicStatus("Audio input devices changed; reconnecting local transcription");
+    await cleanupMicResources();
+
+    if (
+      micStartTokenRef.current !== restartToken ||
+      transcriptModeRef.current !== "mic" ||
+      phaseRef.current !== "meeting" ||
+      endingSessionRef.current
+    ) {
+      return;
+    }
+
+    void startMic(expectedParticipantsRef.current);
+  }
+
   async function stopMicAndFlushFinalSegment() {
+    micStopRequestedRef.current = true;
+    clearMicReconnectTimer();
     await cleanupMicResources();
     micStartTokenRef.current += 1;
     currentMicSpeakerRef.current = "Speaker 1";
@@ -1495,13 +1752,23 @@ export default function RoomPulseApp() {
   }
 
   function updateAgendaItem(id: string, done: boolean) {
-    setMeeting((current) => ({
-      ...current,
-      agenda: current.agenda.map((item) =>
-        item.id === id ? { ...item, done } : item
-      )
-    }));
-    logMeetingEvent("agenda_manual_update", { itemId: id, done });
+    setMeeting((current) => {
+      let changed = false;
+      const agenda = current.agenda.map((item) => {
+        if (item.id !== id) {
+          return item;
+        }
+        if (item.done === done) {
+          return item;
+        }
+
+        changed = true;
+        logMeetingEvent("agenda_manual_update", { itemId: id, done });
+        return { ...item, done };
+      });
+
+      return changed ? { ...current, agenda } : current;
+    });
   }
 
   function addAgendaItem(title: string, reason: string) {
@@ -1649,7 +1916,11 @@ export default function RoomPulseApp() {
 
   function togglePause() {
     const nextPaused = !isPaused;
+    isPausedRef.current = nextPaused;
     setIsPaused(nextPaused);
+    if (nextPaused && isHeartbeatRunningRef.current) {
+      invalidatePendingHeartbeat();
+    }
     logMeetingEvent("meeting_pause_toggled", { paused: nextPaused });
     if (!nextPaused) {
       setNextHeartbeatAt(Date.now() + meeting.heartbeatIntervalSeconds * 1000);
@@ -1657,9 +1928,14 @@ export default function RoomPulseApp() {
   }
 
   async function checkpointCurrentMeetingBeforeLeaving(): Promise<boolean> {
-    const id = meetingLogIdRef.current;
-    if (phase !== "meeting" || !id || endingSessionRef.current) {
+    if (phase !== "meeting" || endingSessionRef.current) {
       return true;
+    }
+
+    const id = await waitForMeetingLogId(meetingLogIdRef, 2500);
+    if (!id) {
+      setLogStatus("Session checkpoint blocked: local session log is not ready yet.");
+      return false;
     }
 
     const updatedAt = Date.now();
@@ -1686,14 +1962,15 @@ export default function RoomPulseApp() {
   }
 
   async function startNewMeetingSetup() {
-    invalidatePendingHeartbeat();
-    meetingStartAttemptRef.current += 1;
     if (phase === "meeting") {
       const checkpointed = await checkpointCurrentMeetingBeforeLeaving();
       if (!checkpointed) {
         return;
       }
     }
+    invalidatePendingHeartbeat();
+    meetingStartInFlightRef.current = false;
+    meetingStartAttemptRef.current += 1;
     endingSessionRef.current = false;
     stopMic();
     stopScriptedDemo();
@@ -1719,6 +1996,7 @@ export default function RoomPulseApp() {
     setNextHeartbeatAt(0);
     meetingStartedAtRef.current = 0;
     setMeetingStartedAt(0);
+    isPausedRef.current = false;
     setIsPaused(false);
     setMeeting(defaultMeeting);
     setMeetingDraft(defaultMeeting);
@@ -1751,11 +2029,12 @@ export default function RoomPulseApp() {
         null
     );
     setLogStatus("Preparing new meeting.");
-    setPhase("setup");
+    setPhaseState("setup");
   }
 
   function returnToDashboard() {
     invalidatePendingHeartbeat();
+    meetingStartInFlightRef.current = false;
     meetingStartAttemptRef.current += 1;
     stopMic();
     stopScriptedDemo();
@@ -1763,7 +2042,7 @@ export default function RoomPulseApp() {
     setIsPastMeetingsOpen(false);
     setSelectedMeetingLog(null);
     setReviewHandoffUrl(null);
-    setPhase("dashboard");
+    setPhaseState("dashboard");
     void refreshPastMeetings();
   }
 
@@ -2237,7 +2516,7 @@ export default function RoomPulseApp() {
                 type="button"
                 onClick={() => {
                   stopMic();
-                  setTranscriptMode("demo");
+                  setTranscriptModeState("demo");
                 }}
               >
                 Demo
@@ -2513,7 +2792,9 @@ export default function RoomPulseApp() {
         <button
           aria-label="Run heartbeat now"
           className="pill-btn primary"
-          disabled={isHeartbeatRunning || isEndingSession || isInitializingReview}
+          disabled={
+            isHeartbeatRunning || isEndingSession || isInitializingReview || isPaused
+          }
           type="button"
           onClick={() => void runHeartbeat()}
         >
@@ -2523,7 +2804,7 @@ export default function RoomPulseApp() {
         <span className="bottom-divider" />
         <button
           className="pill-btn danger"
-          disabled={isEndingSession || isHeartbeatRunning}
+          disabled={isEndingSession}
           type="button"
           onClick={() => {
             void endMeetingSession();
@@ -2917,7 +3198,10 @@ async function waitForMeetingLogId(
 function fallbackStateFromSnapshot(
   snapshot: ClientMeetingLogSnapshot
 ): PersistedMeetingState {
-  const meeting = snapshot.metadata.meeting;
+  const meeting = meetingWithLoggedAgendaState(
+    snapshot.metadata.meeting,
+    snapshot.events
+  );
   const reviewMarkdown =
     snapshot.metadata.latestReviewMarkdown ||
     snapshot.reviewVersions[0]?.markdown ||
@@ -2953,11 +3237,488 @@ function fallbackStateFromSnapshot(
   };
 }
 
-function latestHeartbeatTimestamp(snapshot: ClientMeetingLogSnapshot): number {
-  const latestHeartbeat = [...snapshot.events]
-    .reverse()
-    .find((event) => event.type === "heartbeat_output");
-  return latestHeartbeat?.timestamp ?? snapshot.metadata.startedAt;
+function meetingWithLoggedAgendaState(
+  meeting: MeetingConfig,
+  events: ClientMeetingLogEvent[]
+): MeetingConfig {
+  let agenda = meeting.agenda;
+
+  for (const event of [...events].sort(
+    (left, right) => left.timestamp - right.timestamp || left.id.localeCompare(right.id)
+  )) {
+    if (event.type === "heartbeat_output") {
+      const output = heartbeatOutputFromEvent(event);
+      if (output?.agendaActions.length) {
+        agenda = applyLoggedAgendaActions(agenda, output.agendaActions);
+      }
+      continue;
+    }
+
+    if (!isRecord(event.payload)) {
+      continue;
+    }
+
+    if (event.type === "agenda_manual_update") {
+      const itemId = stringParam(event.payload.itemId);
+      const done = booleanParam(event.payload.done);
+      if (itemId && done !== null) {
+        agenda = applyLoggedAgendaActions(agenda, [
+          { itemId, done, reason: "Logged agenda update." }
+        ]);
+      }
+    }
+
+    if (event.type === "agenda_item_added") {
+      const item = agendaItemFromEventPayload(event.payload.item);
+      if (
+        item &&
+        agenda.length < MAX_AGENDA_ITEMS &&
+        !agenda.some((candidate) => candidate.id === item.id)
+      ) {
+        agenda = [...agenda, item];
+      }
+    }
+
+    if (event.type === "agenda_item_deleted") {
+      const item = agendaItemFromEventPayload(event.payload.item);
+      if (item) {
+        agenda = agenda.filter((candidate) => candidate.id !== item.id);
+      }
+    }
+  }
+
+  return agenda === meeting.agenda ? meeting : { ...meeting, agenda };
+}
+
+function applyLoggedAgendaActions(
+  agenda: AgendaItem[],
+  actions: FacilitatorOutput["agendaActions"]
+): AgendaItem[] {
+  let changed = false;
+  const nextAgenda = agenda.map((item) => {
+    const action = actions.find((candidate) => candidate.itemId === item.id);
+    if (!action || item.done === action.done) {
+      return item;
+    }
+
+    changed = true;
+    return { ...item, done: action.done };
+  });
+
+  return changed ? nextAgenda : agenda;
+}
+
+function agendaItemFromEventPayload(value: unknown): AgendaItem | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const id = stringParam(value.id);
+  const title = stringParam(value.title);
+  const done = booleanParam(value.done);
+  if (!id || !title || done === null) {
+    return null;
+  }
+
+  return { id, title, done };
+}
+
+export function mergeTimelineEntriesWithEvents(
+  stateTimeline: TimelineEntry[],
+  events: Array<Pick<ClientMeetingLogEvent, "id" | "type" | "timestamp" | "payload">>
+): TimelineEntry[] {
+  const byKey = new Map<string, TimelineEntry>();
+
+  for (const entry of stateTimeline) {
+    byKey.set(timelineEntryRestoreKey(entry), entry);
+  }
+  for (const entry of timelineEntriesFromHeartbeatEvents(events)) {
+    byKey.set(timelineEntryRestoreKey(entry), entry);
+  }
+
+  return Array.from(byKey.values()).sort(
+    (left, right) => right.timestamp - left.timestamp || right.id.localeCompare(left.id)
+  );
+}
+
+function timelineEntriesFromHeartbeatEvents(
+  events: Array<Pick<ClientMeetingLogEvent, "id" | "type" | "timestamp" | "payload">>
+): TimelineEntry[] {
+  const entries: TimelineEntry[] = [];
+
+  for (const event of events) {
+    const output = heartbeatOutputFromEvent(event);
+    if (!output) {
+      continue;
+    }
+
+    entries.push({
+      id: event.id,
+      timestamp: event.timestamp,
+      source: output.source,
+      cards: output.cards,
+      summary: output.summary,
+      reviewMarkdown: output.reviewMarkdown,
+      reminder: output.ephemeralReminder
+    });
+  }
+
+  return entries;
+}
+
+function timelineEntryRestoreKey(entry: TimelineEntry): string {
+  return [
+    entry.timestamp,
+    entry.source,
+    entry.summary,
+    entry.reviewMarkdown ?? "",
+    entry.reminder ?? ""
+  ].join("\u0001");
+}
+
+export function latestHeartbeatTimestamp(
+  snapshot: {
+    events: Array<Pick<ClientMeetingLogEvent, "type" | "timestamp">>;
+    metadata?: Pick<ClientMeetingLogMetadata, "startedAt">;
+  },
+  fallback = snapshot.metadata?.startedAt ?? 0
+): number {
+  return snapshot.events.reduce(
+    (latest, event) =>
+      event.type === "heartbeat_output"
+        ? Math.max(latest, event.timestamp)
+        : latest,
+    fallback
+  );
+}
+
+function heartbeatEventCount(
+  events: Array<Pick<ClientMeetingLogEvent, "type">>
+): number {
+  return events.filter((event) => event.type === "heartbeat_output").length;
+}
+
+export function latestHeartbeatOutputFromEvents(
+  events: Array<Pick<ClientMeetingLogEvent, "type" | "timestamp" | "payload">>
+): FacilitatorOutput | null {
+  let latest: { timestamp: number; output: FacilitatorOutput } | null = null;
+
+  for (const event of events) {
+    const output = heartbeatOutputFromEvent(event);
+    if (!output) {
+      continue;
+    }
+    if (!latest || event.timestamp >= latest.timestamp) {
+      latest = { timestamp: event.timestamp, output };
+    }
+  }
+
+  return latest?.output ?? null;
+}
+
+function heartbeatReviewVersionsFromEvents(
+  events: Array<Pick<ClientMeetingLogEvent, "type" | "timestamp" | "payload">>
+): ReviewVersion[] {
+  const versions: ReviewVersion[] = [];
+
+  for (const event of events) {
+    const output = heartbeatOutputFromEvent(event);
+    if (!output) {
+      continue;
+    }
+
+    versions.push({
+      id: heartbeatReviewVersionId(event) ?? `${event.timestamp}-heartbeat-review`,
+      timestamp: event.timestamp,
+      source: output.source,
+      markdown: output.reviewMarkdown,
+      summary: output.summary
+    });
+  }
+
+  return versions;
+}
+
+function heartbeatReviewVersionId(
+  event: Pick<ClientMeetingLogEvent, "payload">
+): string | null {
+  return isRecord(event.payload) ? stringParam(event.payload.reviewVersionId) : null;
+}
+
+function isSameMaterializedReviewVersion(
+  materialized: ReviewVersion,
+  logged: ReviewVersion
+): boolean {
+  return (
+    materialized.id === logged.id ||
+    (materialized.timestamp === logged.timestamp &&
+      materialized.markdown === logged.markdown)
+  );
+}
+
+export function mergeCurrentOutputWithHeartbeatEvents(
+  stateCurrentOutput: FacilitatorOutput | null,
+  stateTimeline: TimelineEntry[],
+  events: Array<Pick<ClientMeetingLogEvent, "type" | "timestamp" | "payload">>
+): FacilitatorOutput | null {
+  const eventOutput = latestHeartbeatOutputFromEvents(events);
+  const timelineOutput = latestHeartbeatOutputFromTimeline(stateTimeline);
+  if (!eventOutput) {
+    return stateCurrentOutput ?? timelineOutput;
+  }
+
+  const latestEventAt = latestHeartbeatTimestamp({ events }, -1);
+  const latestStateAt = latestTimelineTimestamp(stateTimeline, -1);
+  if (latestEventAt >= latestStateAt) {
+    return eventOutput;
+  }
+
+  return stateCurrentOutput ?? timelineOutput ?? eventOutput;
+}
+
+function latestHeartbeatOutputFromTimeline(
+  timeline: TimelineEntry[]
+): FacilitatorOutput | null {
+  const latest = timeline.reduce<TimelineEntry | null>(
+    (currentLatest, entry) =>
+      !currentLatest || entry.timestamp >= currentLatest.timestamp
+        ? entry
+        : currentLatest,
+    null
+  );
+  if (!latest) {
+    return null;
+  }
+
+  return capFacilitatorOutput({
+    source: latest.source,
+    cards: latest.cards.slice(0, MAX_HEARTBEAT_OUTPUT_CARDS),
+    summary: latest.summary,
+    nextHeartbeatHint: "Continue.",
+    reviewMarkdown: latest.reviewMarkdown ?? "",
+    agendaActions: [],
+    uiActions: [],
+    ephemeralReminder: latest.reminder ?? null
+  });
+}
+
+function latestTimelineTimestamp(
+  timeline: TimelineEntry[],
+  fallback: number
+): number {
+  return timeline.reduce(
+    (latest, entry) => Math.max(latest, entry.timestamp),
+    fallback
+  );
+}
+
+function heartbeatOutputFromEvent(
+  event: Pick<ClientMeetingLogEvent, "type" | "payload">
+): FacilitatorOutput | null {
+  if (event.type !== "heartbeat_output" || !isRecord(event.payload)) {
+    return null;
+  }
+
+  return facilitatorOutputFromValue(event.payload.output);
+}
+
+function facilitatorOutputFromValue(value: unknown): FacilitatorOutput | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const source = facilitatorSourceFromValue(value.source);
+  if (
+    !source ||
+    typeof value.summary !== "string" ||
+    typeof value.reviewMarkdown !== "string"
+  ) {
+    return null;
+  }
+
+  return capFacilitatorOutput({
+    source,
+    cards: Array.isArray(value.cards)
+      ? value.cards.filter(isFacilitatorCard).slice(0, MAX_HEARTBEAT_OUTPUT_CARDS)
+      : [],
+    summary: value.summary,
+    nextHeartbeatHint:
+      typeof value.nextHeartbeatHint === "string"
+        ? value.nextHeartbeatHint
+        : "Continue.",
+    reviewMarkdown: value.reviewMarkdown,
+    agendaActions: normalizeAgendaActions(value.agendaActions),
+    uiActions: normalizeUiActions(value.uiActions),
+    ephemeralReminder:
+      typeof value.ephemeralReminder === "string"
+        ? value.ephemeralReminder
+        : null,
+    adapterNotice:
+      typeof value.adapterNotice === "string" ? value.adapterNotice : undefined
+  });
+}
+
+function facilitatorSourceFromValue(
+  value: unknown
+): FacilitatorOutput["source"] | null {
+  if (value === "pi" || value === "openrouter" || value === "local-fallback") {
+    return value;
+  }
+  return null;
+}
+
+function normalizeHeartbeatRouteOutput(value: unknown): FacilitatorOutput | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const source = facilitatorSourceFromValue(value.source);
+  const reviewMarkdown = stringParam(value.reviewMarkdown);
+  if (!source || !reviewMarkdown) {
+    return null;
+  }
+
+  const summary =
+    stringParam(value.summary) ?? "Heartbeat updated the shared review document.";
+  const nextHeartbeatHint =
+    stringParam(value.nextHeartbeatHint) ?? "Continue with the next heartbeat.";
+  const cards = Array.isArray(value.cards)
+    ? value.cards
+        .map(normalizeFacilitatorCard)
+        .filter((card): card is FacilitatorOutput["cards"][number] =>
+          Boolean(card)
+        )
+        .slice(0, MAX_HEARTBEAT_OUTPUT_CARDS)
+    : [];
+
+  return capFacilitatorOutput({
+    source,
+    cards:
+      cards.length > 0
+        ? cards
+        : [
+            {
+              id: `${Date.now()}-normalized-heartbeat`,
+              kind: "heartbeat",
+              title: "Heartbeat update",
+              body: summary,
+              priority: "medium"
+            }
+          ],
+    summary,
+    nextHeartbeatHint,
+    reviewMarkdown,
+    agendaActions: normalizeAgendaActions(value.agendaActions),
+    uiActions: normalizeUiActions(value.uiActions),
+    ephemeralReminder:
+      typeof value.ephemeralReminder === "string" && value.ephemeralReminder.trim()
+        ? value.ephemeralReminder.trim()
+        : null,
+    adapterNotice:
+      typeof value.adapterNotice === "string" ? value.adapterNotice : undefined
+  });
+}
+
+function normalizeFacilitatorCard(
+  value: unknown
+): FacilitatorOutput["cards"][number] | null {
+  if (!isFacilitatorCard(value)) {
+    return null;
+  }
+
+  const title = stringParam(value.title);
+  const body = stringParam(value.body);
+  if (!title || !body) {
+    return null;
+  }
+
+  return {
+    id: value.id,
+    kind: value.kind,
+    title,
+    body,
+    priority: value.priority
+  };
+}
+
+function normalizeAgendaActions(value: unknown): FacilitatorOutput["agendaActions"] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter(isRecord)
+    .map((item) => {
+      const itemId = stringParam(item.itemId);
+      const done = booleanParam(item.done);
+      const reason = stringParam(item.reason);
+      if (!itemId || done === null || !reason) {
+        return null;
+      }
+
+      return { itemId, done, reason };
+    })
+    .filter((item): item is FacilitatorOutput["agendaActions"][number] =>
+      Boolean(item)
+    );
+}
+
+function normalizeUiActions(value: unknown): UiAction[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter(isRecord)
+    .map((item) => {
+      if (!isKnownUiTool(item.tool) || !isRecord(item.parameters)) {
+        return null;
+      }
+      const reason = stringParam(item.reason) ?? "Agent proposed a UI action.";
+      return {
+        tool: item.tool,
+        parameters: item.parameters,
+        reason
+      };
+    })
+    .filter((item): item is UiAction => Boolean(item));
+}
+
+function isKnownUiTool(value: unknown): value is UiAction["tool"] {
+  return (
+    value === "add_agenda_item" ||
+    value === "set_agenda_item" ||
+    value === "delete_agenda_item" ||
+    value === "send_room_reminder" ||
+    value === "update_review_document"
+  );
+}
+
+function isFacilitatorCard(value: unknown): value is FacilitatorOutput["cards"][number] {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    isFacilitatorCardKind(value.kind) &&
+    typeof value.title === "string" &&
+    typeof value.body === "string" &&
+    (value.priority === "low" ||
+      value.priority === "medium" ||
+      value.priority === "high")
+  );
+}
+
+function isFacilitatorCardKind(
+  value: unknown
+): value is FacilitatorOutput["cards"][number]["kind"] {
+  return (
+    value === "heartbeat" ||
+    value === "participation" ||
+    value === "risk" ||
+    value === "agenda" ||
+    value === "decision" ||
+    value === "action" ||
+    value === "drift" ||
+    value === "reminder"
+  );
 }
 
 function mergeTranscriptLines(
@@ -3185,6 +3946,16 @@ function booleanParam(value: unknown): boolean | null {
   return typeof value === "boolean" ? value : null;
 }
 
+function isClientStrictPiRequired(): boolean {
+  return process.env.NEXT_PUBLIC_ROOMPULSE_REQUIRE_PI === "1";
+}
+
+function strictPiFallbackMessage(label: string, adapterNotice?: string): string {
+  return `${label} required but route returned local fallback${
+    adapterNotice ? `: ${adapterNotice}` : "."
+  }`;
+}
+
 function getClientPiTimeoutMs(): number {
   const configured = Number(
     process.env.NEXT_PUBLIC_ROOMPULSE_PI_TIMEOUT_MS ??
@@ -3217,14 +3988,27 @@ function formatElapsed(totalSeconds: number): string {
 }
 
 function speakerNumber(label: string): number {
-  const match = label.match(/\d+/);
-  return match ? Number(match[0]) : 1;
+  const normalizedLabel = normalizeSpeakerLabel(label);
+  const match = normalizedLabel?.match(/^Speaker (\d+)$/);
+  return match ? Number(match[1]) : 1;
+}
+
+function latestNormalizedSpeakerLabel(labels: string[]): string | null {
+  for (let index = labels.length - 1; index >= 0; index -= 1) {
+    const label = normalizeSpeakerLabel(labels[index]);
+    if (label) {
+      return label;
+    }
+  }
+
+  return null;
 }
 
 function highestSpeakerNumber(labels: string[]): number {
   return labels.reduce((highest, label) => {
-    const match = label.match(/\d+/);
-    const value = match ? Number(match[0]) : 0;
+    const normalizedLabel = normalizeSpeakerLabel(label);
+    const match = normalizedLabel?.match(/^Speaker (\d+)$/);
+    const value = match ? Number(match[1]) : 0;
     return Number.isFinite(value) ? Math.max(highest, value) : highest;
   }, 0);
 }

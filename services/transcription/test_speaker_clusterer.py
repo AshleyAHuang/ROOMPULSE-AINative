@@ -408,6 +408,31 @@ class SpeakerClustererTest(unittest.TestCase):
         self.assertIn(third.label, ["Speaker 1", "Speaker 2"])
         self.assertEqual(clusterer.labels(), ["Speaker 1", "Speaker 2"])
 
+    def test_forced_cap_assignment_does_not_pollute_existing_voiceprint(self) -> None:
+        first_voiceprint = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+        capped_outlier = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+        clusterer = SpeakerClusterer(
+            threshold=0.05,
+            max_clusters=1,
+            embedder=FixedEmbeddingVoiceEmbedder(
+                [
+                    first_voiceprint,
+                    capped_outlier,
+                ]
+            ),
+        )
+
+        first = asyncio.run(clusterer.assign(synthetic_voice(110)))
+        second = asyncio.run(clusterer.assign(synthetic_voice(220)))
+
+        self.assertEqual(first.label, "Speaker 1")
+        self.assertEqual(second.label, "Speaker 1")
+        self.assertTrue(np.allclose(clusterer.clusters[0].centroid, first_voiceprint))
+        self.assertEqual(len(clusterer.clusters[0].exemplars), 1)
+        self.assertTrue(
+            np.allclose(clusterer.clusters[0].exemplars[0], first_voiceprint)
+        )
+
     def test_clusterer_keeps_voiceprint_exemplars_for_robust_matching(self) -> None:
         clusterer = SpeakerClusterer(
             threshold=0.2,
@@ -740,6 +765,43 @@ class SpeakerClustererTest(unittest.TestCase):
         self.assertEqual(transcript["observedSpeakerLabels"], ["Speaker 1"])
         self.assertEqual(messages[-1].get("status"), "listening")
 
+    def test_speaker_clustering_failure_respects_restart_label_offset(self) -> None:
+        async def run() -> list[dict]:
+            websocket = FakeWebSocket()
+            session = TranscriptionSession(websocket)
+            session.min_seconds = 0.1
+            session.max_seconds = 2.0
+            session.clusterer = FailingClusterer(speaker_label_offset=2)
+            await session.append_audio(float32_to_pcm16(synthetic_voice(150, seconds=0.5)))
+
+            previous_model = server.ensure_model_loaded
+            previous_transcribe = server.transcribe_audio
+
+            async def fake_model():
+                return object()
+
+            async def fake_transcribe(_model, _audio, _language):
+                return "hello after restart"
+
+            server.ensure_model_loaded = fake_model
+            server.transcribe_audio = fake_transcribe
+            try:
+                await session.flush(force=True)
+            finally:
+                server.ensure_model_loaded = previous_model
+                server.transcribe_audio = previous_transcribe
+
+            return websocket.messages
+
+        messages = asyncio.run(run())
+        transcript = next(
+            message for message in messages if message.get("type") == "final_transcript"
+        )
+
+        self.assertEqual(transcript["speakerId"], "speaker-3")
+        self.assertEqual(transcript["speakerLabel"], "Speaker 3")
+        self.assertEqual(transcript["observedSpeakerLabels"], ["Speaker 3"])
+
     def test_concurrent_flushes_do_not_overlap_transcription_or_clustering(self) -> None:
         async def run() -> tuple[int, list[dict]]:
             websocket = FakeWebSocket()
@@ -784,6 +846,59 @@ class SpeakerClustererTest(unittest.TestCase):
         self.assertEqual(
             [message["speakerLabel"] for message in transcripts],
             ["Speaker 1", "Speaker 1"],
+        )
+
+    def test_flush_control_drains_all_buffered_audio_before_ack(self) -> None:
+        async def run() -> list[dict]:
+            websocket = FakeWebSocket()
+            session = TranscriptionSession(websocket)
+            session.min_seconds = 0.1
+            session.max_seconds = 0.5
+            await session.append_audio(float32_to_pcm16(synthetic_voice(150, seconds=1.2)))
+
+            previous_model = server.ensure_model_loaded
+            previous_transcribe = server.transcribe_audio
+            transcript_count = 0
+
+            async def fake_model():
+                return object()
+
+            async def fake_transcribe(_model, _audio, _language):
+                nonlocal transcript_count
+                transcript_count += 1
+                return f"drained transcript {transcript_count}"
+
+            server.ensure_model_loaded = fake_model
+            server.transcribe_audio = fake_transcribe
+            try:
+                await session.handle_control('{"type":"flush"}')
+            finally:
+                server.ensure_model_loaded = previous_model
+                server.transcribe_audio = previous_transcribe
+
+            return websocket.messages
+
+        messages = asyncio.run(run())
+        transcripts = [
+            message for message in messages if message.get("type") == "final_transcript"
+        ]
+        flushed_index = next(
+            index
+            for index, message in enumerate(messages)
+            if message.get("status") == "flushed"
+        )
+
+        self.assertEqual(len(transcripts), 3)
+        self.assertEqual(
+            [message["text"] for message in transcripts],
+            [
+                "drained transcript 1",
+                "drained transcript 2",
+                "drained transcript 3",
+            ],
+        )
+        self.assertTrue(
+            all(messages.index(transcript) < flushed_index for transcript in transcripts)
         )
 
     def test_reset_waits_for_in_flight_flush_before_resetting_session(self) -> None:
@@ -890,6 +1005,9 @@ class FakeWebSocket:
 
 
 class FailingClusterer:
+    def __init__(self, speaker_label_offset: int = 0) -> None:
+        self.speaker_label_offset = speaker_label_offset
+
     async def assign(self, _audio: np.ndarray):
         raise RuntimeError("cluster backend failed")
 

@@ -132,6 +132,27 @@ describe("MeetingReviewClient", () => {
     });
   });
 
+  it("does not render arbitrary label digits as review speaker badges", () => {
+    const roomLabelSnapshot: MeetingLogSnapshot = {
+      ...snapshot,
+      transcript: [
+        {
+          ...snapshot.transcript[0],
+          id: "line-room-2026",
+          speakerId: "room-2026",
+          speakerLabel: "Room 2026",
+          text: "The room number should not become a speaker badge."
+        }
+      ]
+    };
+
+    render(<MeetingReviewClient snapshot={roomLabelSnapshot} />);
+
+    expect(screen.getByText("Room 2026")).toBeVisible();
+    expect(screen.queryByText("S2026")).not.toBeInTheDocument();
+    expect(screen.getByText("S1")).toBeVisible();
+  });
+
   it("treats epoch endedAt as a real meeting end in transcript export text", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });

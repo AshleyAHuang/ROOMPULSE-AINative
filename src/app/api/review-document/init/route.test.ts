@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { POST } from "./route";
 import { runPiInitialReviewDocument } from "@/lib/pi-adapter";
-import { MAX_HEARTBEAT_INTERVAL_SECONDS } from "@/lib/facilitator";
+import {
+  MAX_FACILITATOR_OUTPUT_TEXT_LENGTH,
+  MAX_HEARTBEAT_INPUT_TEXT_LENGTH,
+  MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH,
+  MAX_HEARTBEAT_INTERVAL_SECONDS
+} from "@/lib/facilitator";
 
 vi.mock("@/lib/pi-adapter", () => ({
   runPiInitialReviewDocument: vi.fn()
@@ -104,6 +109,59 @@ describe("POST /api/review-document/init", () => {
       error: "Invalid meeting payload"
     });
     expect(runPiInitialReviewDocument).not.toHaveBeenCalled();
+  });
+
+  it("caps oversized setup text before calling the Pi initial-review adapter", async () => {
+    vi.mocked(runPiInitialReviewDocument).mockResolvedValue({
+      source: "pi",
+      markdown: "# Initial review",
+      summary: "Initialized."
+    });
+
+    const response = await POST(
+      jsonRequest({
+        meeting: {
+          ...validMeeting,
+          title: "T".repeat(2_000),
+          goal: "G".repeat(2_000),
+          context: "C".repeat(2_000),
+          agenda: [{ id: "a1", title: "A".repeat(2_000), done: false }],
+          participants: [{ name: "N".repeat(2_000), role: "R".repeat(2_000) }]
+        }
+      })
+    );
+
+    expect(response.status).toBe(200);
+    const [meeting] = vi.mocked(runPiInitialReviewDocument).mock.calls.at(-1)!;
+    expect(meeting.title).toHaveLength(MAX_HEARTBEAT_INPUT_TEXT_LENGTH);
+    expect(meeting.goal).toHaveLength(MAX_HEARTBEAT_INPUT_TEXT_LENGTH);
+    expect(meeting.context).toHaveLength(MAX_HEARTBEAT_INPUT_TEXT_LENGTH);
+    expect(meeting.agenda[0].title).toHaveLength(
+      MAX_HEARTBEAT_INPUT_TEXT_LENGTH
+    );
+    expect(meeting.participants[0].name).toHaveLength(
+      MAX_HEARTBEAT_INPUT_TEXT_LENGTH
+    );
+    expect(meeting.participants[0].role).toHaveLength(
+      MAX_HEARTBEAT_INPUT_TEXT_LENGTH
+    );
+  });
+
+  it("caps oversized initial-review metadata before returning it to the app", async () => {
+    vi.mocked(runPiInitialReviewDocument).mockResolvedValue({
+      source: "pi",
+      markdown: "R".repeat(MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH + 1),
+      summary: "S".repeat(2_000),
+      adapterNotice: "N".repeat(2_000)
+    });
+
+    const response = await POST(jsonRequest({ meeting: validMeeting }));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.summary).toHaveLength(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH);
+    expect(body.adapterNotice).toHaveLength(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH);
+    expect(body.markdown).toHaveLength(MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH);
   });
 
   it("marks failed initialization as Pi-required when strict mode is enabled", async () => {

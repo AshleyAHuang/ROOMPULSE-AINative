@@ -10,7 +10,13 @@ import {
   readMeetingLog,
   updateMeetingLogState
 } from "./meeting-log-store";
-import type { MeetingConfig } from "./facilitator";
+import {
+  MAX_FACILITATOR_CARD_TEXT_LENGTH,
+  MAX_FACILITATOR_OUTPUT_TEXT_LENGTH,
+  MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH,
+  MAX_HEARTBEAT_INPUT_TEXT_LENGTH,
+  type MeetingConfig
+} from "./facilitator";
 
 const meeting: MeetingConfig = {
   title: "Persistence review",
@@ -63,6 +69,34 @@ describe("meeting log store", () => {
     await expect(listMeetingLogs()).resolves.toEqual([snapshot.metadata]);
   });
 
+  it("caps oversized meeting text before storing session metadata", async () => {
+    const startedAt = Date.UTC(2026, 4, 9, 12, 0, 0);
+    const metadata = await createMeetingLog(
+      {
+        ...meeting,
+        title: "T".repeat(2_000),
+        goal: "G".repeat(2_000),
+        context: "C".repeat(2_000),
+        agenda: [{ id: "a1", title: "A".repeat(2_000), done: false }],
+        participants: [{ name: "N".repeat(2_000), role: "R".repeat(2_000) }]
+      },
+      startedAt
+    );
+
+    expect(metadata.title).toHaveLength(MAX_HEARTBEAT_INPUT_TEXT_LENGTH);
+    expect(metadata.goal).toHaveLength(MAX_HEARTBEAT_INPUT_TEXT_LENGTH);
+    expect(metadata.meeting.context).toHaveLength(MAX_HEARTBEAT_INPUT_TEXT_LENGTH);
+    expect(metadata.meeting.agenda[0].title).toHaveLength(
+      MAX_HEARTBEAT_INPUT_TEXT_LENGTH
+    );
+    expect(metadata.meeting.participants[0].name).toHaveLength(
+      MAX_HEARTBEAT_INPUT_TEXT_LENGTH
+    );
+    expect(metadata.meeting.participants[0].role).toHaveLength(
+      MAX_HEARTBEAT_INPUT_TEXT_LENGTH
+    );
+  });
+
   it("does not materialize invalid transcript payloads into the query tables", async () => {
     const startedAt = Date.UTC(2026, 4, 9, 12, 0, 0);
     const metadata = await createMeetingLog(meeting, startedAt);
@@ -87,6 +121,31 @@ describe("meeting log store", () => {
 
     expect(snapshot.events).toHaveLength(1);
     expect(snapshot.transcript).toEqual([]);
+  });
+
+  it("does not materialize review payloads with oversized summaries", async () => {
+    const startedAt = Date.UTC(2026, 4, 9, 12, 0, 0);
+    const metadata = await createMeetingLog(meeting, startedAt);
+
+    await appendMeetingLogEvent(metadata.id, {
+      type: "review_initialized",
+      timestamp: startedAt + 1_000,
+      payload: {
+        reviewVersion: {
+          id: "review-oversized-summary",
+          timestamp: startedAt + 1_000,
+          source: "initial",
+          markdown: "# Review",
+          summary: "S".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH + 1)
+        }
+      }
+    });
+
+    const snapshot = await readMeetingLog(metadata.id);
+
+    expect(snapshot.events).toHaveLength(1);
+    expect(snapshot.reviewVersions).toEqual([]);
+    expect(snapshot.metadata.latestReviewVersionId).toBeNull();
   });
 
   it("migrates older local SQLite session tables before writing", async () => {
@@ -196,6 +255,103 @@ describe("meeting log store", () => {
       expectedParticipants: 1
     });
     expect(snapshot.metadata.state).toBeNull();
+  });
+
+  it("caps oversized legacy meeting JSON and state JSON on read", async () => {
+    const startedAt = Date.UTC(2026, 4, 9, 12, 0, 0);
+    const metadata = await createMeetingLog(meeting, startedAt);
+    const oversizedMeeting: MeetingConfig = {
+      ...meeting,
+      title: "T".repeat(2_000),
+      goal: "G".repeat(2_000),
+      context: "C".repeat(2_000),
+      agenda: [{ id: "a1", title: "A".repeat(2_000), done: false }],
+      participants: [{ name: "N".repeat(2_000), role: "R".repeat(2_000) }]
+    };
+    const database = new DatabaseSync(join(logDir, "roompulse.sqlite"));
+    database
+      .prepare(
+        `UPDATE meeting_sessions
+          SET title = ?,
+              goal = ?,
+              meeting_json = ?,
+              state_json = ?
+          WHERE id = ?`
+      )
+      .run(
+        oversizedMeeting.title,
+        oversizedMeeting.goal,
+        JSON.stringify(oversizedMeeting),
+        JSON.stringify({
+          status: "active",
+          meeting: oversizedMeeting,
+          transcript: [],
+          reviewMarkdown: "# Review",
+          reviewVersions: [
+            {
+              id: "review-1",
+              timestamp: startedAt,
+              source: "initial",
+              markdown: "# Review",
+              summary: "Initial."
+            }
+          ],
+          currentReviewVersionId: "review-1",
+          timeline: [],
+          lastHeartbeatAt: startedAt,
+          nextHeartbeatAt: startedAt + 30_000,
+          meetingStartedAt: startedAt,
+          heartbeatCount: 0,
+          isPaused: false,
+          currentOutput: null,
+          activeAgendaItemId: null,
+          updatedAt: startedAt
+        }),
+        metadata.id
+      );
+    database.close();
+
+    const snapshot = await readMeetingLog(metadata.id);
+
+    expect(snapshot.metadata.title).toHaveLength(MAX_HEARTBEAT_INPUT_TEXT_LENGTH);
+    expect(snapshot.metadata.goal).toHaveLength(MAX_HEARTBEAT_INPUT_TEXT_LENGTH);
+    expect(snapshot.metadata.meeting.context).toHaveLength(
+      MAX_HEARTBEAT_INPUT_TEXT_LENGTH
+    );
+    expect(snapshot.metadata.meeting.agenda[0].title).toHaveLength(
+      MAX_HEARTBEAT_INPUT_TEXT_LENGTH
+    );
+    expect(snapshot.metadata.meeting.participants[0].name).toHaveLength(
+      MAX_HEARTBEAT_INPUT_TEXT_LENGTH
+    );
+    expect(snapshot.metadata.state?.meeting.context).toHaveLength(
+      MAX_HEARTBEAT_INPUT_TEXT_LENGTH
+    );
+  });
+
+  it("caps oversized legacy latest review metadata on read", async () => {
+    const startedAt = Date.UTC(2026, 4, 9, 12, 0, 0);
+    const metadata = await createMeetingLog(meeting, startedAt);
+    const database = new DatabaseSync(join(logDir, "roompulse.sqlite"));
+    database
+      .prepare(
+        `UPDATE meeting_sessions
+          SET latest_review_markdown = ?,
+              latest_review_version_id = ?
+          WHERE id = ?`
+      )
+      .run(
+        "R".repeat(MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH + 1),
+        "legacy-review",
+        metadata.id
+      );
+    database.close();
+
+    const snapshot = await readMeetingLog(metadata.id);
+
+    expect(snapshot.metadata.latestReviewMarkdown).toHaveLength(
+      MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH
+    );
   });
 
   it("drops persisted state with future-dated materialized children", async () => {
@@ -517,6 +673,202 @@ describe("meeting log store", () => {
     expect(updated.endedAt).toBe(startedAt + 5_000);
   });
 
+  it("rejects state updates with malformed current facilitator output", async () => {
+    const startedAt = Date.UTC(2026, 4, 9, 12, 0, 0);
+    const metadata = await createMeetingLog(meeting, startedAt);
+
+    await expect(
+      updateMeetingLogState(metadata.id, {
+        updatedAt: startedAt,
+        state: {
+          status: "active",
+          meeting,
+          transcript: [],
+          reviewMarkdown: "# Review",
+          reviewVersions: [
+            {
+              id: "review-1",
+              timestamp: startedAt,
+              source: "initial",
+              markdown: "# Review",
+              summary: "Initial."
+            }
+          ],
+          currentReviewVersionId: "review-1",
+          timeline: [],
+          lastHeartbeatAt: startedAt,
+          nextHeartbeatAt: startedAt + 30_000,
+          meetingStartedAt: startedAt,
+          heartbeatCount: 0,
+          isPaused: false,
+          currentOutput: {
+            source: "pi",
+            cards: [],
+            summary: "Missing required review markdown."
+          },
+          activeAgendaItemId: null,
+          updatedAt: startedAt
+        }
+      })
+    ).rejects.toThrow("Invalid meeting state payload");
+  });
+
+  it("rejects state updates with oversized room-facing facilitator text", async () => {
+    const startedAt = Date.UTC(2026, 4, 9, 12, 0, 0);
+    const metadata = await createMeetingLog(meeting, startedAt);
+
+    await expect(
+      updateMeetingLogState(metadata.id, {
+        updatedAt: startedAt,
+        state: {
+          status: "active",
+          meeting,
+          transcript: [],
+          reviewMarkdown: "# Review",
+          reviewVersions: [
+            {
+              id: "review-1",
+              timestamp: startedAt,
+              source: "initial",
+              markdown: "# Review",
+              summary: "Initial."
+            }
+          ],
+          currentReviewVersionId: "review-1",
+          timeline: [
+            {
+              id: "pulse-1",
+              timestamp: startedAt,
+              source: "pi",
+              cards: [
+                {
+                  id: "card-1",
+                  kind: "heartbeat",
+                  title: "Heartbeat",
+                  body: "B".repeat(MAX_FACILITATOR_CARD_TEXT_LENGTH + 1),
+                  priority: "medium"
+                }
+              ],
+              summary: "S".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH + 1),
+              reminder: null
+            }
+          ],
+          lastHeartbeatAt: startedAt,
+          nextHeartbeatAt: startedAt + 30_000,
+          meetingStartedAt: startedAt,
+          heartbeatCount: 0,
+          isPaused: false,
+          currentOutput: {
+            source: "pi",
+            cards: [],
+            summary: "S".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH + 1),
+            nextHeartbeatHint: "Continue.",
+            reviewMarkdown: "# Review",
+            agendaActions: [],
+            uiActions: [],
+            ephemeralReminder: null
+          },
+          activeAgendaItemId: null,
+          updatedAt: startedAt
+        }
+      })
+    ).rejects.toThrow("Invalid meeting state payload");
+  });
+
+  it("rejects state updates with oversized review version summaries", async () => {
+    const startedAt = Date.UTC(2026, 4, 9, 12, 0, 0);
+    const metadata = await createMeetingLog(meeting, startedAt);
+
+    await expect(
+      updateMeetingLogState(metadata.id, {
+        updatedAt: startedAt,
+        state: {
+          status: "active",
+          meeting,
+          transcript: [],
+          reviewMarkdown: "# Review",
+          reviewVersions: [
+            {
+              id: "review-1",
+              timestamp: startedAt,
+              source: "initial",
+              markdown: "# Review",
+              summary: "S".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH + 1)
+            }
+          ],
+          currentReviewVersionId: "review-1",
+          timeline: [],
+          lastHeartbeatAt: startedAt,
+          nextHeartbeatAt: startedAt + 30_000,
+          meetingStartedAt: startedAt,
+          heartbeatCount: 0,
+          isPaused: false,
+          currentOutput: null,
+          activeAgendaItemId: null,
+          updatedAt: startedAt
+        }
+      })
+    ).rejects.toThrow("Invalid meeting state payload");
+  });
+
+  it("caps oversized meeting text before storing resumable state", async () => {
+    const startedAt = Date.UTC(2026, 4, 9, 12, 0, 0);
+    const metadata = await createMeetingLog(meeting, startedAt);
+    const oversizedMeeting: MeetingConfig = {
+      ...meeting,
+      title: "T".repeat(2_000),
+      goal: "G".repeat(2_000),
+      context: "C".repeat(2_000),
+      agenda: [{ id: "a1", title: "A".repeat(2_000), done: false }],
+      participants: [{ name: "N".repeat(2_000), role: "R".repeat(2_000) }]
+    };
+
+    const updated = await updateMeetingLogState(metadata.id, {
+      updatedAt: startedAt,
+      state: {
+        status: "active",
+        meeting: oversizedMeeting,
+        transcript: [],
+        reviewMarkdown: "# Review",
+        reviewVersions: [
+          {
+            id: "review-1",
+            timestamp: startedAt,
+            source: "initial",
+            markdown: "# Review",
+            summary: "Initial."
+          }
+        ],
+        currentReviewVersionId: "review-1",
+        timeline: [],
+        lastHeartbeatAt: startedAt,
+        nextHeartbeatAt: startedAt + 30_000,
+        meetingStartedAt: startedAt,
+        heartbeatCount: 0,
+        isPaused: false,
+        currentOutput: null,
+        activeAgendaItemId: null,
+        updatedAt: startedAt
+      }
+    });
+
+    expect(updated.meeting.title).toHaveLength(MAX_HEARTBEAT_INPUT_TEXT_LENGTH);
+    expect(updated.meeting.goal).toHaveLength(MAX_HEARTBEAT_INPUT_TEXT_LENGTH);
+    expect(updated.meeting.context).toHaveLength(MAX_HEARTBEAT_INPUT_TEXT_LENGTH);
+    expect(updated.meeting.agenda[0].title).toHaveLength(
+      MAX_HEARTBEAT_INPUT_TEXT_LENGTH
+    );
+    expect(updated.meeting.participants[0].name).toHaveLength(
+      MAX_HEARTBEAT_INPUT_TEXT_LENGTH
+    );
+    expect(updated.meeting.participants[0].role).toHaveLength(
+      MAX_HEARTBEAT_INPUT_TEXT_LENGTH
+    );
+    expect(updated.state?.meeting.title).toHaveLength(
+      MAX_HEARTBEAT_INPUT_TEXT_LENGTH
+    );
+  });
+
   it("filters malformed materialized transcript and review rows on read", async () => {
     const startedAt = Date.UTC(2026, 4, 9, 12, 0, 0);
     const metadata = await createMeetingLog(meeting, startedAt);
@@ -569,6 +921,52 @@ describe("meeting log store", () => {
       );
     database
       .prepare(
+        `INSERT INTO transcript_lines (
+          id,
+          meeting_id,
+          speaker_id,
+          speaker_label,
+          text,
+          timestamp,
+          source,
+          confidence
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "unsafe-label-line",
+        metadata.id,
+        "speaker-3",
+        "Speaker\n3",
+        "Drop this unsafe speaker label row.",
+        startedAt + 3_000,
+        "speech",
+        0.9
+      );
+    database
+      .prepare(
+        `INSERT INTO transcript_lines (
+          id,
+          meeting_id,
+          speaker_id,
+          speaker_label,
+          text,
+          timestamp,
+          source,
+          confidence
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "oversized-text-line",
+        metadata.id,
+        "speaker-4",
+        "Speaker 4",
+        "T".repeat(MAX_HEARTBEAT_INPUT_TEXT_LENGTH + 1),
+        startedAt + 4_000,
+        "speech",
+        0.9
+      );
+    database
+      .prepare(
         `INSERT INTO review_versions (
           id,
           meeting_id,
@@ -591,6 +989,25 @@ describe("meeting log store", () => {
         ) VALUES (?, ?, ?, ?, ?, ?)`
       )
       .run("bad-review", metadata.id, -1, "bad-source", "# Bad", "Bad.");
+    database
+      .prepare(
+        `INSERT INTO review_versions (
+          id,
+          meeting_id,
+          timestamp,
+          source,
+          markdown,
+          summary
+        ) VALUES (?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "oversized-summary-review",
+        metadata.id,
+        startedAt + 2_000,
+        "pi",
+        "# Oversized summary",
+        "S".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH + 1)
+      );
     database.close();
 
     const snapshot = await readMeetingLog(metadata.id);

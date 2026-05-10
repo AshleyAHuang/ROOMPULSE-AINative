@@ -1,4 +1,8 @@
-import { createParticipationStatus, type ParticipationStatus } from "./speaker-tracker";
+import {
+  createParticipationStatus,
+  normalizeSpeakerLabel,
+  type ParticipationStatus
+} from "./speaker-tracker";
 
 export type TranscriptSource = "speech" | "simulated" | "manual";
 
@@ -7,6 +11,18 @@ export const MAX_EXPECTED_PARTICIPANTS = 24;
 export const MAX_PARTICIPANT_ENTRIES = MAX_EXPECTED_PARTICIPANTS;
 export const MIN_HEARTBEAT_INTERVAL_SECONDS = 15;
 export const MAX_HEARTBEAT_INTERVAL_SECONDS = 3_600;
+export const MAX_HEARTBEAT_TRANSCRIPT_CONTEXT_LINES = 40;
+export const MAX_HEARTBEAT_TRANSCRIPT_DELTA_LINES = 80;
+export const MAX_HEARTBEAT_HISTORY_ITEMS = 6;
+export const MAX_HEARTBEAT_REVIEW_VERSIONS = 4;
+export const MAX_HEARTBEAT_INPUT_TEXT_LENGTH = 1_000;
+export const MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH = 4_000;
+export const MAX_FACILITATOR_OUTPUT_CARDS = 5;
+export const MAX_FACILITATOR_OUTPUT_UI_ACTIONS = 8;
+export const MAX_FACILITATOR_CARD_TEXT_LENGTH = 280;
+export const MAX_FACILITATOR_OUTPUT_TEXT_LENGTH = 500;
+const HEARTBEAT_REVIEW_COMPACTION_MARKER =
+  "\n\n[RoomPulse omitted middle review content for heartbeat latency. Preserve the visible document structure and keep the next version compact.]\n\n";
 
 export interface MeetingParticipant {
   name: string;
@@ -142,6 +158,187 @@ export interface FacilitatorOutput {
   adapterNotice?: string;
 }
 
+export function capFacilitatorOutput(
+  output: FacilitatorOutput
+): FacilitatorOutput {
+  return {
+    source: output.source,
+    cards: capCards(output.cards),
+    summary: capText(output.summary, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH),
+    nextHeartbeatHint: capText(
+      output.nextHeartbeatHint,
+      MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+    ),
+    reviewMarkdown: capText(
+      output.reviewMarkdown,
+      MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH
+    ),
+    agendaActions: capAgendaActions(output.agendaActions),
+    uiActions: capUiActions(output.uiActions),
+    ephemeralReminder:
+      output.ephemeralReminder === null
+        ? null
+        : capText(output.ephemeralReminder, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH),
+    adapterNotice:
+      output.adapterNotice === undefined
+        ? undefined
+        : capText(output.adapterNotice, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH)
+  };
+}
+
+function capCards(cards: FacilitatorCard[]): FacilitatorCard[] {
+  const cappedCards = cards.slice(0, MAX_FACILITATOR_OUTPUT_CARDS);
+  const originalIds = new Set(cappedCards.map((card) => card.id.trim()));
+  const usedIds = new Set<string>();
+
+  return cappedCards.map((card, index) => {
+    const baseId =
+      capText(card.id.trim(), MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) ||
+      `card-${index + 1}`;
+    const id = usedIds.has(baseId)
+      ? uniqueDerivedCardId(baseId, usedIds, originalIds)
+      : baseId;
+    usedIds.add(id);
+
+    return {
+      id,
+      kind: card.kind,
+      title: capText(card.title, MAX_FACILITATOR_CARD_TEXT_LENGTH),
+      body: capText(card.body, MAX_FACILITATOR_CARD_TEXT_LENGTH),
+      priority: card.priority
+    };
+  });
+}
+
+function uniqueDerivedCardId(
+  baseId: string,
+  usedIds: Set<string>,
+  originalIds: Set<string>
+): string {
+  let suffix = 2;
+  let candidate = `${baseId}-${suffix}`;
+  while (usedIds.has(candidate) || originalIds.has(candidate)) {
+    suffix += 1;
+    candidate = `${baseId}-${suffix}`;
+  }
+  return candidate;
+}
+
+function capAgendaActions(actions: AgendaAction[]): AgendaAction[] {
+  const order: string[] = [];
+  const byItem = new Map<string, AgendaAction>();
+
+  for (const action of actions) {
+    const itemId = capText(action.itemId, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH);
+    if (!byItem.has(itemId)) {
+      order.push(itemId);
+    }
+    byItem.set(itemId, {
+      itemId,
+      done: action.done,
+      reason: capText(action.reason, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH)
+    });
+  }
+
+  return order
+    .map((itemId) => byItem.get(itemId))
+    .filter((action): action is AgendaAction => Boolean(action))
+    .slice(0, MAX_AGENDA_ITEMS);
+}
+
+export function capUiActions(actions: UiAction[]): UiAction[] {
+  const normalizedActions = actions
+    .map(capUiActionText)
+    .filter((action): action is UiAction => Boolean(action));
+  if (normalizedActions.length <= MAX_FACILITATOR_OUTPUT_UI_ACTIONS) {
+    return normalizedActions;
+  }
+
+  const reviewAction = [...normalizedActions]
+    .reverse()
+    .find((action) => action.tool === "update_review_document");
+  if (!reviewAction) {
+    return normalizedActions.slice(0, MAX_FACILITATOR_OUTPUT_UI_ACTIONS);
+  }
+
+  return [
+    reviewAction,
+    ...normalizedActions
+      .filter((action) => action.tool !== "update_review_document")
+      .slice(0, MAX_FACILITATOR_OUTPUT_UI_ACTIONS - 1)
+  ];
+}
+
+function capUiActionText(action: UiAction): UiAction | null {
+  const parameters: Record<string, unknown> = {};
+  if (action.tool === "send_room_reminder") {
+    const message = cappedStringParam(action.parameters.message);
+    const tone = cappedStringParam(action.parameters.tone);
+    if (message === undefined) return null;
+    parameters.message = message;
+    if (tone !== undefined) {
+      parameters.tone = tone;
+    }
+  }
+  if (action.tool === "add_agenda_item") {
+    const title = cappedStringParam(action.parameters.title);
+    if (title === undefined) return null;
+    parameters.title = title;
+  }
+  if (action.tool === "set_agenda_item" || action.tool === "delete_agenda_item") {
+    const itemId = cappedStringParam(action.parameters.itemId);
+    if (itemId === undefined) return null;
+    parameters.itemId = itemId;
+    if (action.tool === "set_agenda_item") {
+      if (typeof action.parameters.done !== "boolean") return null;
+      parameters.done = action.parameters.done;
+    }
+  }
+  if (action.tool === "update_review_document") {
+    if (typeof action.parameters.markdown !== "string") return null;
+    parameters.markdown = capText(
+      action.parameters.markdown,
+      MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH
+    );
+    const summary = cappedStringParam(action.parameters.summary);
+    if (summary !== undefined) {
+      parameters.summary = summary;
+    }
+  }
+
+  return {
+    tool: action.tool,
+    parameters,
+    reason: capText(action.reason, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH)
+  };
+}
+
+function cappedStringParam(value: unknown): string | undefined {
+  return typeof value === "string"
+    ? capText(value, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH)
+    : undefined;
+}
+
+function capText(value: string, maxLength: number): string {
+  return value.length <= maxLength ? value : value.slice(0, maxLength);
+}
+
+function compactMiddleText(text: string, maxLength: number): string {
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  const available = Math.max(
+    0,
+    maxLength - HEARTBEAT_REVIEW_COMPACTION_MARKER.length
+  );
+  const headLength = Math.ceil(available * 0.55);
+  const tailLength = Math.max(0, available - headLength);
+  return `${text.slice(0, headLength).trimEnd()}${HEARTBEAT_REVIEW_COMPACTION_MARKER}${text
+    .slice(text.length - tailLength)
+    .trimStart()}`;
+}
+
 export interface CreateHeartbeatInputArgs {
   meeting: MeetingConfig;
   transcript: TranscriptLine[];
@@ -170,30 +367,41 @@ export function createHeartbeatInput({
   heartbeatCount
 }: CreateHeartbeatInputArgs): HeartbeatInput {
   const startedAt = meetingStartedAt ?? now;
+  const compactMeeting = compactMeetingForAdapter(meeting);
+  const compactTranscript = compactTranscriptForHeartbeat(
+    transcript,
+    lastHeartbeatAt,
+    now
+  );
+  const compactPriorInterventions = compactTimelineHistory(priorInterventions);
+  const compactReviewVersions = compactReviewHistory(reviewVersions ?? []);
+  const compactReviewMarkdown = compactMiddleText(
+    currentReviewMarkdown ?? createInitialReviewMarkdown(compactMeeting),
+    MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH
+  );
 
   return {
-    meeting,
-    transcript,
-    transcriptDelta: transcript.filter(
+    meeting: compactMeeting,
+    transcript: compactTranscript,
+    transcriptDelta: compactTranscript.filter(
       (line) => line.timestamp > lastHeartbeatAt && line.timestamp <= now
     ),
     participation: createParticipationStatus(
-      meeting.expectedParticipants,
+      compactMeeting.expectedParticipants,
       observedSpeakerLabels
     ),
-    agendaProgress: getAgendaProgress(meeting.agenda),
-    priorInterventions,
-    priorReminders: priorInterventions
+    agendaProgress: getAgendaProgress(compactMeeting.agenda),
+    priorInterventions: compactPriorInterventions,
+    priorReminders: compactPriorInterventions
       .filter((entry) => typeof entry.reminder === "string" && entry.reminder.trim())
       .map((entry) => ({
         timestamp: entry.timestamp,
         message: entry.reminder as string,
         source: entry.source
       })),
-    currentReviewMarkdown:
-      currentReviewMarkdown ?? createInitialReviewMarkdown(meeting),
-    reviewVersions: reviewVersions ?? [],
-    uiTools: createUiToolDefinitions(meeting),
+    currentReviewMarkdown: compactReviewMarkdown,
+    reviewVersions: compactReviewVersions,
+    uiTools: createUiToolDefinitions(compactMeeting),
     runtime: {
       meetingStartedAt: startedAt,
       meetingElapsedSeconds: Math.max(0, Math.floor((now - startedAt) / 1000)),
@@ -202,6 +410,117 @@ export function createHeartbeatInput({
     },
     now
   };
+}
+
+export function compactMeetingForAdapter(meeting: MeetingConfig): MeetingConfig {
+  return {
+    title: capText(meeting.title, MAX_HEARTBEAT_INPUT_TEXT_LENGTH),
+    goal: capText(meeting.goal, MAX_HEARTBEAT_INPUT_TEXT_LENGTH),
+    context: capText(meeting.context, MAX_HEARTBEAT_INPUT_TEXT_LENGTH),
+    agenda: meeting.agenda.map((item) => ({
+      id: capText(item.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH),
+      title: capText(item.title, MAX_HEARTBEAT_INPUT_TEXT_LENGTH),
+      done: item.done
+    })),
+    participants: meeting.participants.map((participant) => ({
+      name: capText(participant.name, MAX_HEARTBEAT_INPUT_TEXT_LENGTH),
+      ...(participant.role === undefined
+        ? {}
+        : { role: capText(participant.role, MAX_HEARTBEAT_INPUT_TEXT_LENGTH) })
+    })),
+    expectedParticipants: meeting.expectedParticipants,
+    heartbeatIntervalSeconds: meeting.heartbeatIntervalSeconds
+  };
+}
+
+function compactTranscriptForHeartbeat(
+  transcript: TranscriptLine[],
+  lastHeartbeatAt: number,
+  now: number
+): TranscriptLine[] {
+  const usableTranscript = transcript
+    .filter((line) => line.timestamp <= now)
+    .map(normalizeTranscriptLineForHeartbeat);
+  const contextBeforeHeartbeat = usableTranscript
+    .filter((line) => line.timestamp <= lastHeartbeatAt)
+    .slice(-MAX_HEARTBEAT_TRANSCRIPT_CONTEXT_LINES);
+  const freshDelta = usableTranscript
+    .filter((line) => line.timestamp > lastHeartbeatAt)
+    .slice(-MAX_HEARTBEAT_TRANSCRIPT_DELTA_LINES);
+  const byId = new Map<string, TranscriptLine>();
+
+  for (const line of [...contextBeforeHeartbeat, ...freshDelta]) {
+    byId.set(line.id, line);
+  }
+
+  return Array.from(byId.values()).sort(
+    (left, right) => left.timestamp - right.timestamp || left.id.localeCompare(right.id)
+  );
+}
+
+function normalizeTranscriptLineForHeartbeat(line: TranscriptLine): TranscriptLine {
+  const speakerLabel = normalizeSpeakerLabel(line.speakerLabel) ?? "Speaker 1";
+  return {
+    id: capText(line.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH),
+    speakerId: capText(line.speakerId, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH),
+    speakerLabel,
+    text: capText(line.text, MAX_HEARTBEAT_INPUT_TEXT_LENGTH),
+    timestamp: line.timestamp,
+    source: line.source,
+    confidence: line.confidence
+  };
+}
+
+function compactTimelineHistory(
+  priorInterventions: TimelineEntry[]
+): TimelineEntry[] {
+  return [...priorInterventions]
+    .sort(
+      (left, right) =>
+        right.timestamp - left.timestamp || right.id.localeCompare(left.id)
+    )
+    .slice(0, MAX_HEARTBEAT_HISTORY_ITEMS)
+    .map(capTimelineEntry);
+}
+
+function capTimelineEntry(entry: TimelineEntry): TimelineEntry {
+  return {
+    id: capText(entry.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH),
+    timestamp: entry.timestamp,
+    source: entry.source,
+    cards: capCards(entry.cards),
+    summary: capText(entry.summary, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH),
+    reminder:
+      entry.reminder === undefined || entry.reminder === null
+        ? entry.reminder
+        : capText(entry.reminder, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH),
+    reviewMarkdown:
+      entry.reviewMarkdown === undefined
+        ? undefined
+        : compactMiddleText(
+            entry.reviewMarkdown,
+            MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH
+          )
+  };
+}
+
+function compactReviewHistory(reviewVersions: ReviewVersion[]): ReviewVersion[] {
+  return [...reviewVersions]
+    .sort(
+      (left, right) =>
+        right.timestamp - left.timestamp || right.id.localeCompare(left.id)
+    )
+    .slice(0, MAX_HEARTBEAT_REVIEW_VERSIONS)
+    .map((version) => ({
+      id: capText(version.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH),
+      timestamp: version.timestamp,
+      source: version.source,
+      markdown: compactMiddleText(
+        version.markdown,
+        MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH
+      ),
+      summary: capText(version.summary, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH)
+    }));
 }
 
 export async function runLocalFacilitation(
@@ -294,7 +613,7 @@ export async function runLocalFacilitation(
     });
   }
 
-  return {
+  return capFacilitatorOutput({
     source: "local-fallback",
     cards: cards.slice(0, 5),
     summary: `${input.meeting.title}: ${cards.length} facilitator cues generated from ${input.transcriptDelta.length} new transcript ${input.transcriptDelta.length === 1 ? "line" : "lines"}.`,
@@ -305,7 +624,7 @@ export async function runLocalFacilitation(
     agendaActions: mergedAgendaActions,
     uiActions: buildLocalUiActions(input, mergedAgendaActions, cards),
     ephemeralReminder: selectEphemeralReminder(input, cards)
-  };
+  });
 }
 
 export function createUiToolDefinitions(
@@ -613,7 +932,7 @@ function buildReviewMarkdown(
       : "- No agenda status changes proposed.";
 
   return [
-    input.currentReviewMarkdown,
+    visibleReviewMarkdown(input.currentReviewMarkdown),
     "",
     pulseTitle,
     "",
@@ -626,6 +945,10 @@ function buildReviewMarkdown(
     "#### Agenda Updates",
     agendaLines
   ].join("\n");
+}
+
+function visibleReviewMarkdown(markdown: string): string {
+  return markdown.replace(HEARTBEAT_REVIEW_COMPACTION_MARKER, "\n\n...\n\n");
 }
 
 function inferAgendaActions(

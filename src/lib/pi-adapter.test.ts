@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runPiHeartbeat, runPiInitialReviewDocument } from "./pi-adapter";
 import {
+  MAX_AGENDA_ITEMS,
   createInitialReviewMarkdown,
   createUiToolDefinitions,
   type HeartbeatInput,
@@ -268,6 +269,121 @@ describe("Pi adapter", () => {
     expect(output.reviewMarkdown).toContain("{literal brace}");
   });
 
+  it("parses assistant state messages when Pi streaming subscription is unavailable", async () => {
+    writeFileSync(
+      process.env.ROOMPULSE_CODEX_AUTH_PATH!,
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: {
+          access_token: jwtWithExpiration(1_900_000_000),
+          refresh_token: "refresh-token",
+          account_id: "acct_123"
+        }
+      })
+    );
+    const originalSubscribe = session.subscribe;
+    session.subscribe = undefined as unknown as typeof session.subscribe;
+    session.state.messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              cards: [
+                {
+                  kind: "heartbeat",
+                  title: "State fallback",
+                  body: "Parse the assistant state text without streaming.",
+                  priority: "medium"
+                }
+              ],
+              summary: "Parsed from assistant state.",
+              nextHeartbeatHint: "Continue.",
+              reviewMarkdown:
+                "# Launch check\n\nState fallback includes \"quoted\" JSON text.",
+              agendaActions: [],
+              uiActions: [],
+              ephemeralReminder: null
+            })
+          }
+        ]
+      }
+    ];
+
+    try {
+      const output = await runPiHeartbeat(heartbeatInput);
+
+      expect(output.source).toBe("pi");
+      expect(output.summary).toBe("Parsed from assistant state.");
+      expect(output.reviewMarkdown).toContain("\"quoted\"");
+    } finally {
+      session.subscribe = originalSubscribe;
+      session.state.messages = [];
+    }
+  });
+
+  it("sends Pi a bounded heartbeat context instead of unbounded transcript and markdown", async () => {
+    writeFileSync(
+      process.env.ROOMPULSE_CODEX_AUTH_PATH!,
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: {
+          access_token: jwtWithExpiration(1_900_000_000),
+          refresh_token: "refresh-token",
+          account_id: "acct_123"
+        }
+      })
+    );
+    const longMarkdown = [
+      "# Launch check",
+      "review-start",
+      ...Array.from({ length: 500 }, (_, index) =>
+        index === 250
+          ? "middle-review-marker that should not be sent to Pi"
+          : `review line ${index}`
+      ),
+      "review-end"
+    ].join("\n");
+    const longInput: HeartbeatInput = {
+      ...heartbeatInput,
+      currentReviewMarkdown: longMarkdown,
+      transcript: Array.from({ length: 80 }, (_, index) => ({
+        id: `line-${index + 1}`,
+        speakerId: `speaker-${(index % 4) + 1}`,
+        speakerLabel: `Speaker ${(index % 4) + 1}`,
+        text: `Transcript line ${index + 1}`,
+        timestamp: index + 1,
+        source: "speech" as const,
+        confidence: 0.9
+      })),
+      transcriptDelta: Array.from({ length: 4 }, (_, index) => ({
+        id: `delta-${index + 1}`,
+        speakerId: "speaker-1",
+        speakerLabel: "Speaker 1",
+        text: `Fresh delta ${index + 1}`,
+        timestamp: 100 + index,
+        source: "speech" as const,
+        confidence: 0.9
+      }))
+    };
+
+    await runPiHeartbeat(longInput);
+
+    const prompt = String(session.prompt.mock.calls[0]?.[0] ?? "");
+    const context = extractPromptContext(prompt);
+    expect(context.transcriptContext.totalLines).toBe(80);
+    expect(context.transcriptContext.recentLines.length).toBeLessThanOrEqual(40);
+    expect(JSON.stringify(context)).not.toContain("Transcript line 1");
+    expect(JSON.stringify(context)).toContain("Transcript line 80");
+    expect(context.transcriptDelta).toHaveLength(4);
+    expect(context.reviewDocument.markdown.length).toBeLessThanOrEqual(8_000);
+    expect(context.reviewDocument.omittedCharacters).toBeGreaterThan(0);
+    expect(context.reviewDocument.markdown).toContain("review-start");
+    expect(context.reviewDocument.markdown).toContain("review-end");
+    expect(context.reviewDocument.markdown).not.toContain("middle-review-marker");
+  });
+
   it("initializes the pre-meeting markdown document through Pi", async () => {
     writeFileSync(
       process.env.ROOMPULSE_CODEX_AUTH_PATH!,
@@ -402,6 +518,61 @@ describe("Pi adapter", () => {
       "Pi response did not include reviewMarkdown"
     );
     expect(output.reviewMarkdown).toContain("RoomPulse revises the full document");
+  });
+
+  it("caps oversized Pi JSON output lists before returning facilitator output", async () => {
+    writeFileSync(
+      process.env.ROOMPULSE_CODEX_AUTH_PATH!,
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: {
+          access_token: jwtWithExpiration(1_900_000_000),
+          refresh_token: "refresh-token",
+          account_id: "acct_123"
+        }
+      })
+    );
+    session.subscribe.mockImplementation((listener: (event: unknown) => void) => {
+      listener({
+        type: "message_update",
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta: JSON.stringify({
+            cards: Array.from({ length: 12 }, (_, index) => ({
+              kind: "heartbeat",
+              title: `Card ${index + 1}`,
+              body: `Cue ${index + 1}.`,
+              priority: "medium"
+            })),
+            summary: "Oversized Pi output.",
+            nextHeartbeatHint: "Continue.",
+            reviewMarkdown: "# Launch check\n\nOversized output.",
+            agendaActions: Array.from(
+              { length: MAX_AGENDA_ITEMS + 5 },
+              (_, index) => ({
+                itemId: `a${index + 1}`,
+                done: true,
+                reason: `Agenda action ${index + 1}.`
+              })
+            ),
+            uiActions: Array.from({ length: 12 }, (_, index) => ({
+              tool: "send_room_reminder",
+              parameters: { message: `Reminder ${index + 1}` },
+              reason: `Reminder action ${index + 1}.`
+            })),
+            ephemeralReminder: "Reminder 12"
+          })
+        }
+      });
+    });
+
+    const output = await runPiHeartbeat(heartbeatInput);
+
+    expect(output.cards).toHaveLength(5);
+    expect(output.cards.at(-1)?.title).toBe("Card 5");
+    expect(output.agendaActions).toHaveLength(MAX_AGENDA_ITEMS);
+    expect(output.uiActions).toHaveLength(8);
+    expect(output.uiActions.at(-1)?.parameters.message).toBe("Reminder 8");
   });
 
   it("ignores malformed Pi agenda actions instead of defaulting them complete", async () => {
@@ -619,6 +790,103 @@ describe("Pi adapter", () => {
       .toContain("update_review_document");
   });
 
+  it("keeps a valid OpenRouter review tool call when a secondary tool is malformed", async () => {
+    process.env.ROOMPULSE_PI_PROVIDER = "openrouter";
+    process.env.ROOMPULSE_OPENROUTER_API_KEY = "openrouter-key";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json({
+          choices: [
+            {
+              message: {
+                tool_calls: [
+                  {
+                    type: "function",
+                    function: {
+                      name: "update_review_document",
+                      arguments: JSON.stringify({
+                        markdown: "# OpenRouter kept\n\n- [ ] Risks",
+                        summary: "OpenRouter returned a valid review."
+                      })
+                    }
+                  },
+                  {
+                    type: "function",
+                    function: {
+                      name: "set_agenda_item",
+                      arguments: JSON.stringify({
+                        itemId: "a1",
+                        reason: "Missing done should not discard the review."
+                      })
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        })
+      )
+    );
+
+    const output = await runPiHeartbeat(heartbeatInput);
+
+    expect(output.source).toBe("openrouter");
+    expect(output.reviewMarkdown).toContain("OpenRouter kept");
+    expect(output.agendaActions).toEqual([]);
+    expect(output.uiActions.map((action) => action.tool)).toEqual([
+      "update_review_document"
+    ]);
+  });
+
+  it("keeps a valid OpenRouter review tool call after a malformed review tool call", async () => {
+    process.env.ROOMPULSE_PI_PROVIDER = "openrouter";
+    process.env.ROOMPULSE_OPENROUTER_API_KEY = "openrouter-key";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json({
+          choices: [
+            {
+              message: {
+                tool_calls: [
+                  {
+                    type: "function",
+                    function: {
+                      name: "update_review_document",
+                      arguments: JSON.stringify({
+                        summary: "OpenRouter first forgot markdown."
+                      })
+                    }
+                  },
+                  {
+                    type: "function",
+                    function: {
+                      name: "update_review_document",
+                      arguments: JSON.stringify({
+                        markdown: "# Corrected OpenRouter review\n\n- [ ] Risks",
+                        summary: "OpenRouter corrected the review."
+                      })
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        })
+      )
+    );
+
+    const output = await runPiHeartbeat(heartbeatInput);
+
+    expect(output.source).toBe("openrouter");
+    expect(output.reviewMarkdown).toContain("Corrected OpenRouter review");
+    expect(output.summary).toBe("OpenRouter corrected the review.");
+    expect(output.uiActions.map((action) => action.tool)).toEqual([
+      "update_review_document"
+    ]);
+  });
+
   it("falls back when OpenRouter returns an unusable review tool call", async () => {
     process.env.ROOMPULSE_PI_PROVIDER = "openrouter";
     process.env.ROOMPULSE_OPENROUTER_API_KEY = "openrouter-key";
@@ -799,4 +1067,23 @@ function jwtWithExpiration(exp: number): string {
 
 function encodeBase64Url(value: unknown): string {
   return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
+}
+
+function extractPromptContext(prompt: string): {
+  transcriptContext: {
+    totalLines: number;
+    recentLines: Array<{ speaker: string; text: string; timestamp: number }>;
+  };
+  transcriptDelta: Array<{ speaker: string; text: string }>;
+  reviewDocument: {
+    markdown: string;
+    omittedCharacters: number;
+  };
+} {
+  const match = prompt.match(/<context>\n([\s\S]*)\n<\/context>/);
+  if (!match) {
+    throw new Error("Prompt did not include a RoomPulse context block");
+  }
+
+  return JSON.parse(match[1]);
 }

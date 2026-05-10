@@ -6,6 +6,7 @@ import {
 import {
   MAX_AGENDA_ITEMS,
   MAX_EXPECTED_PARTICIPANTS,
+  MAX_FACILITATOR_OUTPUT_TEXT_LENGTH,
   MAX_HEARTBEAT_INTERVAL_SECONDS,
   MAX_PARTICIPANT_ENTRIES,
   MIN_HEARTBEAT_INTERVAL_SECONDS,
@@ -84,7 +85,7 @@ function isMeeting(value: unknown): value is MeetingConfig {
 function isAgendaItem(value: unknown): boolean {
   return (
     isRecord(value) &&
-    isNonEmptyString(value.id) &&
+    isBoundedNonEmptyString(value.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
     isNonEmptyString(value.title) &&
     typeof value.done === "boolean"
   );
@@ -111,6 +112,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function isBoundedNonEmptyString(
+  value: unknown,
+  maxLength: number
+): value is string {
+  return isNonEmptyString(value) && value.length <= maxLength;
 }
 
 function isIntegerAtLeast(value: unknown, min: number): value is number {

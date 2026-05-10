@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TranscriptStore } from "./transcript-store";
-import type { TranscriptLine } from "./facilitator";
+import {
+  MAX_HEARTBEAT_INPUT_TEXT_LENGTH,
+  type TranscriptLine
+} from "./facilitator";
 
 describe("TranscriptStore", () => {
   afterEach(() => {
@@ -34,6 +37,22 @@ describe("TranscriptStore", () => {
       })
     ]);
     expect(line.id).toBe("1700000000000-1");
+  });
+
+  it("caps transcript text before it reaches persistence and heartbeat payloads", () => {
+    const store = new TranscriptStore();
+
+    const line = store.addLine({
+      speakerId: "speaker-1",
+      speakerLabel: "Speaker 1",
+      text: "T".repeat(MAX_HEARTBEAT_INPUT_TEXT_LENGTH + 1),
+      source: "speech"
+    });
+
+    expect(line.text).toHaveLength(MAX_HEARTBEAT_INPUT_TEXT_LENGTH);
+    expect(store.getLines()[0]?.text).toHaveLength(
+      MAX_HEARTBEAT_INPUT_TEXT_LENGTH
+    );
   });
 
   it("generates a fresh id after restored transcript ids leave gaps", () => {

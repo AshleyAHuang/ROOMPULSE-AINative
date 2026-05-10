@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   SpeakerTracker,
   createParticipationStatus,
+  isSafeSpeakerLabel,
+  normalizeSpeakerLabel,
   type VoiceFeatures
 } from "./speaker-tracker";
 
@@ -62,6 +64,17 @@ describe("SpeakerTracker", () => {
     });
   });
 
+  it("limits centroid drift from borderline voice windows", () => {
+    const tracker = new SpeakerTracker({ distanceThreshold: 0.26 });
+
+    tracker.assignSpeaker(features(1000, 0.3, 0.1, 100));
+    tracker.assignSpeaker(features(2200, 0.5, 0.2, 180));
+
+    const [cluster] = tracker.getClusters();
+    expect(cluster.samples).toBe(2);
+    expect(cluster.centroid.spectralCentroid).toBeLessThan(1300);
+  });
+
   it("does not count blank or whitespace-variant labels as extra speakers", () => {
     expect(
       createParticipationStatus(3, ["Speaker 1", " Speaker 1 ", "", "   "])
@@ -70,6 +83,60 @@ describe("SpeakerTracker", () => {
       missingCount: 2,
       observedLabels: ["Speaker 1"]
     });
+  });
+
+  it("canonicalizes numbered speaker labels before counting participation", () => {
+    expect(
+      createParticipationStatus(3, [
+        "Speaker 1",
+        "speaker 01",
+        "Speaker    001",
+        "Speaker 2"
+      ])
+    ).toMatchObject({
+      observed: 2,
+      missingCount: 1,
+      observedLabels: ["Speaker 1", "Speaker 2"]
+    });
+  });
+
+  it("drops non-positive numbered speaker labels before counting participation", () => {
+    expect(
+      createParticipationStatus(2, ["Speaker 0", "speaker 000", "Speaker 1"])
+    ).toMatchObject({
+      observed: 1,
+      missingCount: 1,
+      observedLabels: ["Speaker 1"]
+    });
+  });
+
+  it("bounds observed labels before participation state reaches heartbeat prompts", () => {
+    const status = createParticipationStatus(
+      24,
+      Array.from({ length: 40 }, (_, index) => `Speaker ${index + 1}`)
+    );
+
+    expect(status.observed).toBe(24);
+    expect(status.observedLabels).toHaveLength(24);
+    expect(status.observedLabels.at(-1)).toBe("Speaker 24");
+  });
+
+  it("normalizes long or multiline speaker labels before prompt use", () => {
+    const status = createParticipationStatus(2, [
+      ` ${"Speaker 1 ".repeat(30)} `,
+      "Speaker\n2"
+    ]);
+
+    expect(status.observedLabels[0]).toHaveLength(80);
+    expect(status.observedLabels[0]?.endsWith("...")).toBe(true);
+    expect(status.observedLabels[1]).toBe("Speaker 2");
+  });
+
+  it("normalizes control characters out of speaker labels", () => {
+    const label = normalizeSpeakerLabel(" Speaker\u00011 ");
+
+    expect(label).toBe("Speaker 1");
+    expect(label ? isSafeSpeakerLabel(label) : false).toBe(true);
   });
 
   it("normalizes impossible expected participant counts before computing gaps", () => {

@@ -83,12 +83,13 @@ runPiHeartbeat(input): Promise<FacilitatorOutput>
 
 It lives in `src/lib/pi-adapter.ts`, and the Next.js route at `src/app/api/heartbeat/route.ts` calls it on every heartbeat. The adapter imports `@earendil-works/pi-coding-agent` server-side and creates an in-memory Pi agent session with tools disabled for a concise JSON-only facilitation response.
 
-Each heartbeat sends the full meeting state to the facilitator: meeting context,
-elapsed time, pause state, current transcript, transcript delta, prior
-interventions, current review markdown, review version history, participation
-state, and agenda state. The facilitator returns a complete next markdown
-document, optional agenda actions, concise card metadata, and a one-heartbeat
-room reminder.
+Each heartbeat sends bounded facilitator context: meeting setup, elapsed time,
+pause state, the latest bounded transcript delta, recent transcript context,
+recent prior interventions/reminders, participation state, agenda state, and a
+compacted current review document. This keeps long meetings from sending the
+full raw transcript and full review history on every pulse. The facilitator
+returns a complete next markdown document, optional agenda actions, concise
+card metadata, and a one-heartbeat room reminder.
 
 Before a meeting starts, `/api/review-document/init` asks Pi to initialize the
 first markdown review document from the setup context and agenda. The first
@@ -251,6 +252,11 @@ When the mic is stopped or a meeting ends, the browser waits up to 15 seconds
 for the local server's final flush acknowledgement before closing the socket.
 Tune this with `NEXT_PUBLIC_ROOMPULSE_TRANSCRIPTION_FLUSH_TIMEOUT_MS` if your
 local Whisper model needs more or less time.
+If the local transcription WebSocket closes unexpectedly while mic mode is still
+active, the room display retries mic capture with the existing expected speaker
+count and offsets fresh `Speaker N` labels past labels already seen.
+If browser audio input devices change during mic mode, RoomPulse restarts the
+local transcription client so the room display follows the current input device.
 
 ## Speaker Recognition Limitations
 

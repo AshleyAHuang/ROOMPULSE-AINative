@@ -659,7 +659,7 @@ class SpeakerClusterer:
         )
         if should_create_cluster:
             if len(self.clusters) >= self.max_clusters:
-                return self.assign_to_existing_cluster(best, embedding)
+                return self.assign_to_existing_cluster(best, embedding, threshold)
             return self.create_cluster(embedding, min_quality)
 
         if (
@@ -810,6 +810,7 @@ class SpeakerClusterer:
         self,
         best: tuple[float, SpeakerCluster] | None,
         embedding: VoiceEmbedding,
+        threshold: float,
     ) -> SpeakerCluster:
         if best is not None:
             cluster = best[1]
@@ -817,7 +818,12 @@ class SpeakerClusterer:
             cluster = max(self.clusters, key=lambda existing: existing.last_seen_at)
         cluster.samples += 1
         cluster.last_seen_at = time.time()
-        if cluster.backend == embedding.backend and embedding.quality >= speaker_min_quality():
+        if (
+            best is not None
+            and best[0] <= threshold
+            and cluster.backend == embedding.backend
+            and embedding.quality >= speaker_min_quality()
+        ):
             update_weight = min(0.08, max(0.02, embedding.quality / (cluster.quality_sum + embedding.quality)))
             cluster.centroid = (
                 cluster.centroid * (1.0 - update_weight)
@@ -896,7 +902,8 @@ class TranscriptionSession:
                     )
             await self.send_status("configured", "Transcription session configured")
         elif message.get("type") == "flush":
-            await self.flush(force=True)
+            while await self.flush(force=True):
+                pass
             await self.send_status("flushed", "Transcription buffer flushed")
 
     async def append_audio(self, chunk: bytes) -> None:
@@ -908,25 +915,25 @@ class TranscriptionSession:
             await asyncio.sleep(0.5)
             await self.flush(force=False)
 
-    async def flush(self, force: bool) -> None:
+    async def flush(self, force: bool) -> bool:
         async with self.flush_lock:
             min_bytes = seconds_to_bytes(self.min_seconds)
             max_bytes = seconds_to_bytes(self.max_seconds)
 
             async with self.buffer_lock:
                 if len(self.buffer) < min_bytes and not force:
-                    return
+                    return False
                 if not self.buffer:
-                    return
+                    return False
                 take = min(len(self.buffer), max_bytes)
                 if take < min_bytes and not force:
-                    return
+                    return False
                 raw = bytes(self.buffer[:take])
                 del self.buffer[:take]
 
             audio = prepare_speech_audio(pcm16_to_float32(raw))
             if not has_speech(audio):
-                return
+                return True
 
             await self.send_status("transcribing", "Transcribing speech segment")
             try:
@@ -935,10 +942,10 @@ class TranscriptionSession:
             except Exception as exc:
                 await self.send_error(f"Transcription failed: {exc}")
                 await self.send_status("listening", "Listening")
-                return
+                return True
             if not text:
                 await self.send_status("listening", "Listening")
-                return
+                return True
 
             self.sequence += 1
             try:
@@ -948,9 +955,13 @@ class TranscriptionSession:
                 observed_speaker_labels = self.clusterer.labels()
             except Exception as exc:
                 await self.send_error(f"Speaker clustering failed: {exc}")
-                speaker_id = "speaker-1"
-                speaker_label = "Speaker 1"
-                observed_speaker_labels = self.clusterer.labels() or [speaker_label]
+                observed_speaker_labels = self.clusterer.labels()
+                speaker_label = fallback_speaker_label(
+                    self.clusterer,
+                    observed_speaker_labels,
+                )
+                speaker_id = fallback_speaker_id(speaker_label)
+                observed_speaker_labels = observed_speaker_labels or [speaker_label]
             duration_ms = round((len(audio) / SAMPLE_RATE) * 1000)
             await self.websocket.send_json(
                 {
@@ -965,6 +976,7 @@ class TranscriptionSession:
                 }
             )
             await self.send_status("listening", "Listening")
+            return True
 
     async def send_status(self, status: str, message: str) -> None:
         await self.websocket.send_json(
@@ -978,6 +990,21 @@ class TranscriptionSession:
 
     async def send_error(self, message: str) -> None:
         await self.websocket.send_json({"type": "engine_error", "message": message})
+
+
+def fallback_speaker_label(clusterer: object, labels: list[str]) -> str:
+    if labels:
+        return labels[-1]
+    offset = parse_speaker_label_offset(
+        getattr(clusterer, "speaker_label_offset", 0)
+    )
+    return f"Speaker {offset + 1}"
+
+
+def fallback_speaker_id(label: str) -> str:
+    match = re.search(r"\d+", label)
+    number = int(match.group(0)) if match else 1
+    return f"speaker-{number}"
 
 
 async def transcribe_audio(

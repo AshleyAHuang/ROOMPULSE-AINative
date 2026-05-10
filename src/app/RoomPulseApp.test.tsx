@@ -7,12 +7,24 @@ import {
   within
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import RoomPulseApp, { previousReviewVersion } from "./RoomPulseApp";
-import { MAX_HEARTBEAT_INTERVAL_SECONDS } from "@/lib/facilitator";
+import RoomPulseApp, {
+  latestHeartbeatOutputFromEvents,
+  latestHeartbeatTimestamp,
+  mergeCurrentOutputWithHeartbeatEvents,
+  mergeTimelineEntriesWithEvents,
+  previousReviewVersion
+} from "./RoomPulseApp";
+import {
+  MAX_AGENDA_ITEMS,
+  MAX_EXPECTED_PARTICIPANTS,
+  MAX_HEARTBEAT_INTERVAL_SECONDS,
+  MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH
+} from "@/lib/facilitator";
 
 describe("RoomPulseApp", () => {
   afterEach(() => {
     delete process.env.NEXT_PUBLIC_ROOMPULSE_PI_TIMEOUT_MS;
+    delete process.env.NEXT_PUBLIC_ROOMPULSE_REQUIRE_PI;
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.useRealTimers();
@@ -77,6 +89,242 @@ describe("RoomPulseApp", () => {
         "# Not the fallback signal"
       )?.id
     ).toBe("1700000000000-initial-review");
+  });
+
+  it("rebuilds restore timeline metadata from heartbeat events when autosave is stale", () => {
+    const staleTimeline = [
+      {
+        id: "stale-pulse",
+        timestamp: 1_700_000_001_000,
+        source: "local-fallback" as const,
+        cards: [],
+        summary: "Older autosaved heartbeat.",
+        reviewMarkdown: "# Older"
+      }
+    ];
+    const heartbeatEvents = [
+      {
+        id: "meeting-started",
+        type: "meeting_started",
+        timestamp: 1_700_000_000_000,
+        payload: {}
+      },
+      {
+        id: "newer-heartbeat",
+        type: "heartbeat_output",
+        timestamp: 1_700_000_030_000,
+        payload: {
+          output: {
+            source: "pi",
+            cards: [
+              {
+                id: "card-1",
+                kind: "participation",
+                title: "Invite quiet voices",
+                body: "One expected participant has not spoken.",
+                priority: "medium"
+              }
+            ],
+            summary: "Newer logged heartbeat.",
+            nextHeartbeatHint: "Invite a quiet voice next.",
+            reviewMarkdown: "# Newer",
+            agendaActions: [],
+            uiActions: [],
+            ephemeralReminder: "Invite a quiet voice next."
+          }
+        }
+      }
+    ];
+
+    expect(
+      mergeTimelineEntriesWithEvents(staleTimeline, heartbeatEvents).map(
+        (entry) => entry.summary
+      )
+    ).toEqual(["Newer logged heartbeat.", "Older autosaved heartbeat."]);
+    expect(latestHeartbeatTimestamp({ events: heartbeatEvents }, 123)).toBe(
+      1_700_000_030_000
+    );
+    expect(latestHeartbeatOutputFromEvents(heartbeatEvents)?.summary).toBe(
+      "Newer logged heartbeat."
+    );
+  });
+
+  it("prefers logged heartbeat timeline details over duplicate autosave entries", () => {
+    const events = [
+      {
+        id: "event-pulse",
+        type: "heartbeat_output",
+        timestamp: 1_700_000_030_000,
+        payload: {
+          output: {
+            source: "pi",
+            cards: [
+              {
+                id: "card-1",
+                kind: "risk",
+                title: "Logged card",
+                body: "The logged event has the complete card payload.",
+                priority: "high"
+              }
+            ],
+            summary: "Same heartbeat.",
+            reviewMarkdown: "# Same",
+            ephemeralReminder: "Logged reminder."
+          }
+        }
+      }
+    ];
+    const stateTimeline = [
+      {
+        id: "state-pulse",
+        timestamp: 1_700_000_030_000,
+        source: "pi" as const,
+        cards: [],
+        summary: "Same heartbeat.",
+        reviewMarkdown: "# Same",
+        reminder: "Logged reminder."
+      }
+    ];
+
+    expect(
+      mergeTimelineEntriesWithEvents(stateTimeline, events)[0]?.cards[0]?.title
+    ).toBe("Logged card");
+  });
+
+  it("caps restored heartbeat event cards before rebuilding the room timeline", () => {
+    const events = [
+      {
+        id: "event-pulse",
+        type: "heartbeat_output",
+        timestamp: 1_700_000_030_000,
+        payload: {
+          output: {
+            source: "pi",
+            cards: Array.from({ length: 9 }, (_, index) => ({
+              id: `card-${index + 1}`,
+              kind: "heartbeat",
+              title: `Card ${index + 1}`,
+              body: `Cue ${index + 1}.`,
+              priority: "medium"
+            })),
+            summary: "Large restored heartbeat.",
+            reviewMarkdown: "# Restored"
+          }
+        }
+      }
+    ];
+
+    const [entry] = mergeTimelineEntriesWithEvents([], events);
+
+    expect(entry?.cards).toHaveLength(5);
+    expect(entry?.cards.map((card) => card.title)).toEqual([
+      "Card 1",
+      "Card 2",
+      "Card 3",
+      "Card 4",
+      "Card 5"
+    ]);
+  });
+
+  it("keeps newer autosaved current output ahead of older heartbeat events", () => {
+    const stateCurrentOutput = {
+      source: "pi" as const,
+      cards: [],
+      summary: "Newer autosaved output.",
+      nextHeartbeatHint: "Continue.",
+      reviewMarkdown: "# Newer autosave",
+      agendaActions: [],
+      uiActions: [],
+      ephemeralReminder: null
+    };
+    const stateTimeline = [
+      {
+        id: "new-state-pulse",
+        timestamp: 1_700_000_030_000,
+        source: "pi" as const,
+        cards: [],
+        summary: "Newer autosaved output.",
+        reviewMarkdown: "# Newer autosave"
+      }
+    ];
+    const olderEvents = [
+      {
+        id: "old-event-pulse",
+        type: "heartbeat_output",
+        timestamp: 1_700_000_001_000,
+        payload: {
+          output: {
+            source: "pi",
+            summary: "Older logged output.",
+            reviewMarkdown: "# Older event"
+          }
+        }
+      }
+    ];
+
+    expect(
+      mergeCurrentOutputWithHeartbeatEvents(
+        stateCurrentOutput,
+        stateTimeline,
+        olderEvents
+      )?.summary
+    ).toBe("Newer autosaved output.");
+  });
+
+  it("rebuilds missing current output from a newer autosaved timeline", () => {
+    const stateTimeline = [
+      {
+        id: "new-state-pulse",
+        timestamp: 1_700_000_030_000,
+        source: "pi" as const,
+        cards: [
+          {
+            id: "state-card",
+            kind: "heartbeat" as const,
+            title: "State card",
+            body: "The autosaved timeline has the latest room-facing cue.",
+            priority: "medium" as const
+          }
+        ],
+        summary: "Newer autosaved timeline.",
+        reviewMarkdown: "# Newer autosaved timeline",
+        reminder: "Use the newer reminder."
+      }
+    ];
+    const olderEvents = [
+      {
+        id: "old-event-pulse",
+        type: "heartbeat_output",
+        timestamp: 1_700_000_001_000,
+        payload: {
+          output: {
+            source: "pi",
+            cards: [
+              {
+                id: "event-card",
+                kind: "risk",
+                title: "Old event card",
+                body: "This stale event should not replace the newer timeline.",
+                priority: "high"
+              }
+            ],
+            summary: "Older logged output.",
+            reviewMarkdown: "# Older event",
+            ephemeralReminder: "Old reminder."
+          }
+        }
+      }
+    ];
+
+    const output = mergeCurrentOutputWithHeartbeatEvents(
+      null,
+      stateTimeline,
+      olderEvents
+    );
+
+    expect(output?.summary).toBe("Newer autosaved timeline.");
+    expect(output?.cards[0]?.title).toBe("State card");
+    expect(output?.ephemeralReminder).toBe("Use the newer reminder.");
   });
 
   it("starts on the dashboard and can browse local meeting logs", async () => {
@@ -190,6 +438,229 @@ describe("RoomPulseApp", () => {
 
     expect(screen.getByText(/we have not made a decision yet/i)).toBeVisible();
     expect(screen.getByText(/1 of 3 heard/i)).toBeVisible();
+  });
+
+  it("disables manual heartbeat while the meeting is paused", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url === "/api/meetings" && method === "GET") {
+        return Response.json({ meetings: [] });
+      }
+      if (url.includes("/api/review-document/init")) {
+        return Response.json({
+          source: "pi",
+          markdown: "# Pausable meeting",
+          summary: "Initialized."
+        });
+      }
+      if (url === "/api/meetings" && method === "POST") {
+        return Response.json(
+          {
+            id: "pausable-meeting",
+            title: "Pausable meeting",
+            goal: "Show paused controls.",
+            startedAt: Date.now(),
+            updatedAt: Date.now(),
+            endedAt: null,
+            status: "active",
+            isPaused: false,
+            eventCount: 0,
+            meeting: {},
+            state: null,
+            latestReviewMarkdown: "",
+            latestReviewVersionId: null
+          },
+          { status: 201 }
+        );
+      }
+      if (url.includes("/events")) {
+        return Response.json({ id: "event-1" }, { status: 201 });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    expect(
+      await screen.findByRole("button", { name: /run heartbeat now/i })
+    ).toBeEnabled();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^pause$/i }));
+    });
+
+    expect(screen.getByRole("button", { name: /run heartbeat now/i })).toBeDisabled();
+  });
+
+  it("does not start a heartbeat from a rapid pause-then-heartbeat click", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url === "/api/meetings" && method === "GET") {
+        return Response.json({ meetings: [] });
+      }
+      if (url.includes("/api/review-document/init")) {
+        return Response.json({
+          source: "pi",
+          markdown: "# Pause race meeting",
+          summary: "Initialized."
+        });
+      }
+      if (url === "/api/meetings" && method === "POST") {
+        return Response.json(
+          {
+            id: "pause-race-meeting",
+            title: "Pause race meeting",
+            goal: "Do not heartbeat after pausing.",
+            startedAt: Date.now(),
+            updatedAt: Date.now(),
+            endedAt: null,
+            status: "active",
+            isPaused: false,
+            eventCount: 0,
+            meeting: {},
+            state: null,
+            latestReviewMarkdown: "",
+            latestReviewVersionId: null
+          },
+          { status: 201 }
+        );
+      }
+      if (url.includes("/events")) {
+        return Response.json({ id: "event-1" }, { status: 201 });
+      }
+      if (url === "/api/heartbeat") {
+        return Response.json({
+          source: "pi",
+          cards: [],
+          summary: "This heartbeat should not run after pause.",
+          nextHeartbeatHint: "Continue.",
+          reviewMarkdown: "# Pause race meeting",
+          agendaActions: [],
+          uiActions: [],
+          ephemeralReminder: null
+        });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    const heartbeatButton = await screen.findByRole("button", {
+      name: /run heartbeat now/i
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^pause$/i }));
+      fireEvent.click(heartbeatButton);
+      await Promise.resolve();
+    });
+
+    expect(
+      fetchMock.mock.calls.some(([url]) => String(url) === "/api/heartbeat")
+    ).toBe(false);
+  });
+
+  it("cancels an in-flight heartbeat when the meeting is paused", async () => {
+    let resolveHeartbeat: ((response: Response) => void) | null = null;
+    let heartbeatSignal: AbortSignal | null = null;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url === "/api/meetings" && method === "GET") {
+        return Response.json({ meetings: [] });
+      }
+      if (url.includes("/api/review-document/init")) {
+        return Response.json({
+          source: "pi",
+          markdown: "# Pause in-flight meeting",
+          summary: "Initialized."
+        });
+      }
+      if (url === "/api/meetings" && method === "POST") {
+        return Response.json(
+          {
+            id: "pause-in-flight-meeting",
+            title: "Pause in-flight meeting",
+            goal: "Do not apply stale heartbeat output after pausing.",
+            startedAt: Date.now(),
+            updatedAt: Date.now(),
+            endedAt: null,
+            status: "active",
+            isPaused: false,
+            eventCount: 0,
+            meeting: {},
+            state: null,
+            latestReviewMarkdown: "",
+            latestReviewVersionId: null
+          },
+          { status: 201 }
+        );
+      }
+      if (url === "/api/heartbeat") {
+        heartbeatSignal = init?.signal as AbortSignal;
+        return new Promise<Response>((resolve) => {
+          resolveHeartbeat = resolve;
+        });
+      }
+      if (url.includes("/events")) {
+        return Response.json({ id: "event-1" }, { status: 201 });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /run heartbeat now/i }));
+    });
+    await waitFor(() => expect(resolveHeartbeat).not.toBeNull());
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^pause$/i }));
+      await Promise.resolve();
+    });
+
+    expect(heartbeatSignal?.aborted).toBe(true);
+
+    await act(async () => {
+      resolveHeartbeat?.(
+        Response.json({
+          source: "pi",
+          cards: [
+            {
+              id: "paused-stale-card",
+              kind: "heartbeat",
+              title: "Paused stale heartbeat",
+              body: "This response arrived after pause.",
+              priority: "high"
+            }
+          ],
+          summary: "Paused stale heartbeat.",
+          nextHeartbeatHint: "Do not apply.",
+          reviewMarkdown: "# Pause in-flight meeting\n\nPaused stale heartbeat.",
+          agendaActions: [],
+          uiActions: [],
+          ephemeralReminder: null
+        })
+      );
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByText(/paused stale heartbeat/i)).not.toBeInTheDocument();
   });
 
   it("caps pasted setup agenda and participant lists before initialization", async () => {
@@ -356,6 +827,263 @@ describe("RoomPulseApp", () => {
     expect(screen.getByText(/2 versions/i)).toBeVisible();
   });
 
+  it("keeps browser fallback review output bounded without leaking heartbeat markers", async () => {
+    const middleMarker = "UNIQUE_VISIBLE_REVIEW_MIDDLE";
+    const hugeReview = [
+      "# Full visible review",
+      "Opening visible review state.",
+      ...Array.from({ length: 700 }, (_, index) =>
+        index === 350 ? middleMarker : `Visible review detail ${index}`
+      ),
+      "Closing visible review state."
+    ].join("\n");
+    let heartbeatEvent: Record<string, unknown> | undefined;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/meetings" && method === "GET") {
+          return Response.json({ meetings: [] });
+        }
+        if (url.includes("/api/review-document/init")) {
+          return Response.json({
+            source: "pi",
+            markdown: hugeReview,
+            summary: "Initialized a large visible review."
+          });
+        }
+        if (url === "/api/meetings" && method === "POST") {
+          return Response.json(
+            {
+              id: "meeting-browser-fallback-review",
+              title: "Browser fallback review",
+              goal: "Keep local visible markdown intact.",
+              startedAt: Date.now(),
+              updatedAt: Date.now(),
+              endedAt: null,
+              status: "active",
+              isPaused: false,
+              eventCount: 0,
+              meeting: {},
+              state: null,
+              latestReviewMarkdown: "",
+              latestReviewVersionId: null
+            },
+            { status: 201 }
+          );
+        }
+        if (url === "/api/heartbeat") {
+          throw new Error("network down");
+        }
+        if (url.includes("/events")) {
+          const event = JSON.parse(String(init?.body ?? "{}"));
+          if (event.type === "heartbeat_output") {
+            heartbeatEvent = event;
+          }
+          return Response.json({ id: "event-1" }, { status: 201 });
+        }
+        if (url.includes("/api/meetings/meeting-browser-fallback-review")) {
+          return Response.json({ id: "meeting-browser-fallback-review" });
+        }
+        return Response.json({});
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /run heartbeat/i }));
+    });
+
+    expect(await screen.findByText(/network down/i)).toBeVisible();
+    await waitFor(() => {
+      expect(heartbeatEvent).toBeDefined();
+    });
+    const output = (heartbeatEvent?.payload as { output: { reviewMarkdown: string } })
+      .output;
+    expect(output.reviewMarkdown.length).toBeLessThanOrEqual(
+      MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH
+    );
+    expect(output.reviewMarkdown).not.toContain(middleMarker);
+    expect(output.reviewMarkdown).not.toContain(
+      "RoomPulse omitted middle review content"
+    );
+  });
+
+  it("deduplicates rapid start-meeting clicks before initial review resolves", async () => {
+    let initRequests = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/meetings") {
+        return Response.json({ meetings: [] });
+      }
+      if (url.includes("/api/review-document/init")) {
+        initRequests += 1;
+        return new Promise<Response>(() => {
+          // Keep initialization in flight so both rapid clicks exercise the guard.
+        });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    const startButton = screen.getByRole("button", { name: /start meeting/i });
+
+    await act(async () => {
+      fireEvent.click(startButton);
+      fireEvent.click(startButton);
+      await Promise.resolve();
+    });
+
+    expect(initRequests).toBe(1);
+  });
+
+  it("deduplicates rapid live-demo launch clicks before initial review resolves", async () => {
+    let initRequests = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/meetings") {
+        return Response.json({ meetings: [] });
+      }
+      if (url.includes("/api/review-document/init")) {
+        initRequests += 1;
+        return new Promise<Response>(() => {
+          // Keep initialization in flight so both rapid clicks exercise the guard.
+        });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    const launchButton = await screen.findByRole("button", {
+      name: /launch live demo/i
+    });
+
+    await act(async () => {
+      fireEvent.click(launchButton);
+      fireEvent.click(launchButton);
+      await Promise.resolve();
+    });
+
+    expect(initRequests).toBe(1);
+  });
+
+  it("rebuilds server local-fallback heartbeat output from bounded visible review", async () => {
+    const middleMarker = "SERVER_FALLBACK_VISIBLE_REVIEW_MIDDLE";
+    const hugeReview = [
+      "# Server fallback review",
+      "Opening server fallback review state.",
+      ...Array.from({ length: 700 }, (_, index) =>
+        index === 350 ? middleMarker : `Server fallback detail ${index}`
+      ),
+      "Closing server fallback review state."
+    ].join("\n");
+    let heartbeatEvent: Record<string, unknown> | undefined;
+    let sentHeartbeatReview = "";
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/meetings" && method === "GET") {
+          return Response.json({ meetings: [] });
+        }
+        if (url.includes("/api/review-document/init")) {
+          return Response.json({
+            source: "pi",
+            markdown: hugeReview,
+            summary: "Initialized a large review."
+          });
+        }
+        if (url === "/api/meetings" && method === "POST") {
+          return Response.json(
+            {
+              id: "meeting-server-fallback-review",
+              title: "Server fallback review",
+              goal: "Keep server fallback visible markdown intact.",
+              startedAt: Date.now(),
+              updatedAt: Date.now(),
+              endedAt: null,
+              status: "active",
+              isPaused: false,
+              eventCount: 0,
+              meeting: {},
+              state: null,
+              latestReviewMarkdown: "",
+              latestReviewVersionId: null
+            },
+            { status: 201 }
+          );
+        }
+        if (url === "/api/heartbeat") {
+          const payload = JSON.parse(String(init?.body ?? "{}"));
+          sentHeartbeatReview = payload.currentReviewMarkdown;
+          return Response.json({
+            source: "local-fallback",
+            cards: [
+              {
+                id: "server-fallback-card",
+                kind: "heartbeat",
+                title: "Server fallback",
+                body: "Server fallback used compact markdown.",
+                priority: "medium"
+              }
+            ],
+            summary: "Server fallback ran.",
+            nextHeartbeatHint: "Continue.",
+            reviewMarkdown: `${payload.currentReviewMarkdown}\n\n### Server fallback`,
+            agendaActions: [],
+            uiActions: [],
+            ephemeralReminder: null,
+            adapterNotice: "Pi adapter fell back locally: auth missing"
+          });
+        }
+        if (url.includes("/events")) {
+          const event = JSON.parse(String(init?.body ?? "{}"));
+          if (event.type === "heartbeat_output") {
+            heartbeatEvent = event;
+          }
+          return Response.json({ id: "event-1" }, { status: 201 });
+        }
+        if (url.includes("/api/meetings/meeting-server-fallback-review")) {
+          return Response.json({ id: "meeting-server-fallback-review" });
+        }
+        return Response.json({});
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /run heartbeat/i }));
+    });
+
+    await waitFor(() => {
+      expect(heartbeatEvent).toBeDefined();
+    });
+    expect(sentHeartbeatReview).toContain("RoomPulse omitted middle review content");
+    const output = (heartbeatEvent?.payload as { output: { reviewMarkdown: string; adapterNotice?: string } })
+      .output;
+    expect(output.reviewMarkdown.length).toBeLessThanOrEqual(
+      MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH
+    );
+    expect(output.reviewMarkdown).not.toContain(middleMarker);
+    expect(output.reviewMarkdown).not.toContain(
+      "RoomPulse omitted middle review content"
+    );
+    expect(output.adapterNotice).toContain("auth missing");
+  });
+
   it("blocks local initial-review fallback when the server requires Pi", async () => {
     const fetchMock = vi.fn(
       async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -391,6 +1119,128 @@ describe("RoomPulseApp", () => {
         ([url, init]) => String(url) === "/api/meetings" && init?.method === "POST"
       )
     ).toBe(false);
+  });
+
+  it("blocks a successful local initial-review fallback in client strict mode", async () => {
+    process.env.NEXT_PUBLIC_ROOMPULSE_REQUIRE_PI = "1";
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/meetings" && method === "GET") {
+          return Response.json({ meetings: [] });
+        }
+        if (url.includes("/api/review-document/init")) {
+          return Response.json({
+            source: "local-fallback",
+            markdown: "# Local fallback",
+            summary: "Local fallback initialized the review.",
+            adapterNotice: "Codex auth missing"
+          });
+        }
+        if (url === "/api/meetings" && method === "POST") {
+          return Response.json({ id: "should-not-create" }, { status: 201 });
+        }
+        return Response.json({});
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /pi initial review required/i
+    );
+    expect(screen.queryByRole("button", { name: /run heartbeat/i }))
+      .not.toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) => String(url) === "/api/meetings" && init?.method === "POST"
+      )
+    ).toBe(false);
+  });
+
+  it("blocks a successful local heartbeat fallback in client strict mode", async () => {
+    process.env.NEXT_PUBLIC_ROOMPULSE_REQUIRE_PI = "1";
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/meetings" && method === "GET") {
+          return Response.json({ meetings: [] });
+        }
+        if (url.includes("/api/review-document/init")) {
+          return Response.json({
+            source: "pi",
+            markdown: "# Strict review",
+            summary: "Initialized through Pi."
+          });
+        }
+        if (url === "/api/meetings" && method === "POST") {
+          return Response.json(
+            {
+              id: "meeting-strict-heartbeat",
+              title: "Strict heartbeat",
+              goal: "Do not accept heartbeat fallback.",
+              startedAt: Date.now(),
+              updatedAt: Date.now(),
+              endedAt: null,
+              status: "active",
+              isPaused: false,
+              eventCount: 0,
+              meeting: {},
+              state: null,
+              latestReviewMarkdown: "",
+              latestReviewVersionId: null
+            },
+            { status: 201 }
+          );
+        }
+        if (url.includes("/api/heartbeat")) {
+          return Response.json({
+            source: "local-fallback",
+            cards: [
+              {
+                id: "fallback-card",
+                kind: "heartbeat",
+                title: "Local fallback",
+                body: "This fallback must not render in strict mode.",
+                priority: "medium"
+              }
+            ],
+            summary: "Local fallback heartbeat.",
+            nextHeartbeatHint: "Continue.",
+            reviewMarkdown: "# Local heartbeat fallback",
+            agendaActions: [],
+            uiActions: [],
+            ephemeralReminder: null,
+            adapterNotice: "Pi auth missing"
+          });
+        }
+        if (url.includes("/events")) {
+          return Response.json({ id: "event-1" }, { status: 201 });
+        }
+        return Response.json({});
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /run heartbeat/i }));
+    });
+
+    expect(await screen.findByText(/pi heartbeat required/i)).toBeVisible();
+    expect(screen.queryByText(/this fallback must not render/i))
+      .not.toBeInTheDocument();
   });
 
   it("versions the markdown produced by an update_review_document tool", async () => {
@@ -495,6 +1345,691 @@ describe("RoomPulseApp", () => {
         "Invite the quiet speaker before moving on."
       );
     });
+  });
+
+  it("normalizes heartbeat responses that omit optional action arrays", async () => {
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/meetings" && method === "GET") {
+          return Response.json({ meetings: [] });
+        }
+        if (url.includes("/api/review-document/init")) {
+          return Response.json({
+            source: "pi",
+            markdown: "# Initial review",
+            summary: "Initialized."
+          });
+        }
+        if (url === "/api/meetings" && method === "POST") {
+          return Response.json(
+            {
+              id: "meeting-minimal-heartbeat",
+              title: "Minimal heartbeat",
+              goal: "Handle route response shape drift.",
+              startedAt: Date.now(),
+              updatedAt: Date.now(),
+              endedAt: null,
+              status: "active",
+              isPaused: false,
+              eventCount: 0,
+              meeting: {},
+              state: null,
+              latestReviewMarkdown: "",
+              latestReviewVersionId: null
+            },
+            { status: 201 }
+          );
+        }
+        if (url.includes("/api/heartbeat")) {
+          return Response.json({
+            source: "pi",
+            cards: [
+              {
+                id: "minimal-card",
+                kind: "heartbeat",
+                title: "Minimal heartbeat",
+                body: "The route returned the core heartbeat fields only.",
+                priority: "medium"
+              }
+            ],
+            summary: "Minimal heartbeat applied.",
+            nextHeartbeatHint: "Continue.",
+            reviewMarkdown: "# Minimal heartbeat\n\nApplied."
+          });
+        }
+        if (url.includes("/events")) {
+          return Response.json({ id: "event-1" }, { status: 201 });
+        }
+        return Response.json({});
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /run heartbeat/i }));
+    });
+
+    expect(await screen.findByText(/the route returned the core heartbeat fields only/i))
+      .toBeVisible();
+    await waitFor(() => {
+      const heartbeatEvent = fetchMock.mock.calls
+        .filter(([url]) => String(url).includes("/events"))
+        .map(([, init]) => JSON.parse(String(init?.body ?? "{}")))
+        .find((event) => event.type === "heartbeat_output");
+      expect(heartbeatEvent?.payload.output.source).toBe("pi");
+      expect(heartbeatEvent?.payload.output.agendaActions).toEqual([]);
+      expect(heartbeatEvent?.payload.output.uiActions).toEqual([]);
+      expect(heartbeatEvent?.payload.output.reviewMarkdown).toContain(
+        "Minimal heartbeat"
+      );
+    });
+  });
+
+  it("caps oversized heartbeat response card lists before rendering and logging", async () => {
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/meetings" && method === "GET") {
+          return Response.json({ meetings: [] });
+        }
+        if (url.includes("/api/review-document/init")) {
+          return Response.json({
+            source: "pi",
+            markdown: "# Initial review",
+            summary: "Initialized."
+          });
+        }
+        if (url === "/api/meetings" && method === "POST") {
+          return Response.json(
+            {
+              id: "meeting-card-cap",
+              title: "Card cap",
+              goal: "Keep room display bounded.",
+              startedAt: Date.now(),
+              updatedAt: Date.now(),
+              endedAt: null,
+              status: "active",
+              isPaused: false,
+              eventCount: 0,
+              meeting: {},
+              state: null,
+              latestReviewMarkdown: "",
+              latestReviewVersionId: null
+            },
+            { status: 201 }
+          );
+        }
+        if (url.includes("/api/heartbeat")) {
+          return Response.json({
+            source: "pi",
+            cards: Array.from({ length: 12 }, (_, index) => ({
+              id: `card-${index + 1}`,
+              kind: "heartbeat",
+              title: `Card ${index + 1}`,
+              body: `Cue ${index + 1}.`,
+              priority: "medium"
+            })),
+            summary: "Too many cards.",
+            nextHeartbeatHint: "Continue.",
+            reviewMarkdown: "# Card cap\n\nApplied.",
+            agendaActions: [],
+            uiActions: []
+          });
+        }
+        if (url.includes("/events")) {
+          return Response.json({ id: "event-1" }, { status: 201 });
+        }
+        return Response.json({});
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /run heartbeat/i }));
+    });
+
+    expect(await screen.findByText("Card 5")).toBeVisible();
+    expect(screen.queryByText("Card 6")).not.toBeInTheDocument();
+    await waitFor(() => {
+      const heartbeatEvent = fetchMock.mock.calls
+        .filter(([url]) => String(url).includes("/events"))
+        .map(([, init]) => JSON.parse(String(init?.body ?? "{}")))
+        .find((event) => event.type === "heartbeat_output");
+      expect(heartbeatEvent?.payload.output.cards).toHaveLength(5);
+    });
+  });
+
+  it("caps oversized heartbeat response action lists before applying and logging", async () => {
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/meetings" && method === "GET") {
+          return Response.json({ meetings: [] });
+        }
+        if (url.includes("/api/review-document/init")) {
+          return Response.json({
+            source: "pi",
+            markdown: "# Initial review",
+            summary: "Initialized."
+          });
+        }
+        if (url === "/api/meetings" && method === "POST") {
+          return Response.json(
+            {
+              id: "meeting-action-cap",
+              title: "Action cap",
+              goal: "Keep heartbeat mutations bounded.",
+              startedAt: Date.now(),
+              updatedAt: Date.now(),
+              endedAt: null,
+              status: "active",
+              isPaused: false,
+              eventCount: 0,
+              meeting: {},
+              state: null,
+              latestReviewMarkdown: "",
+              latestReviewVersionId: null
+            },
+            { status: 201 }
+          );
+        }
+        if (url.includes("/api/heartbeat")) {
+          return Response.json({
+            source: "pi",
+            cards: [
+              {
+                id: "action-cap-card",
+                kind: "heartbeat",
+                title: "Action cap",
+                body: "The route returned too many mutation requests.",
+                priority: "medium"
+              }
+            ],
+            summary: "Too many actions.",
+            nextHeartbeatHint: "Continue.",
+            reviewMarkdown: "# Action cap\n\nApplied.",
+            agendaActions: Array.from(
+              { length: MAX_AGENDA_ITEMS + 5 },
+              (_, index) => ({
+                itemId: `agenda-${index + 1}`,
+                done: true,
+                reason: `Agenda reason ${index + 1}.`
+              })
+            ),
+            uiActions: Array.from({ length: 12 }, (_, index) => ({
+              tool: "send_room_reminder",
+              parameters: { message: `Reminder ${index + 1}` },
+              reason: `Reminder reason ${index + 1}.`
+            }))
+          });
+        }
+        if (url.includes("/events")) {
+          return Response.json({ id: "event-1" }, { status: 201 });
+        }
+        return Response.json({});
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /run heartbeat/i }));
+    });
+
+    expect(await screen.findByText("Reminder 8")).toBeVisible();
+    expect(screen.queryByText("Reminder 9")).not.toBeInTheDocument();
+    await waitFor(() => {
+      const heartbeatEvent = fetchMock.mock.calls
+        .filter(([url]) => String(url).includes("/events"))
+        .map(([, init]) => JSON.parse(String(init?.body ?? "{}")))
+        .find((event) => event.type === "heartbeat_output");
+      expect(heartbeatEvent?.payload.output.agendaActions).toHaveLength(
+        MAX_AGENDA_ITEMS
+      );
+      expect(heartbeatEvent?.payload.output.uiActions).toHaveLength(8);
+      expect(heartbeatEvent?.payload.output.ephemeralReminder).toBe("Reminder 8");
+    });
+  });
+
+  it("preserves late review and agenda updates before capping route actions", async () => {
+    const lateToolMarkdown = "# Late tool markdown\n\nThis update must survive.";
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/meetings" && method === "GET") {
+          return Response.json({ meetings: [] });
+        }
+        if (url.includes("/api/review-document/init")) {
+          return Response.json({
+            source: "pi",
+            markdown: "# Initial review",
+            summary: "Initialized."
+          });
+        }
+        if (url === "/api/meetings" && method === "POST") {
+          return Response.json(
+            {
+              id: "meeting-late-action-cap",
+              title: "Late action cap",
+              goal: "Preserve late review and agenda actions.",
+              startedAt: Date.now(),
+              updatedAt: Date.now(),
+              endedAt: null,
+              status: "active",
+              isPaused: false,
+              eventCount: 0,
+              meeting: {},
+              state: null,
+              latestReviewMarkdown: "",
+              latestReviewVersionId: null
+            },
+            { status: 201 }
+          );
+        }
+        if (url.includes("/api/heartbeat")) {
+          return Response.json({
+            source: "pi",
+            cards: [
+              {
+                id: "late-action-card",
+                kind: "heartbeat",
+                title: "Late actions",
+                body: "The route returned important late actions.",
+                priority: "medium"
+              }
+            ],
+            summary: "Late actions returned.",
+            nextHeartbeatHint: "Continue.",
+            reviewMarkdown: "# Stale route markdown",
+            agendaActions: [
+              {
+                itemId: "agenda-1",
+                done: true,
+                reason: "Early stale agenda state."
+              },
+              ...Array.from({ length: MAX_AGENDA_ITEMS }, (_, index) => ({
+                itemId: `overflow-${index + 1}`,
+                done: true,
+                reason: `Overflow agenda action ${index + 1}.`
+              })),
+              {
+                itemId: "agenda-1",
+                done: false,
+                reason: "Late agenda state should win."
+              }
+            ],
+            uiActions: [
+              ...Array.from({ length: 10 }, (_, index) => ({
+                tool: "send_room_reminder",
+                parameters: { message: `Reminder ${index + 1}` },
+                reason: `Reminder action ${index + 1}.`
+              })),
+              {
+                tool: "update_review_document",
+                parameters: { markdown: lateToolMarkdown },
+                reason: "Late review document should win."
+              }
+            ],
+            ephemeralReminder: null
+          });
+        }
+        if (url.includes("/events")) {
+          return Response.json({ id: "event-1" }, { status: 201 });
+        }
+        return Response.json({});
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    const agendaCheckbox = screen.getByLabelText(
+      /confirm the meeting goal/i
+    ) as HTMLInputElement;
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /run heartbeat/i }));
+    });
+
+    expect(await screen.findByText(/this update must survive/i)).toBeVisible();
+    expect(screen.queryByText(/stale route markdown/i)).not.toBeInTheDocument();
+    expect(agendaCheckbox.checked).toBe(false);
+    await waitFor(() => {
+      const heartbeatEvent = fetchMock.mock.calls
+        .filter(([url]) => String(url).includes("/events"))
+        .map(([, init]) => JSON.parse(String(init?.body ?? "{}")))
+        .find((event) => event.type === "heartbeat_output");
+      expect(heartbeatEvent?.payload.output.reviewMarkdown).toBe(lateToolMarkdown);
+      expect(
+        heartbeatEvent?.payload.output.agendaActions.find(
+          (action: { itemId: string }) => action.itemId === "agenda-1"
+        )?.done
+      ).toBe(false);
+      expect(heartbeatEvent?.payload.output.agendaActions).toHaveLength(
+        MAX_AGENDA_ITEMS
+      );
+      expect(heartbeatEvent?.payload.output.uiActions).toHaveLength(8);
+      expect(
+        heartbeatEvent?.payload.output.uiActions.some(
+          (action: { tool: string }) => action.tool === "update_review_document"
+        )
+      ).toBe(true);
+    });
+  });
+
+  it("caps oversized heartbeat response text before rendering and logging", async () => {
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/meetings" && method === "GET") {
+          return Response.json({ meetings: [] });
+        }
+        if (url.includes("/api/review-document/init")) {
+          return Response.json({
+            source: "pi",
+            markdown: "# Initial review",
+            summary: "Initialized."
+          });
+        }
+        if (url === "/api/meetings" && method === "POST") {
+          return Response.json(
+            {
+              id: "meeting-text-cap",
+              title: "Text cap",
+              goal: "Keep room-facing text bounded.",
+              startedAt: Date.now(),
+              updatedAt: Date.now(),
+              endedAt: null,
+              status: "active",
+              isPaused: false,
+              eventCount: 0,
+              meeting: {},
+              state: null,
+              latestReviewMarkdown: "",
+              latestReviewVersionId: null
+            },
+            { status: 201 }
+          );
+        }
+        if (url.includes("/api/heartbeat")) {
+          return Response.json({
+            source: "pi",
+            cards: [
+              {
+                id: "long-card",
+                kind: "heartbeat",
+                title: "T".repeat(400),
+                body: "B".repeat(1_000),
+                priority: "medium"
+              }
+            ],
+            summary: "S".repeat(1_000),
+            nextHeartbeatHint: "H".repeat(1_000),
+            reviewMarkdown: "# Text cap\n\nApplied.",
+            agendaActions: [
+              {
+                itemId: "agenda-1",
+                done: true,
+                reason: "A".repeat(1_000)
+              }
+            ],
+            uiActions: [
+              {
+                tool: "send_room_reminder",
+                parameters: { message: "M".repeat(1_000) },
+                reason: "R".repeat(1_000)
+              }
+            ],
+            ephemeralReminder: "E".repeat(1_000),
+            adapterNotice: "N".repeat(1_000)
+          });
+        }
+        if (url.includes("/events")) {
+          return Response.json({ id: "event-1" }, { status: 201 });
+        }
+        return Response.json({});
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /run heartbeat/i }));
+    });
+
+    await waitFor(() => {
+      const heartbeatEvent = fetchMock.mock.calls
+        .filter(([url]) => String(url).includes("/events"))
+        .map(([, init]) => JSON.parse(String(init?.body ?? "{}")))
+        .find((event) => event.type === "heartbeat_output");
+      expect(heartbeatEvent?.payload.output.cards[0].title).toHaveLength(280);
+      expect(heartbeatEvent?.payload.output.cards[0].body).toHaveLength(280);
+      expect(heartbeatEvent?.payload.output.summary).toHaveLength(500);
+      expect(heartbeatEvent?.payload.output.nextHeartbeatHint).toHaveLength(500);
+      expect(heartbeatEvent?.payload.output.agendaActions[0].reason).toHaveLength(
+        500
+      );
+      expect(heartbeatEvent?.payload.output.uiActions[0].reason).toHaveLength(500);
+      expect(
+        heartbeatEvent?.payload.output.uiActions[0].parameters.message
+      ).toHaveLength(500);
+      expect(heartbeatEvent?.payload.output.ephemeralReminder).toHaveLength(500);
+      expect(heartbeatEvent?.payload.output.adapterNotice).toHaveLength(500);
+    });
+  });
+
+  it("sends a compact current review document in heartbeat requests", async () => {
+    let heartbeatPayload: Record<string, unknown> | null = null;
+    const hugeReview = [
+      "# Huge review",
+      "",
+      "Opening context that should stay visible.",
+      "Middle detail.\n".repeat(900),
+      "Final decisions that should stay visible."
+    ].join("\n");
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/meetings" && method === "GET") {
+          return Response.json({ meetings: [] });
+        }
+        if (url.includes("/api/review-document/init")) {
+          return Response.json({
+            source: "pi",
+            markdown: hugeReview,
+            summary: "Initialized huge review."
+          });
+        }
+        if (url === "/api/meetings" && method === "POST") {
+          return Response.json(
+            {
+              id: "meeting-review-cap",
+              title: "Review cap",
+              goal: "Keep heartbeat requests bounded.",
+              startedAt: Date.now(),
+              updatedAt: Date.now(),
+              endedAt: null,
+              status: "active",
+              isPaused: false,
+              eventCount: 0,
+              meeting: {},
+              state: null,
+              latestReviewMarkdown: "",
+              latestReviewVersionId: null
+            },
+            { status: 201 }
+          );
+        }
+        if (url === "/api/heartbeat") {
+          heartbeatPayload = JSON.parse(String(init?.body ?? "{}"));
+          return Response.json({
+            source: "pi",
+            cards: [
+              {
+                id: "review-cap-card",
+                kind: "heartbeat",
+                title: "Reviewed compact document",
+                body: "The current review document was compact.",
+                priority: "medium"
+              }
+            ],
+            summary: "Reviewed compact document.",
+            nextHeartbeatHint: "Continue.",
+            reviewMarkdown: "# Review cap\n\nApplied.",
+            agendaActions: [],
+            uiActions: [],
+            ephemeralReminder: null
+          });
+        }
+        if (url.includes("/events")) {
+          return Response.json({ id: "event-1" }, { status: 201 });
+        }
+        return Response.json({});
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /run heartbeat/i }));
+    });
+
+    await waitFor(() => {
+      expect(typeof heartbeatPayload?.currentReviewMarkdown).toBe("string");
+    });
+    const sentReview = heartbeatPayload?.currentReviewMarkdown as string;
+    expect(sentReview.length).toBeLessThanOrEqual(4_000);
+    expect(sentReview).toContain("Opening context that should stay visible.");
+    expect(sentReview).toContain("Final decisions that should stay visible.");
+    expect(sentReview).toContain("RoomPulse omitted middle review content");
+    const sentVersions = heartbeatPayload?.reviewVersions as Array<{
+      markdown: string;
+    }>;
+    expect(sentVersions[0]?.markdown.length).toBeLessThanOrEqual(4_000);
+    expect(sentVersions[0]?.markdown).toContain(
+      "RoomPulse omitted middle review content"
+    );
+  });
+
+  it("creates unique review version ids for rapid heartbeat pulses in the same millisecond", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    let heartbeatCount = 0;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/meetings" && method === "GET") {
+          return Response.json({ meetings: [] });
+        }
+        if (url.includes("/api/review-document/init")) {
+          return Response.json({
+            source: "pi",
+            markdown: "# Initial review",
+            summary: "Initialized."
+          });
+        }
+        if (url === "/api/meetings" && method === "POST") {
+          return Response.json(
+            {
+              id: "meeting-rapid-heartbeats",
+              title: "Rapid heartbeats",
+              goal: "Persist every heartbeat review.",
+              startedAt: Date.now(),
+              updatedAt: Date.now(),
+              endedAt: null,
+              status: "active",
+              isPaused: false,
+              eventCount: 0,
+              meeting: {},
+              state: null,
+              latestReviewMarkdown: "",
+              latestReviewVersionId: null
+            },
+            { status: 201 }
+          );
+        }
+        if (url.includes("/api/heartbeat")) {
+          heartbeatCount += 1;
+          return Response.json({
+            source: "pi",
+            cards: [
+              {
+                id: `heartbeat-card-${heartbeatCount}`,
+                kind: "heartbeat",
+                title: `Heartbeat ${heartbeatCount}`,
+                body: "Review updated.",
+                priority: "medium"
+              }
+            ],
+            summary: `Heartbeat ${heartbeatCount}.`,
+            nextHeartbeatHint: "Continue.",
+            reviewMarkdown: `# Heartbeat ${heartbeatCount}`,
+            agendaActions: [],
+            uiActions: [],
+            ephemeralReminder: null
+          });
+        }
+        if (url.includes("/events")) {
+          return Response.json({ id: "event-1" }, { status: 201 });
+        }
+        return Response.json({});
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /run heartbeat/i }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /run heartbeat/i }));
+    });
+
+    await waitFor(() => {
+      const reviewIds = fetchMock.mock.calls
+        .filter(([url]) => String(url).includes("/events"))
+        .map(([, init]) => JSON.parse(String(init?.body ?? "{}")))
+        .filter((event) => event.type === "heartbeat_output")
+        .map((event) => event.payload.reviewVersionId);
+      expect(reviewIds).toHaveLength(2);
+      expect(new Set(reviewIds).size).toBe(2);
+    });
+    expect(screen.getByText(/3 versions/i)).toBeVisible();
   });
 
   it("creates unique ids for multiple agenda items added in one heartbeat", async () => {
@@ -670,6 +2205,87 @@ describe("RoomPulseApp", () => {
       within(nowDiscussing).getByRole("heading", { name: /new follow-up item/i })
     ).toBeVisible();
     expect(screen.queryByText(/^Original item$/i)).not.toBeInTheDocument();
+  });
+
+  it("does not log agenda updates for unknown agent agenda ids", async () => {
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/meetings" && method === "GET") {
+          return Response.json({ meetings: [] });
+        }
+        if (url.includes("/api/review-document/init")) {
+          return Response.json({
+            source: "pi",
+            markdown: "# Initial review",
+            summary: "Initialized."
+          });
+        }
+        if (url === "/api/meetings" && method === "POST") {
+          return Response.json(
+            {
+              id: "meeting-unknown-agenda-action",
+              title: "Unknown agenda action",
+              goal: "Ignore invalid agent agenda ids.",
+              startedAt: Date.now(),
+              updatedAt: Date.now(),
+              endedAt: null,
+              status: "active",
+              isPaused: false,
+              eventCount: 0,
+              meeting: {},
+              state: null,
+              latestReviewMarkdown: "",
+              latestReviewVersionId: null
+            },
+            { status: 201 }
+          );
+        }
+        if (url.includes("/api/heartbeat")) {
+          return Response.json({
+            source: "pi",
+            cards: [],
+            summary: "Invalid agenda action ignored.",
+            nextHeartbeatHint: "Continue.",
+            reviewMarkdown: "# Unknown agenda action",
+            agendaActions: [],
+            uiActions: [
+              {
+                tool: "set_agenda_item",
+                parameters: { itemId: "missing-agenda-id", done: true },
+                reason: "The agent guessed an agenda id."
+              }
+            ],
+            ephemeralReminder: null
+          });
+        }
+        if (url.includes("/events")) {
+          return Response.json({ id: "event-1" }, { status: 201 });
+        }
+        return Response.json({});
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /run heartbeat/i }));
+    });
+
+    await waitFor(() => {
+      const events = fetchMock.mock.calls
+        .filter(([url]) => String(url).includes("/events"))
+        .map(([, init]) => JSON.parse(String(init?.body ?? "{}")));
+      expect(events.some((event) => event.type === "heartbeat_output")).toBe(true);
+      expect(events.some((event) => event.type === "agenda_manual_update")).toBe(
+        false
+      );
+    });
   });
 
   it("creates unique ids when restoring the same review version repeatedly", async () => {
@@ -1220,6 +2836,97 @@ describe("RoomPulseApp", () => {
     expect(countdownValue).toBeVisible();
   });
 
+  it("runs an overdue heartbeat when the browser tab becomes active again", async () => {
+    let now = 1_700_000_000_000;
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    let heartbeatPayload: Record<string, unknown> | null = null;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/meetings" && method === "GET") {
+          return Response.json({ meetings: [] });
+        }
+        if (url.includes("/api/review-document/init")) {
+          return Response.json({
+            source: "pi",
+            markdown: "# Visibility heartbeat",
+            summary: "Initialized."
+          });
+        }
+        if (url === "/api/meetings" && method === "POST") {
+          return Response.json(
+            {
+              id: "visibility-session",
+              title: "Visibility heartbeat",
+              goal: "Catch up after background throttling.",
+              startedAt: now,
+              updatedAt: now,
+              endedAt: null,
+              status: "active",
+              isPaused: false,
+              eventCount: 0,
+              meeting: {},
+              state: null,
+              latestReviewMarkdown: "",
+              latestReviewVersionId: null
+            },
+            { status: 201 }
+          );
+        }
+        if (url === "/api/heartbeat") {
+          heartbeatPayload = JSON.parse(String(init?.body ?? "{}"));
+          return Response.json({
+            source: "pi",
+            cards: [
+              {
+                id: "visibility-card",
+                kind: "heartbeat",
+                title: "Caught up",
+                body: "Heartbeat ran when the tab became active.",
+                priority: "medium"
+              }
+            ],
+            summary: "Visibility heartbeat ran.",
+            nextHeartbeatHint: "Continue.",
+            reviewMarkdown: "# Visibility heartbeat\n\nCaught up.",
+            agendaActions: [],
+            uiActions: [],
+            ephemeralReminder: null
+          });
+        }
+        if (url.includes("/events")) {
+          return Response.json({ id: "event-1" }, { status: 201 });
+        }
+        return Response.json({});
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(
+      screen.getByRole("button", { name: /run heartbeat now/i })
+    ).toBeVisible();
+    expect(heartbeatPayload).toBeNull();
+
+    now += 46_000;
+    vi.setSystemTime(now);
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(heartbeatPayload?.now).toBe(now);
+  });
+
   it("checkpoints the current session before opening another saved meeting", async () => {
     const now = Date.now();
     const fetchMock = vi.fn(
@@ -1289,9 +2996,9 @@ describe("RoomPulseApp", () => {
               startedAt: now - 60_000,
               updatedAt: now,
               endedAt: null,
-              status: "paused",
-              isPaused: true,
-              eventCount: 2,
+              status: "active",
+              isPaused: false,
+              eventCount: 3,
               meeting: {
                 title: "Other active session",
                 goal: "Resume safely.",
@@ -1463,9 +3170,361 @@ describe("RoomPulseApp", () => {
     ).toBeVisible();
   });
 
+  it("does not start a new meeting when the current meeting log is unavailable", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/meetings" && method === "GET") {
+          return Response.json({ meetings: [] });
+        }
+        if (url.includes("/api/review-document/init")) {
+          return Response.json({
+            source: "pi",
+            markdown: "# Current session",
+            summary: "Initialized current session."
+          });
+        }
+        if (url === "/api/meetings" && method === "POST") {
+          return Response.json({ error: "disk unavailable" }, { status: 500 });
+        }
+        return Response.json({});
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(
+      screen.getByRole("heading", { name: /product readiness review/i })
+    ).toBeVisible();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /past meetings/i }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^new meeting$/i }));
+      await vi.advanceTimersByTimeAsync(2_600);
+    });
+
+    expect(
+      screen.getByRole("heading", { name: /product readiness review/i })
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: /start meeting/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps an in-flight heartbeat when new meeting checkpointing fails", async () => {
+    let resolveHeartbeat: ((response: Response) => void) | null = null;
+    let heartbeatSignal: AbortSignal | null = null;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/meetings" && method === "GET") {
+          return Response.json({ meetings: [] });
+        }
+        if (url.includes("/api/review-document/init")) {
+          return Response.json({
+            source: "pi",
+            markdown: "# Current session",
+            summary: "Initialized current session."
+          });
+        }
+        if (url === "/api/meetings" && method === "POST") {
+          return Response.json(
+            {
+              id: "current-session",
+              title: "Current session",
+              goal: "Checkpoint before leaving.",
+              startedAt: Date.now(),
+              updatedAt: Date.now(),
+              endedAt: null,
+              status: "active",
+              isPaused: false,
+              eventCount: 0,
+              meeting: {},
+              state: null,
+              latestReviewMarkdown: "",
+              latestReviewVersionId: null
+            },
+            { status: 201 }
+          );
+        }
+        if (url.includes("/api/heartbeat")) {
+          heartbeatSignal = init?.signal as AbortSignal;
+          return new Promise<Response>((resolve) => {
+            resolveHeartbeat = resolve;
+          });
+        }
+        if (url === "/api/meetings/current-session" && method === "PATCH") {
+          return Response.json({ error: "disk full" }, { status: 500 });
+        }
+        if (url.includes("/events")) {
+          return Response.json({ id: "event-1" }, { status: 201 });
+        }
+        return Response.json({});
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    expect(
+      await screen.findByRole("button", { name: /run heartbeat now/i })
+    ).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /run heartbeat now/i }));
+    });
+    await waitFor(() => expect(resolveHeartbeat).not.toBeNull());
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /past meetings/i }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^new meeting$/i }));
+    });
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url) === "/api/meetings/current-session" &&
+            init?.method === "PATCH"
+        )
+      ).toBe(true);
+    });
+    expect(heartbeatSignal?.aborted).toBe(false);
+
+    await act(async () => {
+      resolveHeartbeat?.(
+        Response.json({
+          source: "pi",
+          cards: [
+            {
+              id: "checkpoint-heartbeat",
+              kind: "heartbeat",
+              title: "Checkpoint heartbeat",
+              body: "This heartbeat still belongs to the active meeting.",
+              priority: "medium"
+            }
+          ],
+          summary: "Heartbeat survived checkpoint failure.",
+          nextHeartbeatHint: "Continue.",
+          reviewMarkdown: "# Current session\n\nHeartbeat survived.",
+          agendaActions: [],
+          uiActions: [],
+          ephemeralReminder: null
+        })
+      );
+      await Promise.resolve();
+    });
+
+    const reviewDocument = (
+      await screen.findByRole("heading", { name: /current session/i })
+    ).closest(".markdown-document");
+    expect(reviewDocument).not.toBeNull();
+    expect(
+      within(reviewDocument as HTMLElement).getByText(/^Heartbeat survived\.$/i)
+    ).toBeVisible();
+    expect(screen.getByRole("heading", { name: /product readiness review/i }))
+      .toBeVisible();
+  });
+
+  it("keeps an in-flight heartbeat when ending is blocked by a missing meeting log", async () => {
+    vi.useFakeTimers();
+    process.env.NEXT_PUBLIC_ROOMPULSE_PI_TIMEOUT_MS = "60000";
+    let resolveHeartbeat: ((response: Response) => void) | null = null;
+    let heartbeatSignal: AbortSignal | null = null;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/meetings" && method === "GET") {
+          return Response.json({ meetings: [] });
+        }
+        if (url.includes("/api/review-document/init")) {
+          return Response.json({
+            source: "pi",
+            markdown: "# Current session",
+            summary: "Initialized current session."
+          });
+        }
+        if (url === "/api/meetings" && method === "POST") {
+          return Response.json({ error: "disk unavailable" }, { status: 500 });
+        }
+        if (url.includes("/api/heartbeat")) {
+          heartbeatSignal = init?.signal as AbortSignal;
+          return new Promise<Response>((resolve) => {
+            resolveHeartbeat = resolve;
+          });
+        }
+        return Response.json({});
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(
+      screen.getByRole("button", { name: /run heartbeat now/i })
+    ).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /run heartbeat now/i }));
+      await Promise.resolve();
+    });
+    expect(resolveHeartbeat).not.toBeNull();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /end & review/i }));
+      await Promise.resolve();
+    });
+    expect(heartbeatSignal?.aborted).toBe(false);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_600);
+    });
+    expect(heartbeatSignal?.aborted).toBe(false);
+
+    await act(async () => {
+      resolveHeartbeat?.(
+        Response.json({
+          source: "pi",
+          cards: [
+            {
+              id: "end-blocked-heartbeat",
+              kind: "heartbeat",
+              title: "Still live",
+              body: "The meeting stayed active after the blocked end attempt.",
+              priority: "medium"
+            }
+          ],
+          summary: "Heartbeat survived blocked end.",
+          nextHeartbeatHint: "Continue.",
+          reviewMarkdown: "# Current session\n\nBlocked end heartbeat survived.",
+          agendaActions: [],
+          uiActions: [],
+          ephemeralReminder: null
+        })
+      );
+      await Promise.resolve();
+    });
+
+    const reviewDocument = screen
+      .getByRole("heading", { name: /current session/i })
+      .closest(".markdown-document");
+    expect(reviewDocument).not.toBeNull();
+    expect(
+      within(reviewDocument as HTMLElement).getByText(
+        /^Blocked end heartbeat survived\.$/i
+      )
+    ).toBeVisible();
+  });
+
+  it("deduplicates rapid end-session clicks before final checkpointing", async () => {
+    const eventTypes: string[] = [];
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/meetings" && method === "GET") {
+          return Response.json({ meetings: [] });
+        }
+        if (url.includes("/api/review-document/init")) {
+          return Response.json({
+            source: "pi",
+            markdown: "# Rapid end session",
+            summary: "Initialized rapid end session."
+          });
+        }
+        if (url === "/api/meetings" && method === "POST") {
+          return Response.json(
+            {
+              id: "rapid-end-session",
+              title: "Rapid end session",
+              goal: "End once.",
+              startedAt: Date.now(),
+              updatedAt: Date.now(),
+              endedAt: null,
+              status: "active",
+              isPaused: false,
+              eventCount: 0,
+              meeting: {},
+              state: null,
+              latestReviewMarkdown: "",
+              latestReviewVersionId: null
+            },
+            { status: 201 }
+          );
+        }
+        if (url.includes("/events")) {
+          const event = JSON.parse(String(init?.body ?? "{}")) as {
+            type?: string;
+          };
+          if (event.type) {
+            eventTypes.push(event.type);
+          }
+          return Response.json(
+            { id: `event-${eventTypes.length}` },
+            { status: 201 }
+          );
+        }
+        if (url === "/api/meetings/rapid-end-session" && method === "PATCH") {
+          return new Promise<Response>(() => {
+            // Keep navigation from firing so both rapid clicks can settle in place.
+          });
+        }
+        return Response.json({});
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    const endButton = await screen.findByRole("button", {
+      name: /end & review/i
+    });
+
+    await act(async () => {
+      fireEvent.click(endButton);
+      fireEvent.click(endButton);
+      for (let index = 0; index < 8; index += 1) {
+        await Promise.resolve();
+      }
+    });
+
+    expect(eventTypes.filter((type) => type === "meeting_ended")).toHaveLength(1);
+    expect(
+      fetchMock.mock.calls.filter(
+        ([url, init]) =>
+          String(url) === "/api/meetings/rapid-end-session" &&
+          init?.method === "PATCH"
+      )
+    ).toHaveLength(1);
+  });
+
   it("ignores stale heartbeat results after opening another saved meeting", async () => {
     const now = Date.now();
     let resolveHeartbeat: ((response: Response) => void) | null = null;
+    let heartbeatSignal: AbortSignal | null = null;
     const fetchMock = vi.fn(
       async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
@@ -1499,6 +3558,7 @@ describe("RoomPulseApp", () => {
           });
         }
         if (url === "/api/heartbeat") {
+          heartbeatSignal = init?.signal as AbortSignal;
           return new Promise<Response>((resolve) => {
             resolveHeartbeat = resolve;
           });
@@ -1597,6 +3657,7 @@ describe("RoomPulseApp", () => {
     expect(
       await screen.findByRole("heading", { name: /other active session/i })
     ).toBeVisible();
+    expect(heartbeatSignal?.aborted).toBe(true);
 
     await act(async () => {
       resolveHeartbeat?.(
@@ -1652,7 +3713,16 @@ describe("RoomPulseApp", () => {
         }
       ],
       currentReviewVersionId: "stale-review",
-      timeline: [],
+      timeline: [
+        {
+          id: "old-pulse",
+          timestamp: now - 1_000,
+          source: "pi",
+          cards: [],
+          summary: "Old autosaved intervention.",
+          reviewMarkdown: "# Stale review\n\nOld body"
+        }
+      ],
       lastHeartbeatAt: now - 1_000,
       nextHeartbeatAt: now + 30_000,
       meetingStartedAt: now - 60_000,
@@ -1694,15 +3764,41 @@ describe("RoomPulseApp", () => {
             startedAt: now - 60_000,
             updatedAt: now,
             endedAt: null,
-            status: "paused",
-            isPaused: true,
-            eventCount: 2,
+            status: "active",
+            isPaused: false,
+            eventCount: 3,
             meeting,
             state: staleState,
             latestReviewMarkdown: "# New review\n\nNew materialized body",
             latestReviewVersionId: "new-review"
           },
-          events: [],
+          events: [
+            {
+              id: "new-heartbeat-event",
+              type: "heartbeat_output",
+              timestamp: now,
+              payload: {
+                output: {
+                  source: "pi",
+                  cards: [
+                    {
+                      id: "new-card",
+                      kind: "participation",
+                      title: "Invite quiet voices",
+                      body: "One expected participant has not spoken.",
+                      priority: "medium"
+                    }
+                  ],
+                  summary: "New logged intervention.",
+                  nextHeartbeatHint: "Invite quieter voices.",
+                  reviewMarkdown: "# New review\n\nNew materialized body",
+                  agendaActions: [],
+                  uiActions: [],
+                  ephemeralReminder: "Invite quieter voices."
+                }
+              }
+            }
+          ],
           transcript: [],
           reviewVersions: [
             {
@@ -1730,10 +3826,172 @@ describe("RoomPulseApp", () => {
     });
 
     expect(await screen.findByText(/new materialized body/i)).toBeVisible();
+    expect(screen.getByText(/new logged intervention/i)).toBeVisible();
+    expect(screen.getByText(/invite quiet voices/i)).toBeVisible();
+    expect(screen.getByText(/heartbeat 2/i)).toBeVisible();
+    expect(screen.getByText(/meeting live/i)).toBeVisible();
+    expect(screen.getByRole("button", { name: /^pause$/i })).toBeVisible();
     expect(screen.queryByText(/old body/i)).not.toBeInTheDocument();
     expect(
       screen.getByRole("combobox", { name: /review versions/i })
     ).toHaveValue("new-review");
+  });
+
+  it("resumes the latest heartbeat review when review version rows are missing", async () => {
+    const now = Date.now();
+    const meeting = {
+      title: "Event-only review session",
+      goal: "Recover review markdown from heartbeat events.",
+      context: "",
+      agenda: [{ id: "a1", title: "Open", done: false }],
+      expectedParticipants: 1,
+      participants: [],
+      heartbeatIntervalSeconds: 30
+    };
+    const staleState = {
+      status: "paused",
+      meeting,
+      transcript: [],
+      reviewMarkdown: "# Event-only review session\n\nOld body",
+      reviewVersions: [],
+      currentReviewVersionId: "missing-old-review",
+      timeline: [],
+      lastHeartbeatAt: now - 90_000,
+      nextHeartbeatAt: now + 30_000,
+      meetingStartedAt: now - 120_000,
+      heartbeatCount: 1,
+      isPaused: true,
+      currentOutput: null,
+      activeAgendaItemId: "a1",
+      updatedAt: now - 90_000
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/meetings") {
+        return Response.json({
+          meetings: [
+            {
+              id: "event-only-review",
+              title: meeting.title,
+              goal: meeting.goal,
+              startedAt: now - 120_000,
+              updatedAt: now,
+              endedAt: null,
+              status: "paused",
+              isPaused: true,
+              eventCount: 2,
+              meeting,
+              state: staleState,
+              latestReviewMarkdown: "# Event-only review session\n\nOld body",
+              latestReviewVersionId: "missing-old-review"
+            }
+          ]
+        });
+      }
+      if (url === "/api/meetings/event-only-review") {
+        return Response.json({
+          metadata: {
+            id: "event-only-review",
+            title: meeting.title,
+            goal: meeting.goal,
+            startedAt: now - 120_000,
+            updatedAt: now,
+            endedAt: null,
+            status: "paused",
+            isPaused: true,
+            eventCount: 2,
+            meeting,
+            state: staleState,
+            latestReviewMarkdown: "# Event-only review session\n\nOld body",
+            latestReviewVersionId: "missing-old-review"
+          },
+          events: [
+            {
+              id: "event-1",
+              type: "meeting_started",
+              timestamp: now - 120_000,
+              payload: { meeting }
+            },
+            {
+              id: "event-2",
+              type: "heartbeat_output",
+              timestamp: now - 60_000,
+              payload: {
+                reviewVersionId: "event-review-1",
+                output: {
+                  source: "pi",
+                  cards: [
+                    {
+                      id: "event-card-1",
+                      kind: "heartbeat",
+                      title: "Earlier event review",
+                      body: "The event log has an earlier recoverable review.",
+                      priority: "medium"
+                    }
+                  ],
+                  summary: "Earlier event review.",
+                  nextHeartbeatHint: "Continue.",
+                  reviewMarkdown:
+                    "# Event-only review session\n\nEarlier heartbeat event.",
+                  agendaActions: [],
+                  uiActions: [],
+                  ephemeralReminder: null
+                }
+              }
+            },
+            {
+              id: "event-3",
+              type: "heartbeat_output",
+              timestamp: now - 30_000,
+              payload: {
+                reviewVersionId: "event-review-2",
+                output: {
+                  source: "pi",
+                  cards: [
+                    {
+                      id: "event-card",
+                      kind: "heartbeat",
+                      title: "Recovered event review",
+                      body: "The heartbeat event has the latest review body.",
+                      priority: "medium"
+                    }
+                  ],
+                  summary: "Recovered event review.",
+                  nextHeartbeatHint: "Continue.",
+                  reviewMarkdown:
+                    "# Event-only review session\n\nRecovered from heartbeat event.",
+                  agendaActions: [],
+                  uiActions: [],
+                  ephemeralReminder: null
+                }
+              }
+            }
+          ],
+          transcript: [],
+          reviewVersions: []
+        });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    expect(await screen.findByText(/event-only review session/i)).toBeVisible();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^resume$/i }));
+    });
+
+    expect(await screen.findByText(/recovered from heartbeat event/i)).toBeVisible();
+    expect(screen.queryByText(/old body/i)).not.toBeInTheDocument();
+    const versionSelect = screen.getByRole("combobox", {
+      name: /review versions/i
+    });
+    expect(versionSelect).toHaveValue("event-review-2");
+    expect(
+      within(versionSelect)
+        .getAllByRole("option")
+        .map((option) => option.getAttribute("value"))
+    ).toEqual(["event-review-2", "event-review-1"]);
   });
 
   it("resumes metadata-only reviews with a selectable fallback version id", async () => {
@@ -1962,6 +4220,418 @@ describe("RoomPulseApp", () => {
     await waitFor(() => {
       expect(heartbeatPayload?.lastHeartbeatAt).toBe(lastHeartbeatAt);
     });
+  });
+
+  it("resumes stateless sessions with agenda state from heartbeat events", async () => {
+    const now = Date.now();
+    const meeting = {
+      title: "Stateless agenda resume",
+      goal: "Keep agenda progress after restore.",
+      context: "",
+      agenda: [
+        { id: "a1", title: "Confirm scope", done: false },
+        { id: "a2", title: "Assign owner", done: false }
+      ],
+      expectedParticipants: 1,
+      participants: [],
+      heartbeatIntervalSeconds: 30
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url === "/api/meetings") {
+        return Response.json({
+          meetings: [
+            {
+              id: "stateless-agenda-session",
+              title: meeting.title,
+              goal: meeting.goal,
+              startedAt: now - 120_000,
+              updatedAt: now,
+              endedAt: null,
+              status: "active",
+              isPaused: false,
+              eventCount: 2,
+              meeting,
+              state: null,
+              latestReviewMarkdown: "# Stateless agenda resume",
+              latestReviewVersionId: "review-1"
+            }
+          ]
+        });
+      }
+      if (url === "/api/meetings/stateless-agenda-session") {
+        if (method === "PATCH") {
+          return Response.json({ id: "stateless-agenda-session" });
+        }
+        return Response.json({
+          metadata: {
+            id: "stateless-agenda-session",
+            title: meeting.title,
+            goal: meeting.goal,
+            startedAt: now - 120_000,
+            updatedAt: now,
+            endedAt: null,
+            status: "active",
+            isPaused: false,
+            eventCount: 2,
+            meeting,
+            state: null,
+            latestReviewMarkdown: "# Stateless agenda resume",
+            latestReviewVersionId: "review-1"
+          },
+          events: [
+            {
+              id: "event-1",
+              type: "meeting_started",
+              timestamp: now - 120_000,
+              payload: { meeting }
+            },
+            {
+              id: "event-2",
+              type: "heartbeat_output",
+              timestamp: now - 60_000,
+              payload: {
+                reviewVersionId: "review-1",
+                output: {
+                  source: "pi",
+                  summary: "Scope confirmed.",
+                  reviewMarkdown: "# Stateless agenda resume",
+                  agendaActions: [
+                    {
+                      itemId: "a1",
+                      done: true,
+                      reason: "The room confirmed scope."
+                    }
+                  ],
+                  uiActions: [],
+                  ephemeralReminder: null
+                }
+              }
+            }
+          ],
+          transcript: [],
+          reviewVersions: [
+            {
+              id: "review-1",
+              timestamp: now - 60_000,
+              source: "pi",
+              markdown: "# Stateless agenda resume",
+              summary: "Scope confirmed."
+            }
+          ]
+        });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    expect(await screen.findByText(/stateless agenda resume/i)).toBeVisible();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^resume$/i }));
+    });
+
+    expect(
+      await screen.findByRole("button", { name: /run heartbeat now/i })
+    ).toBeVisible();
+    expect(
+      screen.getByLabelText(/confirm scope/i) as HTMLInputElement
+    ).toBeChecked();
+    expect(screen.getByRole("heading", { name: /assign owner/i })).toBeVisible();
+  });
+
+  it("resumes stale autosaved sessions with newer agenda state from heartbeat events", async () => {
+    const now = Date.now();
+    const meeting = {
+      title: "Stale agenda autosave",
+      goal: "Prefer logged agenda progress over stale autosave.",
+      context: "",
+      agenda: [
+        { id: "a1", title: "Confirm scope", done: false },
+        { id: "a2", title: "Assign owner", done: false }
+      ],
+      expectedParticipants: 1,
+      participants: [],
+      heartbeatIntervalSeconds: 30
+    };
+    const staleState = {
+      status: "active",
+      meeting,
+      transcript: [],
+      reviewMarkdown: "# Stale agenda autosave",
+      reviewVersions: [
+        {
+          id: "old-review",
+          timestamp: now - 90_000,
+          source: "pi",
+          markdown: "# Stale agenda autosave",
+          summary: "Old autosave."
+        }
+      ],
+      currentReviewVersionId: "old-review",
+      timeline: [],
+      lastHeartbeatAt: now - 90_000,
+      nextHeartbeatAt: now - 60_000,
+      meetingStartedAt: now - 120_000,
+      heartbeatCount: 1,
+      isPaused: false,
+      currentOutput: null,
+      activeAgendaItemId: "a1",
+      updatedAt: now - 90_000
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url === "/api/meetings") {
+        return Response.json({
+          meetings: [
+            {
+              id: "stale-agenda-autosave",
+              title: meeting.title,
+              goal: meeting.goal,
+              startedAt: now - 120_000,
+              updatedAt: now,
+              endedAt: null,
+              status: "active",
+              isPaused: false,
+              eventCount: 2,
+              meeting,
+              state: staleState,
+              latestReviewMarkdown: "# Stale agenda autosave\n\nScope confirmed.",
+              latestReviewVersionId: "new-review"
+            }
+          ]
+        });
+      }
+      if (url === "/api/meetings/stale-agenda-autosave") {
+        if (method === "PATCH") {
+          return Response.json({ id: "stale-agenda-autosave" });
+        }
+        return Response.json({
+          metadata: {
+            id: "stale-agenda-autosave",
+            title: meeting.title,
+            goal: meeting.goal,
+            startedAt: now - 120_000,
+            updatedAt: now,
+            endedAt: null,
+            status: "active",
+            isPaused: false,
+            eventCount: 2,
+            meeting,
+            state: staleState,
+            latestReviewMarkdown: "# Stale agenda autosave\n\nScope confirmed.",
+            latestReviewVersionId: "new-review"
+          },
+          events: [
+            {
+              id: "event-1",
+              type: "meeting_started",
+              timestamp: now - 120_000,
+              payload: { meeting }
+            },
+            {
+              id: "event-2",
+              type: "heartbeat_output",
+              timestamp: now - 60_000,
+              payload: {
+                reviewVersionId: "new-review",
+                output: {
+                  source: "pi",
+                  cards: [
+                    {
+                      id: "card-1",
+                      kind: "agenda",
+                      title: "Scope confirmed",
+                      body: "The room confirmed the first agenda item.",
+                      priority: "medium"
+                    }
+                  ],
+                  summary: "Scope confirmed.",
+                  nextHeartbeatHint: "Move to owner assignment.",
+                  reviewMarkdown: "# Stale agenda autosave\n\nScope confirmed.",
+                  agendaActions: [
+                    {
+                      itemId: "a1",
+                      done: true,
+                      reason: "The room confirmed scope after the last autosave."
+                    }
+                  ],
+                  uiActions: [],
+                  ephemeralReminder: null
+                }
+              }
+            }
+          ],
+          transcript: [],
+          reviewVersions: [
+            {
+              id: "new-review",
+              timestamp: now - 60_000,
+              source: "pi",
+              markdown: "# Stale agenda autosave\n\nScope confirmed.",
+              summary: "Scope confirmed."
+            }
+          ]
+        });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    expect(await screen.findByText(/stale agenda autosave/i)).toBeVisible();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^resume$/i }));
+    });
+
+    expect(
+      await screen.findByRole("button", { name: /run heartbeat now/i })
+    ).toBeVisible();
+    expect(
+      screen.getByLabelText(/confirm scope/i) as HTMLInputElement
+    ).toBeChecked();
+    expect(screen.getByRole("heading", { name: /assign owner/i })).toBeVisible();
+  });
+
+  it("sends bounded observed speaker labels from restored transcript state", async () => {
+    const now = Date.now();
+    const meeting = {
+      title: "Overclustered resume",
+      goal: "Keep heartbeat payloads compact.",
+      context: "",
+      agenda: [{ id: "a1", title: "Open", done: false }],
+      expectedParticipants: MAX_EXPECTED_PARTICIPANTS,
+      participants: [],
+      heartbeatIntervalSeconds: 30
+    };
+    let heartbeatPayload: Record<string, unknown> | null = null;
+    const transcript = Array.from(
+      { length: MAX_EXPECTED_PARTICIPANTS + 8 },
+      (_, index) => ({
+        id: `line-${index + 1}`,
+        speakerId: `speaker-${index + 1}`,
+        speakerLabel: `Speaker ${index + 1}`,
+        text: `Line ${index + 1}.`,
+        timestamp: now - 10_000 + index,
+        source: "speech",
+        confidence: 0.9
+      })
+    );
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url === "/api/meetings") {
+        return Response.json({
+          meetings: [
+            {
+              id: "overclustered-session",
+              title: meeting.title,
+              goal: meeting.goal,
+              startedAt: now - 60_000,
+              updatedAt: now,
+              endedAt: null,
+              status: "active",
+              isPaused: false,
+              eventCount: 1,
+              meeting,
+              state: null,
+              latestReviewMarkdown: "# Overclustered resume",
+              latestReviewVersionId: "review-1"
+            }
+          ]
+        });
+      }
+      if (url === "/api/meetings/overclustered-session") {
+        if (method === "PATCH") {
+          return Response.json({ id: "overclustered-session" });
+        }
+        return Response.json({
+          metadata: {
+            id: "overclustered-session",
+            title: meeting.title,
+            goal: meeting.goal,
+            startedAt: now - 60_000,
+            updatedAt: now,
+            endedAt: null,
+            status: "active",
+            isPaused: false,
+            eventCount: 1,
+            meeting,
+            state: null,
+            latestReviewMarkdown: "# Overclustered resume",
+            latestReviewVersionId: "review-1"
+          },
+          events: [
+            {
+              id: "event-1",
+              type: "meeting_started",
+              timestamp: now - 60_000,
+              payload: { meeting }
+            }
+          ],
+          transcript,
+          reviewVersions: [
+            {
+              id: "review-1",
+              timestamp: now - 60_000,
+              source: "initial",
+              markdown: "# Overclustered resume",
+              summary: "Initial."
+            }
+          ]
+        });
+      }
+      if (url === "/api/heartbeat") {
+        heartbeatPayload = JSON.parse(String(init?.body ?? "{}"));
+        return Response.json({
+          source: "pi",
+          cards: [
+            {
+              id: "card-1",
+              kind: "heartbeat",
+              title: "Reviewed",
+              body: "Reviewed compact speaker state.",
+              priority: "medium"
+            }
+          ],
+          summary: "Reviewed compact speaker state.",
+          nextHeartbeatHint: "Continue.",
+          reviewMarkdown: "# Overclustered resume\n\nReviewed.",
+          agendaActions: [],
+          uiActions: [],
+          ephemeralReminder: null
+        });
+      }
+      if (url.includes("/events")) {
+        return Response.json({ id: "event-1" }, { status: 201 });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    expect(await screen.findByText(/overclustered resume/i)).toBeVisible();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^resume$/i }));
+    });
+    expect(
+      await screen.findByRole("button", { name: /run heartbeat now/i })
+    ).toBeVisible();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /run heartbeat now/i }));
+    });
+
+    await waitFor(() => {
+      expect(heartbeatPayload?.observedSpeakerLabels).toHaveLength(
+        MAX_EXPECTED_PARTICIPANTS
+      );
+    });
+    expect(heartbeatPayload?.observedSpeakerLabels).not.toContain("Speaker 25");
+    expect(
+      within(screen.getByLabelText(/participation/i)).queryByText("Speaker 25")
+    ).not.toBeInTheDocument();
   });
 
   it("retries queued meeting log events after a transient event write failure", async () => {

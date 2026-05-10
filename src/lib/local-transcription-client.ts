@@ -1,4 +1,12 @@
-import { MAX_EXPECTED_PARTICIPANTS } from "./facilitator";
+import {
+  MAX_FACILITATOR_OUTPUT_TEXT_LENGTH,
+  MAX_EXPECTED_PARTICIPANTS,
+  MAX_HEARTBEAT_INPUT_TEXT_LENGTH
+} from "./facilitator";
+import {
+  MAX_OBSERVED_SPEAKER_LABELS,
+  isSafeSpeakerLabel
+} from "./speaker-tracker";
 
 export interface LocalTranscriptSegment {
   id: string;
@@ -56,6 +64,7 @@ export class LocalTranscriptionClient {
   private processor: ScriptProcessorNode | null = null;
   private silentGain: GainNode | null = null;
   private flushResolver: (() => void) | null = null;
+  private stopped = false;
 
   constructor(options: LocalTranscriptionClientOptions) {
     this.url = options.url ?? getDefaultTranscriptionUrl();
@@ -87,6 +96,10 @@ export class LocalTranscriptionClient {
           autoGainControl: true
         }
       });
+      this.throwIfStoppedDuringStart();
+      this.stream.getTracks().forEach((track) => {
+        track.onended = () => this.handleInputDeviceEnded();
+      });
       this.onStatus({
         status: "mic-granted",
         message: "Microphone permission granted; opening local transcription stream"
@@ -97,14 +110,15 @@ export class LocalTranscriptionClient {
         message: "Connecting to local transcription service"
       });
       this.socket = await openSocket(this.url);
-      this.socket.binaryType = "arraybuffer";
-      this.socket.onmessage = (event) => this.handleMessage(event);
-      this.socket.onerror = () => {
-        this.onError("Local transcription WebSocket error");
+      this.throwIfStoppedDuringStart();
+      const socket = this.socket;
+      socket.binaryType = "arraybuffer";
+      socket.onmessage = (event) => this.handleMessage(event);
+      socket.onerror = () => {
+        this.handleSocketError(socket);
       };
-      this.socket.onclose = () => {
-        this.resolveFlushWaiter();
-        this.onStatus({ status: "closed", message: "Local transcription stopped" });
+      socket.onclose = () => {
+        this.handleSocketClose(socket);
       };
 
       this.audioContext = new AudioContextCtor();
@@ -130,7 +144,8 @@ export class LocalTranscriptionClient {
       this.source.connect(this.processor);
       this.processor.connect(this.silentGain);
       this.silentGain.connect(this.audioContext.destination);
-      this.socket.send(
+      this.throwIfStoppedDuringStart();
+      socket.send(
         JSON.stringify(
           createResetControlMessage(
             this.expectedParticipants,
@@ -149,6 +164,7 @@ export class LocalTranscriptionClient {
   }
 
   async stop(): Promise<void> {
+    this.stopped = true;
     this.disconnectAudioGraph();
     try {
       await this.flushOpenSocket();
@@ -163,15 +179,29 @@ export class LocalTranscriptionClient {
     if (socket?.readyState !== WebSocket.OPEN) {
       return;
     }
-    socket.send(
-      JSON.stringify(createSpeakerConfigControlMessage(expectedParticipants))
-    );
+    try {
+      socket.send(
+        JSON.stringify(createSpeakerConfigControlMessage(expectedParticipants))
+      );
+    } catch {
+      this.onError("Local transcription speaker cap reconfigure failed");
+    }
   }
 
   stopImmediately(): void {
+    this.stopped = true;
     this.resolveFlushWaiter();
     this.disconnectAudioGraph();
     this.closeResources();
+  }
+
+  private throwIfStoppedDuringStart(): void {
+    if (!this.stopped) {
+      return;
+    }
+
+    this.stopImmediately();
+    throw new Error("Microphone start cancelled.");
   }
 
   private disconnectAudioGraph(): void {
@@ -184,16 +214,21 @@ export class LocalTranscriptionClient {
   }
 
   private closeResources(): void {
+    this.closeBrowserAudioResources();
+    const socket = this.socket;
+    this.socket = null;
+    closeSocketQuietly(socket);
+  }
+
+  private closeBrowserAudioResources(): void {
     this.stream?.getTracks().forEach((track) => {
+      track.onended = null;
       track.stop();
     });
     this.stream = null;
 
     void this.audioContext?.close();
     this.audioContext = null;
-
-    this.socket?.close();
-    this.socket = null;
   }
 
   private async flushOpenSocket(): Promise<void> {
@@ -268,7 +303,64 @@ export class LocalTranscriptionClient {
       this.onError("Local transcription service sent an unknown message");
       return;
     }
-    this.onError(message.message);
+    this.onError(capText(message.message, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH));
+  }
+
+  private handleSocketClose(socket: WebSocket): void {
+    const shouldNotify =
+      this.socket === socket ||
+      this.stream !== null ||
+      this.audioContext !== null ||
+      this.processor !== null ||
+      this.source !== null ||
+      this.silentGain !== null;
+    this.resolveFlushWaiter();
+    this.disconnectAudioGraph();
+    this.closeBrowserAudioResources();
+    if (this.socket === socket) {
+      this.socket = null;
+    }
+    if (shouldNotify) {
+      this.onStatus({ status: "closed", message: "Local transcription stopped" });
+    }
+  }
+
+  private handleSocketError(socket: WebSocket): void {
+    if (!this.isActiveSocketEvent(socket)) {
+      return;
+    }
+    this.onError("Local transcription WebSocket error");
+    try {
+      socket.close();
+    } catch {
+      // The socket may already be closing; resource cleanup still needs to run.
+    }
+    this.handleSocketClose(socket);
+  }
+
+  private isActiveSocketEvent(socket: WebSocket): boolean {
+    return (
+      this.socket === socket ||
+      this.stream !== null ||
+      this.audioContext !== null ||
+      this.processor !== null ||
+      this.source !== null ||
+      this.silentGain !== null
+    );
+  }
+
+  private handleInputDeviceEnded(): void {
+    const socket = this.socket;
+    this.onError("Browser microphone input ended.");
+    closeSocketQuietly(socket);
+    if (socket) {
+      this.handleSocketClose(socket);
+      return;
+    }
+
+    this.disconnectAudioGraph();
+    this.closeBrowserAudioResources();
+    this.onStatus({ status: "closed", message: "Local transcription stopped" });
   }
 
   private resolveFlushWaiter(): void {
@@ -357,7 +449,7 @@ function openSocket(url: string): Promise<WebSocket> {
         return;
       }
       settled = true;
-      socket.close();
+      closeSocketQuietly(socket);
       reject(new Error(`Could not connect to ${url}`));
     }, SOCKET_CONNECT_TIMEOUT_MS);
 
@@ -378,6 +470,14 @@ function openSocket(url: string): Promise<WebSocket> {
       reject(new Error(`Could not connect to ${url}`));
     };
   });
+}
+
+function closeSocketQuietly(socket: WebSocket | null): void {
+  try {
+    socket?.close();
+  } catch {
+    // Cleanup paths must not fail if the browser socket is already invalid.
+  }
 }
 
 function getAudioContextConstructor(): AudioContextConstructor | null {
@@ -437,11 +537,10 @@ function isTranscriptSegment(
   return (
     isNonEmptyString(value.id) &&
     isNonEmptyString(value.speakerId) &&
-    isNonEmptyString(value.speakerLabel) &&
-    typeof value.text === "string" &&
+    isSafeSpeakerLabel(value.speakerLabel) &&
+    isBoundedString(value.text, MAX_HEARTBEAT_INPUT_TEXT_LENGTH) &&
     isConfidence(value.confidence) &&
-    Array.isArray(value.observedSpeakerLabels) &&
-    value.observedSpeakerLabels.every(isNonEmptyString)
+    isSafeObservedSpeakerLabels(value.observedSpeakerLabels)
   );
 }
 
@@ -452,10 +551,17 @@ function isEngineStatus(
   LocalTranscriptionStatus {
   return (
     isNonEmptyString(value.status) &&
-    typeof value.message === "string" &&
+    isBoundedString(value.message, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
     (value.observedSpeakerLabels === undefined ||
-      (Array.isArray(value.observedSpeakerLabels) &&
-        value.observedSpeakerLabels.every(isNonEmptyString)))
+      isSafeObservedSpeakerLabels(value.observedSpeakerLabels))
+  );
+}
+
+function isSafeObservedSpeakerLabels(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= MAX_OBSERVED_SPEAKER_LABELS &&
+    value.every(isSafeSpeakerLabel)
   );
 }
 
@@ -470,6 +576,14 @@ function isConfidence(value: unknown): value is number {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function isBoundedString(value: unknown, maxLength: number): value is string {
+  return typeof value === "string" && value.length <= maxLength;
+}
+
+function capText(value: string, maxLength: number): string {
+  return value.length <= maxLength ? value : value.slice(0, maxLength);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

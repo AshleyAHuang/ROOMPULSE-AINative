@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import MarkdownDocument from "@/app/MarkdownDocument";
 import type { MeetingLogSnapshot } from "@/lib/meeting-log-store";
+import { normalizeSpeakerLabel } from "@/lib/speaker-tracker";
 
 export default function MeetingReviewClient({
   snapshot
@@ -295,6 +296,7 @@ function formatElapsed(totalSeconds: number): string {
 }
 
 function speakerNumber(label: string): number {
-  const match = label.match(/\d+/);
-  return match ? Number(match[0]) : 1;
+  const canonicalLabel = normalizeSpeakerLabel(label);
+  const match = canonicalLabel?.match(/^Speaker ([1-9]\d*)$/);
+  return match ? Number(match[1]) : 1;
 }
