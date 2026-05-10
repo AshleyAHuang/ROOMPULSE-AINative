@@ -192,6 +192,9 @@ export class LocalTranscriptionClient {
 
   configureExpectedParticipants(expectedParticipants: number): void {
     this.expectedParticipants = expectedParticipants;
+    if (this.stopped) {
+      return;
+    }
     const socket = this.socket;
     if (socket?.readyState !== WebSocket.OPEN) {
       return;

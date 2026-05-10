@@ -146,6 +146,56 @@ describe("local transcription audio utilities", () => {
     expect(closeAudio).toHaveBeenCalledOnce();
   });
 
+  it("does not reconfigure the speaker cap after stop has begun", async () => {
+    const send = vi.fn();
+    const closeSocket = vi.fn();
+    const closeAudio = vi.fn();
+    const client = new LocalTranscriptionClient({
+      expectedParticipants: 2,
+      onSegment: vi.fn(),
+      onStatus: vi.fn(),
+      onError: vi.fn()
+    });
+    Object.assign(client as unknown as Record<string, unknown>, {
+      socket: {
+        readyState: WebSocket.OPEN,
+        send,
+        close: closeSocket
+      },
+      stream: {
+        getTracks: () => []
+      },
+      audioContext: {
+        close: closeAudio
+      }
+    });
+    const handleMessage = (
+      client as unknown as {
+        handleMessage: (event: MessageEvent) => void;
+      }
+    ).handleMessage.bind(client);
+
+    const stopPromise = client.stop();
+    await Promise.resolve();
+    expect(send).toHaveBeenCalledWith(JSON.stringify({ type: "flush" }));
+
+    send.mockClear();
+    client.configureExpectedParticipants(6);
+
+    expect(send).not.toHaveBeenCalled();
+
+    handleMessage({
+      data: JSON.stringify({
+        type: "engine_status",
+        status: "flushed",
+        message: "Transcription buffer flushed"
+      })
+    } as MessageEvent);
+    await stopPromise;
+    expect(closeSocket).toHaveBeenCalledOnce();
+    expect(closeAudio).toHaveBeenCalledOnce();
+  });
+
   it("does not open the transcription socket after mic start is stopped while permission is pending", async () => {
     let resolveUserMedia: (stream: MediaStream) => void = () => undefined;
     const stopTrack = vi.fn();
