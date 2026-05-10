@@ -71,4 +71,21 @@ describe("SpeakerTracker", () => {
       observedLabels: ["Speaker 1"]
     });
   });
+
+  it("normalizes impossible expected participant counts before computing gaps", () => {
+    expect(createParticipationStatus(Number.NaN, ["Speaker 1"])).toMatchObject({
+      expected: 0,
+      observed: 1,
+      missingCount: 0,
+      needsNudge: false,
+      reminder: null
+    });
+    expect(createParticipationStatus(Number.POSITIVE_INFINITY, [])).toMatchObject({
+      expected: 0,
+      observed: 0,
+      missingCount: 0,
+      needsNudge: false,
+      reminder: null
+    });
+  });
 });

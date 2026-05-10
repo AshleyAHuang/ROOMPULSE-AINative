@@ -126,7 +126,9 @@ export function createParticipationStatus(
   expectedParticipants: number,
   observedLabels: string[]
 ): ParticipationStatus {
-  const expected = Math.max(0, Math.floor(expectedParticipants));
+  const expected = Number.isFinite(expectedParticipants)
+    ? Math.max(0, Math.floor(expectedParticipants))
+    : 0;
   const uniqueLabels = Array.from(
     new Set(
       observedLabels
