@@ -1298,6 +1298,7 @@ export default function RoomPulseApp() {
     try {
       setMicStatus("Requesting browser microphone permission");
       const client = new LocalTranscriptionClient({
+        expectedParticipants: meeting.expectedParticipants,
         onSegment: (segment) => {
           if (micStartTokenRef.current !== startToken) {
             return;

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  createResetControlMessage,
   downsample,
   floatToPcm16,
   LocalTranscriptionClient
@@ -31,6 +32,15 @@ describe("local transcription audio utilities", () => {
     const pcm = new Int16Array(buffer);
 
     expect(Array.from(pcm)).toEqual([-32768, 0, 32767]);
+  });
+
+  it("sends expected participant count as the live speaker cluster cap", () => {
+    expect(createResetControlMessage(4)).toEqual({
+      type: "reset",
+      maxSpeakerClusters: 4
+    });
+    expect(createResetControlMessage(Number.NaN)).toEqual({ type: "reset" });
+    expect(createResetControlMessage(0)).toEqual({ type: "reset" });
   });
 
   it("rejects malformed transcript socket messages before updating the UI", () => {

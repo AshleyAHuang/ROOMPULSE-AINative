@@ -36,8 +36,10 @@ ROOMPULSE_SPEAKER_EMBEDDING_BACKEND=speechbrain \
 Hugging Face token is configured, then SpeechBrain, then Resemblyzer, then the
 built-in DSP embedder. Explicit neural selections accept common aliases such as
 `pyannote-embedding` and `speechbrain-ecapa`, and fall back to DSP per segment
-if the selected neural encoder cannot produce a valid embedding. Use `dsp` for
-the fastest dependency-free local path.
+if the selected neural encoder cannot produce a valid embedding. Explicit
+neural backends circuit-break to DSP after repeated failures so a missing gated
+model or broken local Torch install does not stall every transcript window. Use
+`dsp` for the fastest dependency-free local path.
 
 Useful environment variables:
 
@@ -60,6 +62,10 @@ Useful environment variables:
 - `ROOMPULSE_SPEAKER_MIN_QUALITY`: default `0.18`; short or noisy segments
   below this quality are assigned to the closest existing cluster instead of
   creating a throwaway speaker or corrupting a centroid.
+- `ROOMPULSE_SPEAKER_MAX_CLUSTERS`: default `12`; caps live `Speaker N`
+  creation so noise or backend churn cannot create unbounded speaker labels.
+- `ROOMPULSE_SPEAKER_BACKEND_FAILURE_LIMIT`: default `1`; number of failed
+  explicit neural speaker-encoder calls before the session uses DSP directly.
 - `ROOMPULSE_WEBRTC_VAD`: default `1`; set `0` to disable optional WebRTC voice
   activity detection when installed.
 - `ROOMPULSE_WEBRTC_VAD_MODE`: default `2`; valid values are `0` through `3`,

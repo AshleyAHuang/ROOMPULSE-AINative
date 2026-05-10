@@ -15,6 +15,7 @@ export interface LocalTranscriptionStatus {
 
 export interface LocalTranscriptionClientOptions {
   url?: string;
+  expectedParticipants?: number;
   onSegment: (segment: LocalTranscriptSegment) => void;
   onStatus: (status: LocalTranscriptionStatus) => void;
   onError: (message: string) => void;
@@ -43,6 +44,7 @@ export class LocalTranscriptionClient {
   private readonly onSegment: (segment: LocalTranscriptSegment) => void;
   private readonly onStatus: (status: LocalTranscriptionStatus) => void;
   private readonly onError: (message: string) => void;
+  private readonly expectedParticipants: number | undefined;
   private socket: WebSocket | null = null;
   private stream: MediaStream | null = null;
   private audioContext: AudioContext | null = null;
@@ -56,6 +58,7 @@ export class LocalTranscriptionClient {
     this.onSegment = options.onSegment;
     this.onStatus = options.onStatus;
     this.onError = options.onError;
+    this.expectedParticipants = options.expectedParticipants;
   }
 
   async start(): Promise<void> {
@@ -119,7 +122,9 @@ export class LocalTranscriptionClient {
       this.source.connect(this.processor);
       this.processor.connect(this.silentGain);
       this.silentGain.connect(this.audioContext.destination);
-      this.socket.send(JSON.stringify({ type: "reset" }));
+      this.socket.send(
+        JSON.stringify(createResetControlMessage(this.expectedParticipants))
+      );
       this.onStatus({
         status: "streaming",
         message: "Microphone active; streaming audio to local transcription"
@@ -254,6 +259,23 @@ export function getDefaultTranscriptionUrl(): string {
     process.env.NEXT_PUBLIC_ROOMPULSE_TRANSCRIPTION_WS ||
     "ws://127.0.0.1:8765/ws"
   );
+}
+
+export function createResetControlMessage(expectedParticipants: number | undefined): {
+  type: "reset";
+  maxSpeakerClusters?: number;
+} {
+  if (
+    typeof expectedParticipants !== "number" ||
+    !Number.isFinite(expectedParticipants)
+  ) {
+    return { type: "reset" };
+  }
+
+  const maxSpeakerClusters = Math.floor(expectedParticipants);
+  return maxSpeakerClusters > 0
+    ? { type: "reset", maxSpeakerClusters }
+    : { type: "reset" };
 }
 
 function openSocket(url: string): Promise<WebSocket> {

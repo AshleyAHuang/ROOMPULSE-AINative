@@ -236,9 +236,10 @@ class SpeakerClustererTest(unittest.TestCase):
         self.assertEqual(embedder.primary.name, "speechbrain-ecapa")
 
     def test_fallback_voice_embedder_keeps_clustering_when_neural_backend_fails(self) -> None:
+        embedder = FallbackVoiceEmbedder(FailingVoiceEmbedder(), DspVoiceEmbedder())
         clusterer = SpeakerClusterer(
             threshold=0.18,
-            embedder=FallbackVoiceEmbedder(FailingVoiceEmbedder(), DspVoiceEmbedder()),
+            embedder=embedder,
         )
 
         first = asyncio.run(clusterer.assign(synthetic_voice(110)))
@@ -247,6 +248,20 @@ class SpeakerClustererTest(unittest.TestCase):
         self.assertEqual(first.label, "Speaker 1")
         self.assertEqual(second.label, "Speaker 2")
         self.assertEqual(first.backend, "dsp")
+        self.assertTrue(embedder.primary_disabled)
+
+    def test_fallback_voice_embedder_circuit_breaks_repeated_neural_failures(self) -> None:
+        primary = FailingVoiceEmbedder()
+        embedder = FallbackVoiceEmbedder(primary, DspVoiceEmbedder(), failure_limit=1)
+
+        first = embedder.embed(synthetic_voice(110))
+        second = embedder.embed(synthetic_voice(190))
+
+        self.assertEqual(first.backend, "dsp")
+        self.assertEqual(second.backend, "dsp")
+        self.assertTrue(embedder.primary_disabled)
+        self.assertEqual(primary.calls, 1)
+        self.assertEqual(embedder.active_backend_name(), "dsp")
 
     def test_auto_embedder_demotes_failed_resolved_backend_to_dsp(self) -> None:
         embedder = AutoVoiceEmbedder()
@@ -267,6 +282,39 @@ class SpeakerClustererTest(unittest.TestCase):
 
         self.assertEqual(speaker.label, "Speaker 1")
         self.assertEqual(speaker.backend, "dsp")
+
+    def test_clusterer_caps_speaker_count_and_reuses_existing_cluster(self) -> None:
+        clusterer = SpeakerClusterer(
+            threshold=0.05,
+            max_clusters=2,
+            embedder=FixedEmbeddingVoiceEmbedder(
+                [
+                    np.array([1.0, 0.0, 0.0], dtype=np.float32),
+                    np.array([0.0, 1.0, 0.0], dtype=np.float32),
+                    np.array([0.0, 0.0, 1.0], dtype=np.float32),
+                ]
+            ),
+        )
+
+        first = asyncio.run(clusterer.assign(synthetic_voice(110)))
+        second = asyncio.run(clusterer.assign(synthetic_voice(150)))
+        third = asyncio.run(clusterer.assign(synthetic_voice(220)))
+
+        self.assertEqual(first.label, "Speaker 1")
+        self.assertEqual(second.label, "Speaker 2")
+        self.assertIn(third.label, ["Speaker 1", "Speaker 2"])
+        self.assertEqual(clusterer.labels(), ["Speaker 1", "Speaker 2"])
+
+    def test_invalid_max_cluster_env_uses_default(self) -> None:
+        previous_max = os.environ.get("ROOMPULSE_SPEAKER_MAX_CLUSTERS")
+        os.environ["ROOMPULSE_SPEAKER_MAX_CLUSTERS"] = "0"
+        try:
+            self.assertEqual(
+                server.speaker_max_clusters(),
+                server.DEFAULT_SPEAKER_MAX_CLUSTERS,
+            )
+        finally:
+            restore_env("ROOMPULSE_SPEAKER_MAX_CLUSTERS", previous_max)
 
     def test_embedding_to_numpy_accepts_pyannote_like_data_containers(self) -> None:
         vector = embedding_to_numpy(FakePyannoteEmbedding([[0.1, 0.2, 0.3]]))
@@ -297,6 +345,20 @@ class SpeakerClustererTest(unittest.TestCase):
 
         self.assertEqual(min_seconds, 4.0)
         self.assertEqual(max_seconds, 4.0)
+
+    def test_reset_control_configures_session_speaker_cap(self) -> None:
+        async def run() -> tuple[int, list[dict]]:
+            websocket = FakeWebSocket()
+            session = TranscriptionSession(websocket)
+            await session.handle_control(
+                '{"type":"reset","maxSpeakerClusters":3}'
+            )
+            return session.clusterer.max_clusters, websocket.messages
+
+        max_clusters, messages = asyncio.run(run())
+
+        self.assertEqual(max_clusters, 3)
+        self.assertEqual(messages[-1]["status"], "reset")
 
     def test_transcribe_audio_falls_back_for_invalid_whisper_env(self) -> None:
         previous_beam = os.environ.get("ROOMPULSE_WHISPER_BEAM_SIZE")
@@ -490,7 +552,11 @@ class FailingClusterer:
 class FailingVoiceEmbedder:
     name = "failing-neural"
 
+    def __init__(self) -> None:
+        self.calls = 0
+
     def embed(self, _audio: np.ndarray) -> VoiceEmbedding:
+        self.calls += 1
         raise RuntimeError("speaker encoder unavailable")
 
 

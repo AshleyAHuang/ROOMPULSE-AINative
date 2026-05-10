@@ -222,10 +222,12 @@ ROOMPULSE_SPEAKER_EMBEDDING_BACKEND=speechbrain uv run uvicorn server:app --host
 Face token is configured, then SpeechBrain, then Resemblyzer, then the built-in
 DSP embedder. The neural path gives better recurring-voice separation, while
 the DSP path is fastest and dependency-free. Explicit neural selections are
-wrapped with the DSP embedder as a per-segment fallback, so a model-loading or
-embedding-shape failure does not collapse the whole transcript back to
-`Speaker 1`. When the optional speaker stack is installed, the service also
-uses WebRTC VAD before Whisper to reject background noise before it becomes
+wrapped with the DSP embedder as a per-segment fallback and circuit-break to
+DSP after repeated failures, so a missing gated model or broken Torch install
+does not stall every transcript window. `ROOMPULSE_SPEAKER_MAX_CLUSTERS`
+defaults to `12` to prevent noise or backend churn from creating unbounded
+`Speaker N` labels. When the optional speaker stack is installed, the service
+also uses WebRTC VAD before Whisper to reject background noise before it becomes
 repeated transcript junk.
 
 The service also applies local background-noise cleanup before transcription:

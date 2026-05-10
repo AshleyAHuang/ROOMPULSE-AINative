@@ -39,6 +39,8 @@ DEFAULT_NEURAL_SPEAKER_DISTANCE_THRESHOLDS = {
 }
 DEFAULT_NEURAL_SPEAKER_DISTANCE_THRESHOLD = 0.30
 DEFAULT_SPEAKER_MIN_QUALITY = 0.18
+DEFAULT_SPEAKER_MAX_CLUSTERS = 12
+DEFAULT_SPEAKER_BACKEND_FAILURE_LIMIT = 1
 DEFAULT_SPEAKER_EMBEDDING_BACKEND = "auto"
 DEFAULT_BEAM_SIZE = 5
 DEFAULT_BEST_OF = 5
@@ -84,6 +86,7 @@ async def health() -> JSONResponse:
                 DEFAULT_SPEAKER_EMBEDDING_BACKEND,
             ),
             "speakerEmbeddingActiveBackend": active_voice_embedder_name(),
+            "speakerMaxClusters": speaker_max_clusters(),
             "voiceActivityDetector": (
                 "webrtcvad"
                 if webrtcvad is not None and os.getenv("ROOMPULSE_WEBRTC_VAD", "1") != "0"
@@ -336,16 +339,30 @@ class FallbackVoiceEmbedder:
         self,
         primary: VoiceEmbedder,
         fallback: VoiceEmbedder | None = None,
+        failure_limit: int | None = None,
     ) -> None:
         self.primary = primary
         self.fallback = fallback or DspVoiceEmbedder()
         self.name = f"{primary.name}+{self.fallback.name}-fallback"
+        self.failure_limit = max(1, failure_limit or speaker_backend_failure_limit())
+        self.primary_failures = 0
+        self.primary_disabled = False
 
     def embed(self, audio: np.ndarray) -> VoiceEmbedding:
+        if self.primary_disabled:
+            return sanitize_voice_embedding(self.fallback.embed(audio))
+
         try:
             return sanitize_voice_embedding(self.primary.embed(audio))
         except Exception:
+            self.primary_failures += 1
+            if self.primary_failures >= self.failure_limit:
+                self.primary_disabled = True
+                self.name = f"{self.fallback.name}-fallback"
             return sanitize_voice_embedding(self.fallback.embed(audio))
+
+    def active_backend_name(self) -> str:
+        return self.fallback.name if self.primary_disabled else self.primary.name
 
 
 class AutoVoiceEmbedder:
@@ -419,6 +436,8 @@ def active_voice_embedder_name() -> str:
     embedder = voice_embedder
     if isinstance(embedder, AutoVoiceEmbedder) and embedder._resolved is not None:
         return embedder._resolved.name
+    if isinstance(embedder, FallbackVoiceEmbedder):
+        return embedder.active_backend_name()
     return embedder.name if embedder is not None else "not-loaded"
 
 
@@ -453,9 +472,11 @@ class SpeakerClusterer:
         self,
         threshold: float | None = None,
         embedder: VoiceEmbedder | None = None,
+        max_clusters: int | None = None,
     ) -> None:
         self.threshold = threshold
         self.embedder = embedder or get_voice_embedder()
+        self.max_clusters = max(1, max_clusters or speaker_max_clusters())
         self.clusters: list[SpeakerCluster] = []
 
     async def assign(self, audio: np.ndarray) -> SpeakerCluster:
@@ -476,7 +497,12 @@ class SpeakerClusterer:
             elif second_best_distance is None or distance < second_best_distance:
                 second_best_distance = distance
 
-        if best is None or (best[0] > threshold and embedding.quality >= min_quality):
+        should_create_cluster = best is None or (
+            best[0] > threshold and embedding.quality >= min_quality
+        )
+        if should_create_cluster:
+            if len(self.clusters) >= self.max_clusters:
+                return self.assign_to_existing_cluster(best, embedding)
             cluster = SpeakerCluster(
                 id=f"speaker-{len(self.clusters) + 1}",
                 label=f"Speaker {len(self.clusters) + 1}",
@@ -512,6 +538,28 @@ class SpeakerClusterer:
             cluster.quality_sum += embedding.quality
         cluster.samples += 1
         cluster.last_seen_at = time.time()
+        return cluster
+
+    def assign_to_existing_cluster(
+        self,
+        best: tuple[float, SpeakerCluster] | None,
+        embedding: VoiceEmbedding,
+    ) -> SpeakerCluster:
+        if best is not None:
+            cluster = best[1]
+        else:
+            cluster = max(self.clusters, key=lambda existing: existing.last_seen_at)
+        cluster.samples += 1
+        cluster.last_seen_at = time.time()
+        if cluster.backend == embedding.backend and embedding.quality >= speaker_min_quality():
+            update_weight = min(0.08, max(0.02, embedding.quality / (cluster.quality_sum + embedding.quality)))
+            cluster.centroid = (
+                cluster.centroid * (1.0 - update_weight)
+                + embedding.vector * update_weight
+            )
+            if embedding.backend != "dsp":
+                cluster.centroid = normalize_vector(cluster.centroid)
+            cluster.quality_sum += embedding.quality
         return cluster
 
     def labels(self) -> list[str]:
@@ -554,7 +602,11 @@ class TranscriptionSession:
         if message.get("type") == "reset":
             async with self.buffer_lock:
                 self.buffer.clear()
-            self.clusterer = SpeakerClusterer()
+            max_clusters = parse_positive_int_value(
+                message.get("maxSpeakerClusters"),
+                speaker_max_clusters(),
+            )
+            self.clusterer = SpeakerClusterer(max_clusters=max_clusters)
             self.sequence = 0
             await self.send_status("reset", "Transcription session reset")
         elif message.get("type") == "flush":
@@ -707,11 +759,15 @@ def parse_positive_float(raw: str | None, default: float) -> float:
 
 
 def parse_positive_int(raw: str | None, default: int) -> int:
+    return parse_positive_int_value(raw, default)
+
+
+def parse_positive_int_value(raw: object, default: int) -> int:
     if raw is None:
         return default
     try:
         value = int(raw)
-    except ValueError:
+    except (TypeError, ValueError):
         return default
     return value if value > 0 else default
 
@@ -983,6 +1039,20 @@ def speaker_min_quality() -> float:
             os.getenv("ROOMPULSE_SPEAKER_MIN_QUALITY"),
             DEFAULT_SPEAKER_MIN_QUALITY,
         )
+    )
+
+
+def speaker_max_clusters() -> int:
+    return parse_positive_int(
+        os.getenv("ROOMPULSE_SPEAKER_MAX_CLUSTERS"),
+        DEFAULT_SPEAKER_MAX_CLUSTERS,
+    )
+
+
+def speaker_backend_failure_limit() -> int:
+    return parse_positive_int(
+        os.getenv("ROOMPULSE_SPEAKER_BACKEND_FAILURE_LIMIT"),
+        DEFAULT_SPEAKER_BACKEND_FAILURE_LIMIT,
     )
 
 
