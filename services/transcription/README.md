@@ -52,7 +52,11 @@ Useful environment variables:
   `pyannote`, or `dsp`; default `auto`
 - `ROOMPULSE_SPEAKER_DISTANCE_THRESHOLD`: lower splits speaker clusters more
   aggressively, higher merges more aggressively. Defaults to `0.14` for DSP
-  embeddings and `0.42` for neural embeddings.
+  embeddings, `0.32` for pyannote embeddings, `0.28` for SpeechBrain ECAPA,
+  and `0.30` for Resemblyzer.
+- `ROOMPULSE_SPEAKER_MIN_QUALITY`: default `0.18`; short or noisy segments
+  below this quality are assigned to the closest existing cluster instead of
+  creating a throwaway speaker or corrupting a centroid.
 - `ROOMPULSE_WEBRTC_VAD`: default `1`; set `0` to disable optional WebRTC voice
   activity detection when installed.
 - `ROOMPULSE_WEBRTC_VAD_MODE`: default `2`; valid values are `0` through `3`,

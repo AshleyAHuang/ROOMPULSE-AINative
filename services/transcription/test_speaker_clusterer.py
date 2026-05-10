@@ -6,6 +6,7 @@ import numpy as np
 
 import server
 from server import (
+    DEFAULT_NEURAL_SPEAKER_DISTANCE_THRESHOLDS,
     SAMPLE_RATE,
     DspVoiceEmbedder,
     PyannoteVoiceEmbedder,
@@ -14,8 +15,10 @@ from server import (
     build_dsp_voice_embedding,
     frame_rms,
     get_voice_embedder,
+    pre_emphasis_filter,
     trim_silence,
     transcription_window_seconds,
+    voice_embedding_quality,
 )
 
 
@@ -110,6 +113,63 @@ class SpeakerClustererTest(unittest.TestCase):
         self.assertTrue(np.all(np.isfinite(low_voice)))
         self.assertGreater(float(np.linalg.norm(low_voice - higher_voice)), 0.25)
 
+    def test_dsp_embedding_is_gain_stable(self) -> None:
+        voice = synthetic_voice(145)
+        quiet = build_dsp_voice_embedding(voice * 0.35)
+        loud = build_dsp_voice_embedding(voice * 0.95)
+
+        self.assertLess(float(np.linalg.norm(quiet - loud)), 0.08)
+
+    def test_pre_emphasis_changes_spectrum_without_changing_length(self) -> None:
+        voice = synthetic_voice(130, seconds=0.5)
+        emphasized = pre_emphasis_filter(voice)
+
+        self.assertEqual(emphasized.shape, voice.shape)
+        self.assertFalse(np.allclose(emphasized, voice))
+
+    def test_low_quality_distinct_embedding_does_not_create_noise_cluster(self) -> None:
+        clusterer = SpeakerClusterer(
+            threshold=0.2,
+            embedder=QualityEmbeddingVoiceEmbedder(
+                [
+                    (
+                        np.array([1.0, 0.0, 0.0], dtype=np.float32),
+                        1.0,
+                    ),
+                    (
+                        np.array([0.0, 1.0, 0.0], dtype=np.float32),
+                        0.05,
+                    ),
+                ]
+            ),
+        )
+
+        first = asyncio.run(clusterer.assign(synthetic_voice(110)))
+        second = asyncio.run(clusterer.assign(synthetic_voice(240, seconds=0.25)))
+
+        self.assertEqual(first.label, "Speaker 1")
+        self.assertEqual(second.label, "Speaker 1")
+        self.assertEqual(clusterer.labels(), ["Speaker 1"])
+
+    def test_uses_backend_specific_neural_thresholds(self) -> None:
+        clusterer = SpeakerClusterer(embedder=FixedEmbeddingVoiceEmbedder([]))
+
+        self.assertEqual(
+            clusterer.distance_threshold("speechbrain-ecapa"),
+            DEFAULT_NEURAL_SPEAKER_DISTANCE_THRESHOLDS["speechbrain-ecapa"],
+        )
+        self.assertEqual(
+            clusterer.distance_threshold("pyannote-embedding"),
+            DEFAULT_NEURAL_SPEAKER_DISTANCE_THRESHOLDS["pyannote-embedding"],
+        )
+
+    def test_embedding_quality_scores_short_quiet_audio_lower(self) -> None:
+        clean = voice_embedding_quality(synthetic_voice(150, seconds=1.6))
+        quiet = voice_embedding_quality(synthetic_voice(150, seconds=0.3) * 0.03)
+
+        self.assertGreater(clean, 0.6)
+        self.assertLess(quiet, 0.2)
+
     def test_explicit_pyannote_backend_can_be_selected_without_loading_model(self) -> None:
         previous_backend = os.environ.get("ROOMPULSE_SPEAKER_EMBEDDING_BACKEND")
         server.voice_embedder = None
@@ -157,6 +217,19 @@ class FixedEmbeddingVoiceEmbedder:
         vector = self.vectors[min(self.index, len(self.vectors) - 1)]
         self.index += 1
         return VoiceEmbedding(self.name, vector)
+
+
+class QualityEmbeddingVoiceEmbedder:
+    name = "test-neural"
+
+    def __init__(self, values: list[tuple[np.ndarray, float]]) -> None:
+        self.values = values
+        self.index = 0
+
+    def embed(self, _audio: np.ndarray) -> VoiceEmbedding:
+        vector, quality = self.values[min(self.index, len(self.values) - 1)]
+        self.index += 1
+        return VoiceEmbedding(self.name, vector, quality)
 
 
 if __name__ == "__main__":

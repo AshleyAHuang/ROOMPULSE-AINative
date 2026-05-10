@@ -201,6 +201,12 @@ split voices more aggressively; higher values merge more aggressively:
 ROOMPULSE_SPEAKER_DISTANCE_THRESHOLD=0.14 npm run transcription
 ```
 
+The defaults are backend-specific: `0.14` for DSP, `0.32` for pyannote,
+`0.28` for SpeechBrain ECAPA, and `0.30` for Resemblyzer. The service also
+quality-gates speaker embeddings so short/noisy chunks do not create throwaway
+speakers or pull an existing speaker centroid toward background noise. Tune
+that with `ROOMPULSE_SPEAKER_MIN_QUALITY` when needed.
+
 For stronger local voice categorization, the transcription service supports
 optional neural speaker embeddings from pyannote.audio, SpeechBrain, and
 Resemblyzer. Install the optional Python speaker stack and select the backend:
@@ -230,11 +236,12 @@ and RMS normalization. You can trade speed for accuracy with
 The MVP diarization is approximate and not biometric identity. The local service
 can use pyannote.audio embeddings, SpeechBrain ECAPA, or Resemblyzer speaker
 embeddings when installed, and otherwise uses speech-window audio features,
-MFCC-style cepstra, spectral contrast, RMS, zero-crossing rate, spectral shape,
-and pitch estimate to cluster recurring voice patterns into `Speaker 1`,
-`Speaker 2`, etc. Room noise, overlapping speech, microphone placement, and
-similar voices can produce incorrect labels. It does not identify named people
-unless a later calibration flow maps a cluster to a participant name.
+MFCC-style cepstra, spectral contrast, voiced-frame spectral shape, RMS,
+zero-crossing rate, and pitch estimate to cluster recurring voice patterns into
+`Speaker 1`, `Speaker 2`, etc. Room noise, overlapping speech, microphone
+placement, and similar voices can produce incorrect labels. It does not
+identify named people unless a later calibration flow maps a cluster to a
+participant name.
 
 Participation reminders intentionally compare only expected participant count against observed speaker clusters. RoomPulse does not claim to know that a specific named person has spoken.
 

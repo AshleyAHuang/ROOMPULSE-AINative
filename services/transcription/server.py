@@ -32,7 +32,13 @@ DEFAULT_DEVICE = "cpu"
 DEFAULT_COMPUTE_TYPE = "int8"
 DEFAULT_LANGUAGE = "en"
 DEFAULT_DSP_SPEAKER_DISTANCE_THRESHOLD = 0.14
-DEFAULT_NEURAL_SPEAKER_DISTANCE_THRESHOLD = 0.42
+DEFAULT_NEURAL_SPEAKER_DISTANCE_THRESHOLDS = {
+    "pyannote-embedding": 0.32,
+    "speechbrain-ecapa": 0.28,
+    "resemblyzer": 0.30,
+}
+DEFAULT_NEURAL_SPEAKER_DISTANCE_THRESHOLD = 0.30
+DEFAULT_SPEAKER_MIN_QUALITY = 0.18
 DEFAULT_SPEAKER_EMBEDDING_BACKEND = "auto"
 DEFAULT_BEAM_SIZE = 5
 DEFAULT_BEST_OF = 5
@@ -168,6 +174,7 @@ class SpeakerCluster:
     backend: str
     centroid: np.ndarray
     samples: int = 1
+    quality_sum: float = 1.0
     last_seen_at: float = field(default_factory=time.time)
 
 
@@ -175,6 +182,7 @@ class SpeakerCluster:
 class VoiceEmbedding:
     backend: str
     vector: np.ndarray
+    quality: float = 1.0
 
 
 class VoiceEmbedder(Protocol):
@@ -188,7 +196,11 @@ class DspVoiceEmbedder:
     name = "dsp"
 
     def embed(self, audio: np.ndarray) -> VoiceEmbedding:
-        return VoiceEmbedding(self.name, build_dsp_voice_embedding(audio))
+        return VoiceEmbedding(
+            self.name,
+            build_dsp_voice_embedding(audio),
+            voice_embedding_quality(audio),
+        )
 
 
 class SpeechBrainVoiceEmbedder:
@@ -206,7 +218,7 @@ class SpeechBrainVoiceEmbedder:
             with torch.no_grad():
                 embedding = classifier.encode_batch(signal)
             vector = embedding.squeeze().detach().cpu().numpy().astype(np.float32)
-        return VoiceEmbedding(self.name, normalize_vector(vector))
+        return VoiceEmbedding(self.name, normalize_vector(vector), voice_embedding_quality(audio))
 
     def _load(self):
         if self._classifier is not None and self._torch is not None:
@@ -265,7 +277,7 @@ class PyannoteVoiceEmbedder:
                     except OSError:
                         pass
             vector = np.asarray(embedding, dtype=np.float32).reshape(-1)
-        return VoiceEmbedding(self.name, normalize_vector(vector))
+        return VoiceEmbedding(self.name, normalize_vector(vector), voice_embedding_quality(audio))
 
     def _load(self):
         if self._inference is not None and self._torch is not None:
@@ -306,7 +318,7 @@ class ResemblyzerVoiceEmbedder:
             encoder, preprocess_wav = self._load()
             wav = preprocess_wav(audio.astype(np.float32), source_sr=SAMPLE_RATE)
             vector = encoder.embed_utterance(wav).astype(np.float32)
-        return VoiceEmbedding(self.name, normalize_vector(vector))
+        return VoiceEmbedding(self.name, normalize_vector(vector), voice_embedding_quality(audio))
 
     def _load(self):
         if self._encoder is not None and self._preprocess_wav is not None:
@@ -405,8 +417,10 @@ class SpeakerClusterer:
         self.clusters: list[SpeakerCluster] = []
 
     async def assign(self, audio: np.ndarray) -> SpeakerCluster:
-        embedding = await asyncio.to_thread(self.embedder.embed, trim_silence(audio))
+        speech_audio = trim_silence(audio)
+        embedding = await asyncio.to_thread(self.embedder.embed, speech_audio)
         threshold = self.distance_threshold(embedding.backend)
+        min_quality = speaker_min_quality()
         best: tuple[float, SpeakerCluster] | None = None
         second_best_distance: float | None = None
 
@@ -420,12 +434,13 @@ class SpeakerClusterer:
             elif second_best_distance is None or distance < second_best_distance:
                 second_best_distance = distance
 
-        if best is None or best[0] > threshold:
+        if best is None or (best[0] > threshold and embedding.quality >= min_quality):
             cluster = SpeakerCluster(
                 id=f"speaker-{len(self.clusters) + 1}",
                 label=f"Speaker {len(self.clusters) + 1}",
                 backend=embedding.backend,
                 centroid=embedding.vector,
+                quality_sum=max(embedding.quality, min_quality),
             )
             self.clusters.append(cluster)
             return cluster
@@ -437,14 +452,22 @@ class SpeakerClusterer:
         )
         # Adapt only on confident matches. Updating centroids on borderline or
         # mixed-room audio is what makes future voices collapse into Speaker 1.
-        if best[0] < threshold * 0.72 and not is_ambiguous:
-            update_weight = min(0.18, 1.0 / float(cluster.samples + 2))
+        if (
+            embedding.quality >= min_quality
+            and best[0] < threshold * 0.72
+            and not is_ambiguous
+        ):
+            update_weight = min(
+                0.18,
+                max(0.035, embedding.quality / (cluster.quality_sum + embedding.quality)),
+            )
             cluster.centroid = (
                 cluster.centroid * (1.0 - update_weight)
                 + embedding.vector * update_weight
             )
             if embedding.backend != "dsp":
                 cluster.centroid = normalize_vector(cluster.centroid)
+            cluster.quality_sum += embedding.quality
         cluster.samples += 1
         cluster.last_seen_at = time.time()
         return cluster
@@ -455,11 +478,13 @@ class SpeakerClusterer:
     def distance_threshold(self, backend: str) -> float:
         if self.threshold is not None:
             return self.threshold
-        default = (
-            DEFAULT_DSP_SPEAKER_DISTANCE_THRESHOLD
-            if backend == "dsp"
-            else DEFAULT_NEURAL_SPEAKER_DISTANCE_THRESHOLD
-        )
+        if backend == "dsp":
+            default = DEFAULT_DSP_SPEAKER_DISTANCE_THRESHOLD
+        else:
+            default = DEFAULT_NEURAL_SPEAKER_DISTANCE_THRESHOLDS.get(
+                backend,
+                DEFAULT_NEURAL_SPEAKER_DISTANCE_THRESHOLD,
+            )
         return float(os.getenv("ROOMPULSE_SPEAKER_DISTANCE_THRESHOLD", str(default)))
 
 
@@ -746,10 +771,19 @@ def build_dsp_voice_embedding(audio: np.ndarray) -> np.ndarray:
     audio = audio - float(np.mean(audio))
     peak = float(np.max(np.abs(audio))) or 1.0
     audio = audio / peak
+    audio = pre_emphasis_filter(audio)
 
-    windowed = audio * np.hanning(audio.size)
-    spectrum = np.abs(np.fft.rfft(windowed))
-    freqs = np.fft.rfftfreq(audio.size, 1.0 / SAMPLE_RATE)
+    voiced_frames = voiced_analysis_frames(audio)
+    if voiced_frames.size > 0:
+        window = np.hanning(voiced_frames.shape[1]).astype(np.float32)
+        spectra = np.abs(np.fft.rfft(voiced_frames * window, axis=1))
+        spectrum = np.mean(spectra, axis=0)
+        freqs = np.fft.rfftfreq(voiced_frames.shape[1], 1.0 / SAMPLE_RATE)
+    else:
+        windowed = audio * np.hanning(audio.size)
+        spectrum = np.abs(np.fft.rfft(windowed))
+        freqs = np.fft.rfftfreq(audio.size, 1.0 / SAMPLE_RATE)
+
     magnitude_sum = float(np.sum(spectrum)) or 1.0
     centroid = float(np.sum(freqs * spectrum) / magnitude_sum) / 4_000.0
     bandwidth = (
@@ -779,6 +813,66 @@ def build_dsp_voice_embedding(audio: np.ndarray) -> np.ndarray:
             *contrast,
         ],
         dtype=np.float32,
+    )
+
+
+def pre_emphasis_filter(audio: np.ndarray, coefficient: float = 0.97) -> np.ndarray:
+    if audio.size < 2:
+        return audio
+    emphasized = np.empty_like(audio)
+    emphasized[0] = audio[0]
+    emphasized[1:] = audio[1:] - coefficient * audio[:-1]
+    return emphasized
+
+
+def voiced_analysis_frames(audio: np.ndarray) -> np.ndarray:
+    frame_size = int(SAMPLE_RATE * 0.025)
+    hop = int(SAMPLE_RATE * 0.010)
+    if audio.size < frame_size:
+        return np.empty((0, frame_size), dtype=np.float32)
+
+    starts, rms = frame_rms(audio, frame_size, hop)
+    if starts.size == 0:
+        return np.empty((0, frame_size), dtype=np.float32)
+
+    stride = audio.strides[0]
+    frames = np.lib.stride_tricks.as_strided(
+        audio,
+        shape=(starts.size, frame_size),
+        strides=(hop * stride, stride),
+        writeable=False,
+    )
+    threshold = max(float(np.percentile(rms, 55)) * 1.15, float(np.max(rms)) * 0.18)
+    voiced = np.where(rms >= threshold)[0]
+    if voiced.size == 0:
+        return np.empty((0, frame_size), dtype=np.float32)
+
+    # Cap work per utterance while keeping the highest-energy speech frames.
+    if voiced.size > 96:
+        ranked = voiced[np.argsort(rms[voiced])[-96:]]
+        voiced = np.sort(ranked)
+    return np.asarray(frames[voiced], dtype=np.float32)
+
+
+def voice_embedding_quality(audio: np.ndarray) -> float:
+    if audio.size == 0:
+        return 0.0
+
+    duration_seconds = audio.size / SAMPLE_RATE
+    rms = float(np.sqrt(np.mean(np.square(audio))))
+    peak = float(np.max(np.abs(audio)))
+    duration_score = clamp01(duration_seconds / 1.2)
+    rms_score = clamp01((rms - 0.012) / 0.075)
+    peak_score = clamp01((peak - 0.035) / 0.18)
+    return clamp01(0.50 * duration_score + 0.35 * rms_score + 0.15 * peak_score)
+
+
+def speaker_min_quality() -> float:
+    return clamp01(
+        parse_positive_float(
+            os.getenv("ROOMPULSE_SPEAKER_MIN_QUALITY"),
+            DEFAULT_SPEAKER_MIN_QUALITY,
+        )
     )
 
 

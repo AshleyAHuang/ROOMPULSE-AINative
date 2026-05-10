@@ -739,7 +739,7 @@ function lineFromPayload(payload: unknown): TranscriptLine | null {
     !isNonEmptyString(line.speakerId) ||
     !isNonEmptyString(line.speakerLabel) ||
     typeof line.text !== "string" ||
-    !isFiniteNumber(line.timestamp) ||
+    !isValidTimestamp(line.timestamp) ||
     !isTranscriptSource(line.source) ||
     !isConfidence(line.confidence)
   ) {
@@ -781,7 +781,7 @@ function reviewVersionFromRestorePayload(payload: unknown): ReviewVersion | null
   const version = payload.restoredVersion;
   if (
     !isNonEmptyString(version.id) ||
-    !isFiniteNumber(version.timestamp) ||
+    !isValidTimestamp(version.timestamp) ||
     !isReviewSource(version.source) ||
     typeof version.markdown !== "string" ||
     typeof version.summary !== "string"
@@ -805,7 +805,7 @@ function reviewVersionFromInitializedPayload(
   const version = payload.reviewVersion;
   if (
     !isNonEmptyString(version.id) ||
-    !isFiniteNumber(version.timestamp) ||
+    !isValidTimestamp(version.timestamp) ||
     !isReviewSource(version.source) ||
     typeof version.markdown !== "string" ||
     typeof version.summary !== "string"
@@ -828,8 +828,16 @@ function pausedFromPayload(payload: unknown): boolean | null {
 }
 
 function endedAtFromPayload(payload: unknown): number | null {
-  if (!isRecord(payload) || !isFiniteNumber(payload.endedAt)) return null;
+  if (!isRecord(payload) || !isValidTimestamp(payload.endedAt)) return null;
   return payload.endedAt;
+}
+
+function isValidTimestamp(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    !Number.isNaN(new Date(value).getTime())
+  );
 }
 
 function normalizeStatus(value: string): MeetingStatus {

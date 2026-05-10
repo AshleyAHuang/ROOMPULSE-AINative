@@ -82,7 +82,7 @@ function isValidEventPayload(type: string, payload: unknown): boolean {
   }
 
   if (type === "meeting_ended") {
-    return isRecord(payload) && isFiniteNumber(payload.endedAt);
+    return isRecord(payload) && isValidTimestamp(payload.endedAt);
   }
 
   return true;

@@ -560,6 +560,19 @@ describe("/api/meetings", () => {
       error: "Invalid log event payload"
     });
 
+    const invalidEndedAt = await POST_EVENT(
+      jsonRequest({
+        type: "meeting_ended",
+        timestamp: Date.now(),
+        payload: { endedAt: 1e100 }
+      }),
+      routeContext(created.id)
+    );
+    expect(invalidEndedAt.status).toBe(400);
+    await expect(invalidEndedAt.json()).resolves.toEqual({
+      error: "Invalid log event payload"
+    });
+
     const invalidPatch = await PATCH(
       jsonRequest({
         updatedAt: 1e100
