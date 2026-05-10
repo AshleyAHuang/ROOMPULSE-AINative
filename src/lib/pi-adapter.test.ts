@@ -236,7 +236,7 @@ describe("Pi adapter", () => {
         assistantMessageEvent: {
           type: "text_delta",
           delta: [
-            "Here is the strict heartbeat JSON.\n",
+            "Room note {not json} before the strict heartbeat JSON.\n",
             JSON.stringify({
               cards: [
                 {
