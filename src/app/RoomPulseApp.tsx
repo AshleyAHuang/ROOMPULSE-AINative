@@ -1110,6 +1110,17 @@ export default function RoomPulseApp() {
   }, []);
 
   useEffect(() => {
+    if (!isMicRunning) {
+      return;
+    }
+    const client = transcriptionClientRef.current;
+    if (typeof client?.configureExpectedParticipants !== "function") {
+      return;
+    }
+    client.configureExpectedParticipants(meeting.expectedParticipants);
+  }, [isMicRunning, meeting.expectedParticipants]);
+
+  useEffect(() => {
     return () => {
       stopScriptedDemo();
     };

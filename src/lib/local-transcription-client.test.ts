@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createResetControlMessage,
+  createSpeakerConfigControlMessage,
   downsample,
   floatToPcm16,
   LocalTranscriptionClient
@@ -39,8 +40,37 @@ describe("local transcription audio utilities", () => {
       type: "reset",
       maxSpeakerClusters: 4
     });
+    expect(createSpeakerConfigControlMessage(5)).toEqual({
+      type: "configure",
+      maxSpeakerClusters: 5
+    });
     expect(createResetControlMessage(Number.NaN)).toEqual({ type: "reset" });
+    expect(createSpeakerConfigControlMessage(Number.NaN)).toEqual({
+      type: "configure"
+    });
     expect(createResetControlMessage(0)).toEqual({ type: "reset" });
+  });
+
+  it("can reconfigure the live speaker cap on an open socket", () => {
+    const send = vi.fn();
+    const client = new LocalTranscriptionClient({
+      expectedParticipants: 2,
+      onSegment: vi.fn(),
+      onStatus: vi.fn(),
+      onError: vi.fn()
+    });
+    Object.assign(client as unknown as Record<string, unknown>, {
+      socket: {
+        readyState: WebSocket.OPEN,
+        send
+      }
+    });
+
+    client.configureExpectedParticipants(6);
+
+    expect(send).toHaveBeenCalledWith(
+      JSON.stringify({ type: "configure", maxSpeakerClusters: 6 })
+    );
   });
 
   it("rejects malformed transcript socket messages before updating the UI", () => {

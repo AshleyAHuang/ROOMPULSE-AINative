@@ -360,6 +360,21 @@ class SpeakerClustererTest(unittest.TestCase):
         self.assertEqual(max_clusters, 3)
         self.assertEqual(messages[-1]["status"], "reset")
 
+    def test_configure_control_updates_existing_session_speaker_cap(self) -> None:
+        async def run() -> tuple[int, list[dict]]:
+            websocket = FakeWebSocket()
+            session = TranscriptionSession(websocket)
+            session.clusterer.max_clusters = 2
+            await session.handle_control(
+                '{"type":"configure","maxSpeakerClusters":5}'
+            )
+            return session.clusterer.max_clusters, websocket.messages
+
+        max_clusters, messages = asyncio.run(run())
+
+        self.assertEqual(max_clusters, 5)
+        self.assertEqual(messages[-1]["status"], "configured")
+
     def test_transcribe_audio_falls_back_for_invalid_whisper_env(self) -> None:
         previous_beam = os.environ.get("ROOMPULSE_WHISPER_BEAM_SIZE")
         previous_best_of = os.environ.get("ROOMPULSE_WHISPER_BEST_OF")

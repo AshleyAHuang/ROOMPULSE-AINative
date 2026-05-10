@@ -44,7 +44,7 @@ export class LocalTranscriptionClient {
   private readonly onSegment: (segment: LocalTranscriptSegment) => void;
   private readonly onStatus: (status: LocalTranscriptionStatus) => void;
   private readonly onError: (message: string) => void;
-  private readonly expectedParticipants: number | undefined;
+  private expectedParticipants: number | undefined;
   private socket: WebSocket | null = null;
   private stream: MediaStream | null = null;
   private audioContext: AudioContext | null = null;
@@ -142,6 +142,17 @@ export class LocalTranscriptionClient {
       this.disconnectAudioGraph();
       this.closeResources();
     }
+  }
+
+  configureExpectedParticipants(expectedParticipants: number): void {
+    this.expectedParticipants = expectedParticipants;
+    const socket = this.socket;
+    if (socket?.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    socket.send(
+      JSON.stringify(createSpeakerConfigControlMessage(expectedParticipants))
+    );
   }
 
   stopImmediately(): void {
@@ -265,17 +276,34 @@ export function createResetControlMessage(expectedParticipants: number | undefin
   type: "reset";
   maxSpeakerClusters?: number;
 } {
+  const maxSpeakerClusters = normalizeSpeakerClusterCap(expectedParticipants);
+  return maxSpeakerClusters === null
+    ? { type: "reset" }
+    : { type: "reset", maxSpeakerClusters };
+}
+
+export function createSpeakerConfigControlMessage(
+  expectedParticipants: number | undefined
+): {
+  type: "configure";
+  maxSpeakerClusters?: number;
+} {
+  const maxSpeakerClusters = normalizeSpeakerClusterCap(expectedParticipants);
+  return maxSpeakerClusters === null
+    ? { type: "configure" }
+    : { type: "configure", maxSpeakerClusters };
+}
+
+function normalizeSpeakerClusterCap(expectedParticipants: number | undefined): number | null {
   if (
     typeof expectedParticipants !== "number" ||
     !Number.isFinite(expectedParticipants)
   ) {
-    return { type: "reset" };
+    return null;
   }
 
   const maxSpeakerClusters = Math.floor(expectedParticipants);
-  return maxSpeakerClusters > 0
-    ? { type: "reset", maxSpeakerClusters }
-    : { type: "reset" };
+  return maxSpeakerClusters > 0 ? maxSpeakerClusters : null;
 }
 
 function openSocket(url: string): Promise<WebSocket> {

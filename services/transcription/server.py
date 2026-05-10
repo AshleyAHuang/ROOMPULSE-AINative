@@ -609,6 +609,12 @@ class TranscriptionSession:
             self.clusterer = SpeakerClusterer(max_clusters=max_clusters)
             self.sequence = 0
             await self.send_status("reset", "Transcription session reset")
+        elif message.get("type") == "configure":
+            self.clusterer.max_clusters = parse_positive_int_value(
+                message.get("maxSpeakerClusters"),
+                self.clusterer.max_clusters,
+            )
+            await self.send_status("configured", "Transcription session configured")
         elif message.get("type") == "flush":
             await self.flush(force=True)
             await self.send_status("flushed", "Transcription buffer flushed")
