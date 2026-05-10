@@ -871,6 +871,87 @@ describe("RoomPulseApp", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("ignores late live demo initialization errors after heartbeat success", async () => {
+    let rejectInit: ((error: Error) => void) | null = null;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/meetings") {
+        return Response.json(
+          {
+            id: "demo-session",
+            title: "RoomPulse MVP readiness review",
+            goal: "Strict init can fail late.",
+            startedAt: Date.now(),
+            updatedAt: Date.now(),
+            endedAt: null,
+            status: "active",
+            isPaused: false,
+            eventCount: 0,
+            meeting: {},
+            state: null,
+            latestReviewMarkdown: "",
+            latestReviewVersionId: null
+          },
+          { status: 201 }
+        );
+      }
+      if (url.includes("/api/review-document/init")) {
+        return new Promise<Response>((_resolve, reject) => {
+          rejectInit = reject;
+        });
+      }
+      if (url.includes("/api/heartbeat")) {
+        return Response.json({
+          source: "pi",
+          cards: [
+            {
+              id: "heartbeat-card",
+              kind: "heartbeat",
+              title: "Heartbeat applied",
+              body: "The heartbeat review is current.",
+              priority: "medium"
+            }
+          ],
+          summary: "Heartbeat review.",
+          nextHeartbeatHint: "Continue.",
+          reviewMarkdown: "# Heartbeat review\n\nCurrent content.",
+          agendaActions: [],
+          uiActions: [],
+          ephemeralReminder: null
+        });
+      }
+      if (url.includes("/events")) {
+        return Response.json({ id: "event-1" }, { status: 201 });
+      }
+      return Response.json({ meetings: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /launch live demo/i }));
+    });
+    await waitFor(() => expect(rejectInit).not.toBeNull());
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /run heartbeat/i }));
+    });
+    expect(
+      await screen.findByRole("heading", { name: /heartbeat review/i })
+    ).toBeVisible();
+
+    await act(async () => {
+      rejectInit?.(new Error("late init failed"));
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByText(/late init failed/i)).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: /heartbeat review/i })
+    ).toBeVisible();
+  });
+
   it("keeps scripted transcript running while heartbeat review is pending", async () => {
     vi.useFakeTimers();
     process.env.NEXT_PUBLIC_ROOMPULSE_PI_TIMEOUT_MS = "60000";

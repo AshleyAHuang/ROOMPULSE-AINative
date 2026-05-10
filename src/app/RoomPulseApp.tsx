@@ -1144,7 +1144,10 @@ export default function RoomPulseApp() {
         );
       })
       .catch((error) => {
-        if (meetingStartAttemptRef.current !== attemptId) {
+        if (
+          meetingStartAttemptRef.current !== attemptId ||
+          reviewLastUpdatedAtRef.current > startedAt
+        ) {
           return;
         }
         const message = error instanceof Error ? error.message : String(error);
