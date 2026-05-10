@@ -21,6 +21,24 @@ import {
   MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH
 } from "@/lib/facilitator";
 
+type CapturedHeartbeatPayload = Record<string, unknown> & {
+  currentReviewMarkdown?: string;
+  reviewVersions?: Array<{ markdown: string }>;
+  now?: number;
+  lastHeartbeatAt?: number;
+  observedSpeakerLabels?: string[];
+};
+
+function capturedSignal(signal: AbortSignal | null): AbortSignal | null {
+  return signal;
+}
+
+function capturedHeartbeatPayload(
+  payload: Record<string, unknown> | null
+): CapturedHeartbeatPayload | null {
+  return payload as CapturedHeartbeatPayload | null;
+}
+
 describe("RoomPulseApp", () => {
   afterEach(() => {
     delete process.env.NEXT_PUBLIC_ROOMPULSE_PI_TIMEOUT_MS;
@@ -634,7 +652,7 @@ describe("RoomPulseApp", () => {
       await Promise.resolve();
     });
 
-    expect(heartbeatSignal?.aborted).toBe(true);
+    expect(capturedSignal(heartbeatSignal)?.aborted).toBe(true);
 
     await act(async () => {
       resolveHeartbeat?.(
@@ -1926,14 +1944,17 @@ describe("RoomPulseApp", () => {
     });
 
     await waitFor(() => {
-      expect(typeof heartbeatPayload?.currentReviewMarkdown).toBe("string");
+      expect(
+        typeof capturedHeartbeatPayload(heartbeatPayload)?.currentReviewMarkdown
+      ).toBe("string");
     });
-    const sentReview = heartbeatPayload?.currentReviewMarkdown as string;
+    const sentPayload = capturedHeartbeatPayload(heartbeatPayload);
+    const sentReview = sentPayload?.currentReviewMarkdown as string;
     expect(sentReview.length).toBeLessThanOrEqual(4_000);
     expect(sentReview).toContain("Opening context that should stay visible.");
     expect(sentReview).toContain("Final decisions that should stay visible.");
     expect(sentReview).toContain("RoomPulse omitted middle review content");
-    const sentVersions = heartbeatPayload?.reviewVersions as Array<{
+    const sentVersions = sentPayload?.reviewVersions as Array<{
       markdown: string;
     }>;
     expect(sentVersions[0]?.markdown.length).toBeLessThanOrEqual(4_000);
@@ -2924,7 +2945,7 @@ describe("RoomPulseApp", () => {
       await Promise.resolve();
     });
 
-    expect(heartbeatPayload?.now).toBe(now);
+    expect(capturedHeartbeatPayload(heartbeatPayload)?.now).toBe(now);
   });
 
   it("checkpoints the current session before opening another saved meeting", async () => {
@@ -3304,7 +3325,7 @@ describe("RoomPulseApp", () => {
         )
       ).toBe(true);
     });
-    expect(heartbeatSignal?.aborted).toBe(false);
+    expect(capturedSignal(heartbeatSignal)?.aborted).toBe(false);
 
     await act(async () => {
       resolveHeartbeat?.(
@@ -3394,12 +3415,12 @@ describe("RoomPulseApp", () => {
       fireEvent.click(screen.getByRole("button", { name: /end & review/i }));
       await Promise.resolve();
     });
-    expect(heartbeatSignal?.aborted).toBe(false);
+    expect(capturedSignal(heartbeatSignal)?.aborted).toBe(false);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2_600);
     });
-    expect(heartbeatSignal?.aborted).toBe(false);
+    expect(capturedSignal(heartbeatSignal)?.aborted).toBe(false);
 
     await act(async () => {
       resolveHeartbeat?.(
@@ -3733,7 +3754,7 @@ describe("RoomPulseApp", () => {
     expect(
       await screen.findByRole("heading", { name: /other active session/i })
     ).toBeVisible();
-    expect(heartbeatSignal?.aborted).toBe(true);
+    expect(capturedSignal(heartbeatSignal)?.aborted).toBe(true);
 
     await act(async () => {
       resolveHeartbeat?.(
@@ -4294,7 +4315,9 @@ describe("RoomPulseApp", () => {
     });
 
     await waitFor(() => {
-      expect(heartbeatPayload?.lastHeartbeatAt).toBe(lastHeartbeatAt);
+      expect(
+        capturedHeartbeatPayload(heartbeatPayload)?.lastHeartbeatAt
+      ).toBe(lastHeartbeatAt);
     });
   });
 
@@ -4700,11 +4723,13 @@ describe("RoomPulseApp", () => {
     });
 
     await waitFor(() => {
-      expect(heartbeatPayload?.observedSpeakerLabels).toHaveLength(
-        MAX_EXPECTED_PARTICIPANTS
-      );
+      expect(
+        capturedHeartbeatPayload(heartbeatPayload)?.observedSpeakerLabels
+      ).toHaveLength(MAX_EXPECTED_PARTICIPANTS);
     });
-    expect(heartbeatPayload?.observedSpeakerLabels).not.toContain("Speaker 25");
+    expect(
+      capturedHeartbeatPayload(heartbeatPayload)?.observedSpeakerLabels
+    ).not.toContain("Speaker 25");
     expect(
       within(screen.getByLabelText(/participation/i)).queryByText("Speaker 25")
     ).not.toBeInTheDocument();

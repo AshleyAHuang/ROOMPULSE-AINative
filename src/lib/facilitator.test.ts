@@ -349,7 +349,9 @@ describe("heartbeat facilitation", () => {
           markdown: "# Review",
           summary: "Review.",
           debug: "review-debug"
-        } as unknown as Parameters<typeof createHeartbeatInput>[0]["reviewVersions"][number]
+        } as unknown as NonNullable<
+          Parameters<typeof createHeartbeatInput>[0]["reviewVersions"]
+        >[number]
       ]
     });
 

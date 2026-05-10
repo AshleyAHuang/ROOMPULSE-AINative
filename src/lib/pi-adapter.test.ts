@@ -20,12 +20,16 @@ const modelRegistry = {
   hasConfiguredAuth: vi.fn()
 };
 const sessionManager = { kind: "in-memory-session-manager" };
+type PiSessionStateMessage = {
+  role: string;
+  content: Array<{ type: string; text: string }>;
+};
 const session = {
   subscribe: vi.fn(),
   prompt: vi.fn(),
   dispose: vi.fn(),
   state: {
-    messages: []
+    messages: [] as PiSessionStateMessage[]
   }
 };
 

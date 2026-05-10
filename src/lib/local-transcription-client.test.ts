@@ -12,6 +12,20 @@ import {
 } from "./facilitator";
 import { MAX_OBSERVED_SPEAKER_LABELS } from "./speaker-tracker";
 
+type PendingSocketMock = {
+  readyState?: number;
+  onopen: (() => void) | null;
+  onerror: (() => void) | null;
+  onclose: (() => void) | null;
+  close: ReturnType<typeof vi.fn>;
+};
+
+function capturedPendingSocket(
+  socket: PendingSocketMock | null
+): PendingSocketMock | null {
+  return socket;
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -161,14 +175,7 @@ describe("local transcription audio utilities", () => {
 
   it("rejects promptly when the transcription socket closes before opening", async () => {
     const stopTrack = vi.fn();
-    let socket:
-      | {
-          onopen: (() => void) | null;
-          onerror: (() => void) | null;
-          onclose: (() => void) | null;
-          close: ReturnType<typeof vi.fn>;
-        }
-      | null = null;
+    let socket: PendingSocketMock | null = null;
     const WebSocketMock = vi.fn(function WebSocketMock() {
       socket = {
         onopen: null,
@@ -205,8 +212,8 @@ describe("local transcription audio utilities", () => {
 
     const startPromise = client.start();
     await Promise.resolve();
-    expect(socket?.onclose).toEqual(expect.any(Function));
-    socket?.onclose?.();
+    expect(capturedPendingSocket(socket)?.onclose).toEqual(expect.any(Function));
+    capturedPendingSocket(socket)?.onclose?.();
     const outcome = await Promise.race([
       startPromise.then(
         () => "resolved",
@@ -217,7 +224,7 @@ describe("local transcription audio utilities", () => {
       })
     ]);
 
-    socket?.onerror?.();
+    capturedPendingSocket(socket)?.onerror?.();
     await startPromise.catch(() => undefined);
 
     expect(outcome).toBe("rejected:Could not connect to ws://127.0.0.1:8765/ws");
@@ -226,15 +233,7 @@ describe("local transcription audio utilities", () => {
 
   it("closes a pending transcription socket when mic start is stopped during connect", async () => {
     const stopTrack = vi.fn();
-    let socket:
-      | {
-          readyState: number;
-          onopen: (() => void) | null;
-          onerror: (() => void) | null;
-          onclose: (() => void) | null;
-          close: ReturnType<typeof vi.fn>;
-        }
-      | null = null;
+    let socket: PendingSocketMock | null = null;
     const WebSocketMock = vi.fn(function WebSocketMock() {
       socket = {
         readyState: 0,
@@ -275,9 +274,9 @@ describe("local transcription audio utilities", () => {
     expect(WebSocketMock).toHaveBeenCalledOnce();
 
     await client.stop();
-    socket?.onclose?.();
+    capturedPendingSocket(socket)?.onclose?.();
 
-    expect(socket?.close).toHaveBeenCalledOnce();
+    expect(capturedPendingSocket(socket)?.close).toHaveBeenCalledOnce();
     expect(stopTrack).toHaveBeenCalledOnce();
     await expect(startPromise).rejects.toThrow("Microphone start cancelled.");
   });
