@@ -408,9 +408,54 @@ function getDatabase(): DatabaseSync {
     CREATE INDEX IF NOT EXISTS idx_review_versions_meeting_time
       ON review_versions(meeting_id, timestamp DESC);
   `);
+  migrateLegacySchema(db);
 
   cache = { path, db };
   return db;
+}
+
+function migrateLegacySchema(db: DatabaseSync): void {
+  ensureColumn(db, "meeting_sessions", "ended_at", "INTEGER");
+  ensureColumn(
+    db,
+    "meeting_sessions",
+    "status",
+    "TEXT NOT NULL DEFAULT 'active'"
+  );
+  ensureColumn(
+    db,
+    "meeting_sessions",
+    "is_paused",
+    "INTEGER NOT NULL DEFAULT 0"
+  );
+  ensureColumn(
+    db,
+    "meeting_sessions",
+    "event_count",
+    "INTEGER NOT NULL DEFAULT 0"
+  );
+  ensureColumn(db, "meeting_sessions", "state_json", "TEXT");
+  ensureColumn(db, "meeting_sessions", "latest_review_markdown", "TEXT");
+  ensureColumn(db, "meeting_sessions", "latest_review_version_id", "TEXT");
+  ensureColumn(db, "transcript_lines", "source", "TEXT NOT NULL DEFAULT 'speech'");
+  ensureColumn(db, "transcript_lines", "confidence", "REAL NOT NULL DEFAULT 1.0");
+  ensureColumn(db, "review_versions", "source", "TEXT NOT NULL DEFAULT 'pi'");
+  ensureColumn(db, "review_versions", "summary", "TEXT NOT NULL DEFAULT ''");
+}
+
+function ensureColumn(
+  db: DatabaseSync,
+  table: string,
+  column: string,
+  definition: string
+): void {
+  const columns = db
+    .prepare(`PRAGMA table_info(${table})`)
+    .all() as unknown as Array<{ name: string }>;
+  if (columns.some((entry) => entry.name === column)) {
+    return;
+  }
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 
 type DatabaseSyncConstructor = new (path: string) => DatabaseSync;
