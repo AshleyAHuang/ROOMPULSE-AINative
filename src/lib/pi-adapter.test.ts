@@ -312,6 +312,57 @@ describe("Pi adapter", () => {
       .toBe(true);
   });
 
+  it("ignores malformed Pi agenda actions instead of defaulting them complete", async () => {
+    writeFileSync(
+      process.env.ROOMPULSE_CODEX_AUTH_PATH!,
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: {
+          access_token: jwtWithExpiration(1_900_000_000),
+          refresh_token: "refresh-token",
+          account_id: "acct_123"
+        }
+      })
+    );
+    session.subscribe.mockImplementation((listener: (event: unknown) => void) => {
+      listener({
+        type: "message_update",
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta: JSON.stringify({
+            cards: [
+              {
+                kind: "agenda",
+                title: "Agenda status",
+                body: "Only valid agenda actions should be applied.",
+                priority: "medium"
+              }
+            ],
+            summary: "Agenda update.",
+            reviewMarkdown: "# Launch check\n\nAgenda update.",
+            agendaActions: [
+              { itemId: "a1", reason: "Missing done should be ignored." },
+              { itemId: " ", done: true, reason: "Blank id should be ignored." },
+              { itemId: "a1", done: true, reason: "Valid completion." }
+            ],
+            uiActions: [],
+            ephemeralReminder: null
+          })
+        }
+      });
+    });
+
+    const output = await runPiHeartbeat(heartbeatInput);
+
+    expect(output.agendaActions).toEqual([
+      {
+        itemId: "a1",
+        done: true,
+        reason: "Valid completion."
+      }
+    ]);
+  });
+
   it("returns strict Pi tool updates before final prompt resolution", async () => {
     process.env.ROOMPULSE_REQUIRE_PI = "1";
     process.env.ROOMPULSE_PI_TIMEOUT_MS = "1000";

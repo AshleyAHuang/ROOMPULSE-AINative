@@ -1519,15 +1519,24 @@ function parseAgendaActions(value: unknown): FacilitatorOutput["agendaActions"] 
 
   return value
     .filter((item): item is Record<string, unknown> => isRecord(item))
-    .filter((item) => typeof item.itemId === "string")
-    .map((item) => ({
-      itemId: item.itemId as string,
-      done: typeof item.done === "boolean" ? item.done : true,
-      reason:
-        typeof item.reason === "string"
-          ? item.reason
-          : "Pi proposed an agenda status update."
-    }));
+    .map((item) => {
+      const itemId = boundedNonEmptyString(item.itemId, MAX_UI_TEXT_LENGTH);
+      const done = booleanParameter(item, "done");
+      if (!itemId || done === null) {
+        return null;
+      }
+
+      return {
+        itemId,
+        done,
+        reason:
+          boundedNonEmptyString(item.reason, MAX_UI_TEXT_LENGTH) ??
+          "Pi proposed an agenda status update."
+      };
+    })
+    .filter((item): item is FacilitatorOutput["agendaActions"][number] =>
+      Boolean(item)
+    );
 }
 
 function extractJsonObject(text: string): string {
