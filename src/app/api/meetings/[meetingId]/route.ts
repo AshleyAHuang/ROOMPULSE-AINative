@@ -116,29 +116,49 @@ function meetingStatus(value: unknown): MeetingStatus | undefined {
 }
 
 function isPersistedMeetingState(value: unknown): value is PersistedMeetingState {
+  if (
+    !isRecord(value) ||
+    meetingStatus(value.status) === undefined ||
+    !isMeeting(value.meeting) ||
+    !Array.isArray(value.transcript) ||
+    !value.transcript.every(isTranscriptLine) ||
+    typeof value.reviewMarkdown !== "string" ||
+    !Array.isArray(value.reviewVersions) ||
+    !value.reviewVersions.every(isReviewVersion) ||
+    !isNonEmptyString(value.currentReviewVersionId) ||
+    !Array.isArray(value.timeline) ||
+    !value.timeline.every(isTimelineEntry) ||
+    !isValidTimestamp(value.lastHeartbeatAt) ||
+    !isValidTimestamp(value.nextHeartbeatAt) ||
+    !isValidTimestamp(value.meetingStartedAt) ||
+    !isIntegerAtLeast(value.heartbeatCount, 0) ||
+    typeof value.isPaused !== "boolean" ||
+    (value.activeAgendaItemId !== null &&
+      !isNonEmptyString(value.activeAgendaItemId)) ||
+    !isValidTimestamp(value.updatedAt) ||
+    (value.endedAt !== undefined &&
+      value.endedAt !== null &&
+      !isValidTimestamp(value.endedAt))
+  ) {
+    return false;
+  }
+
+  return isChronologicallyCoherentState(value as unknown as PersistedMeetingState);
+}
+
+function isChronologicallyCoherentState(
+  state: PersistedMeetingState
+): boolean {
+  const updatedAt = state.updatedAt;
   return (
-    isRecord(value) &&
-    meetingStatus(value.status) !== undefined &&
-    isMeeting(value.meeting) &&
-    Array.isArray(value.transcript) &&
-    value.transcript.every(isTranscriptLine) &&
-    typeof value.reviewMarkdown === "string" &&
-    Array.isArray(value.reviewVersions) &&
-    value.reviewVersions.every(isReviewVersion) &&
-    isNonEmptyString(value.currentReviewVersionId) &&
-    Array.isArray(value.timeline) &&
-    value.timeline.every(isTimelineEntry) &&
-    isValidTimestamp(value.lastHeartbeatAt) &&
-    isValidTimestamp(value.nextHeartbeatAt) &&
-    isValidTimestamp(value.meetingStartedAt) &&
-    isIntegerAtLeast(value.heartbeatCount, 0) &&
-    typeof value.isPaused === "boolean" &&
-    (value.activeAgendaItemId === null ||
-      isNonEmptyString(value.activeAgendaItemId)) &&
-    isValidTimestamp(value.updatedAt) &&
-    (value.endedAt === undefined ||
-      value.endedAt === null ||
-      isValidTimestamp(value.endedAt))
+    state.meetingStartedAt <= updatedAt &&
+    state.lastHeartbeatAt <= updatedAt &&
+    (state.endedAt === undefined ||
+      state.endedAt === null ||
+      state.endedAt <= updatedAt) &&
+    state.transcript.every((line) => line.timestamp <= updatedAt) &&
+    state.reviewVersions.every((version) => version.timestamp <= updatedAt) &&
+    state.timeline.every((entry) => entry.timestamp <= updatedAt)
   );
 }
 

@@ -557,6 +557,33 @@ describe("/api/meetings", () => {
             cards: [{ ...baseState.timeline[0].cards[0], kind: "unknown" }]
           }
         ]
+      },
+      { ...baseState, meetingStartedAt: timestamp + 1 },
+      { ...baseState, lastHeartbeatAt: timestamp + 1 },
+      { ...baseState, endedAt: timestamp + 1 },
+      {
+        ...baseState,
+        transcript: [
+          {
+            id: "future-line",
+            speakerId: "speaker-1",
+            speakerLabel: "Speaker 1",
+            text: "This transcript line is from the future.",
+            timestamp: timestamp + 1,
+            source: "speech",
+            confidence: 0.9
+          }
+        ]
+      },
+      {
+        ...baseState,
+        reviewVersions: [
+          { ...baseState.reviewVersions[0], timestamp: timestamp + 1 }
+        ]
+      },
+      {
+        ...baseState,
+        timeline: [{ ...baseState.timeline[0], timestamp: timestamp + 1 }]
       }
     ];
 

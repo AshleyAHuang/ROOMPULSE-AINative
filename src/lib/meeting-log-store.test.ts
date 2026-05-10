@@ -198,6 +198,61 @@ describe("meeting log store", () => {
     expect(snapshot.metadata.state).toBeNull();
   });
 
+  it("drops persisted state with future-dated materialized children", async () => {
+    const startedAt = Date.UTC(2026, 4, 9, 12, 0, 0);
+    const metadata = await createMeetingLog(meeting, startedAt);
+    const database = new DatabaseSync(join(logDir, "roompulse.sqlite"));
+    database
+      .prepare(
+        `UPDATE meeting_sessions
+          SET state_json = ?
+          WHERE id = ?`
+      )
+      .run(
+        JSON.stringify({
+          status: "active",
+          meeting,
+          transcript: [
+            {
+              id: "future-line",
+              speakerId: "speaker-1",
+              speakerLabel: "Speaker 1",
+              text: "This future transcript line should invalidate state.",
+              timestamp: startedAt + 1_000,
+              source: "speech",
+              confidence: 0.9
+            }
+          ],
+          reviewMarkdown: "# Review",
+          reviewVersions: [
+            {
+              id: "review-1",
+              timestamp: startedAt,
+              source: "initial",
+              markdown: "# Review",
+              summary: "Initial."
+            }
+          ],
+          currentReviewVersionId: "review-1",
+          timeline: [],
+          lastHeartbeatAt: startedAt,
+          nextHeartbeatAt: startedAt + 30_000,
+          meetingStartedAt: startedAt,
+          heartbeatCount: 0,
+          isPaused: false,
+          currentOutput: null,
+          activeAgendaItemId: null,
+          updatedAt: startedAt
+        }),
+        metadata.id
+      );
+    database.close();
+
+    const snapshot = await readMeetingLog(metadata.id);
+
+    expect(snapshot.metadata.state).toBeNull();
+  });
+
   it("rejects persisted meeting JSON and state with excessive participant counts", async () => {
     const startedAt = Date.UTC(2026, 4, 9, 12, 0, 0);
     const metadata = await createMeetingLog(meeting, startedAt);
