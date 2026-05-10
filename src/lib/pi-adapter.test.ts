@@ -264,10 +264,12 @@ describe("Pi adapter", () => {
     expect(createAgentSession).not.toHaveBeenCalled();
   });
 
-  it("applies strict Pi tool updates when final JSON times out", async () => {
+  it("returns strict Pi tool updates before final prompt resolution", async () => {
     process.env.ROOMPULSE_REQUIRE_PI = "1";
     process.env.ROOMPULSE_PI_TIMEOUT_MS = "1000";
     session.subscribe.mockImplementation(() => undefined);
+    let resolvePrompt: (() => void) | undefined;
+    let promptResolved = false;
     session.prompt.mockImplementation(async () => {
       const options = createAgentSession.mock.calls[0]?.[0] as {
         customTools?: Array<{
@@ -278,6 +280,13 @@ describe("Pi adapter", () => {
           ) => Promise<unknown>;
         }>;
       };
+      await options.customTools
+        ?.find((tool) => tool.name === "set_agenda_item")
+        ?.execute("tool-0", {
+          itemId: "a1",
+          done: true,
+          reason: "The room resolved the risk-owner agenda item."
+        });
       await options.customTools
         ?.find((tool) => tool.name === "update_review_document")
         ?.execute("tool-1", {
@@ -290,15 +299,70 @@ describe("Pi adapter", () => {
           message: "Ask for the risk owner now."
         });
 
-      return new Promise(() => undefined);
+      await new Promise<void>((resolve) => {
+        resolvePrompt = resolve;
+      });
+      promptResolved = true;
     });
 
     const output = await runPiHeartbeat(heartbeatInput);
 
+    expect(promptResolved).toBe(false);
     expect(output.source).toBe("pi");
     expect(output.reviewMarkdown).toContain("Updated by Pi");
+    expect(output.agendaActions).toContainEqual({
+      itemId: "a1",
+      done: true,
+      reason: "The room resolved the risk-owner agenda item."
+    });
     expect(output.ephemeralReminder).toBe("Ask for the risk owner now.");
-    expect(output.adapterNotice).toContain("final JSON completed");
+    expect(output.uiActions.map((action) => action.tool)).toEqual([
+      "set_agenda_item",
+      "update_review_document",
+      "send_room_reminder"
+    ]);
+    expect(output.adapterNotice).toContain("RoomPulse UI tool");
+    expect(session.dispose).toHaveBeenCalledOnce();
+
+    resolvePrompt?.();
+  });
+
+  it("marks RoomPulse UI tool results as turn-terminating", async () => {
+    writeFileSync(
+      process.env.ROOMPULSE_CODEX_AUTH_PATH!,
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: {
+          access_token: jwtWithExpiration(1_900_000_000),
+          refresh_token: "refresh-token",
+          account_id: "acct_123"
+        }
+      })
+    );
+
+    await runPiHeartbeat(heartbeatInput);
+    const options = createAgentSession.mock.calls[0]?.[0] as {
+      customTools?: Array<{
+        name: string;
+        execute: (
+          id: string,
+          params: Record<string, unknown>
+        ) => Promise<{ terminate?: boolean }>;
+      }>;
+    };
+    const toolParams: Record<string, Record<string, unknown>> = {
+      add_agenda_item: { title: "Budget", reason: "The room added budget." },
+      set_agenda_item: { itemId: "a1", done: true, reason: "Covered." },
+      delete_agenda_item: { itemId: "a1", reason: "Merged into another item." },
+      send_room_reminder: { message: "Invite Speaker 2.", tone: "quiet" },
+      update_review_document: { markdown: "# Done", summary: "Done" }
+    };
+
+    for (const tool of options.customTools ?? []) {
+      await expect(
+        tool.execute(`tool-${tool.name}`, toolParams[tool.name] ?? {})
+      ).resolves.toMatchObject({ terminate: true });
+    }
   });
 
   it("throws instead of falling back when Pi is required", async () => {

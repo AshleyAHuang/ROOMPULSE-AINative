@@ -4,6 +4,7 @@ import RoomPulseApp from "./RoomPulseApp";
 
 describe("RoomPulseApp", () => {
   afterEach(() => {
+    delete process.env.NEXT_PUBLIC_ROOMPULSE_PI_TIMEOUT_MS;
     vi.unstubAllGlobals();
     vi.useRealTimers();
   });
@@ -175,6 +176,7 @@ describe("RoomPulseApp", () => {
 
   it("keeps scripted transcript running while heartbeat review is pending", async () => {
     vi.useFakeTimers();
+    process.env.NEXT_PUBLIC_ROOMPULSE_PI_TIMEOUT_MS = "60000";
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (
@@ -224,6 +226,9 @@ describe("RoomPulseApp", () => {
     expect(
       screen.getByRole("button", { name: /run heartbeat now/i })
     ).toBeDisabled();
+    expect(
+      screen.getByText(/heartbeat review is running; transcript capture continues live/i)
+    ).toBeVisible();
 
     act(() => {
       vi.advanceTimersByTime(8_100);
@@ -231,6 +236,17 @@ describe("RoomPulseApp", () => {
 
     expect(
       screen.getByText(/let's start the roompulse readiness review/i)
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: /run heartbeat now/i })
+    ).toBeDisabled();
+
+    act(() => {
+      vi.advanceTimersByTime(23_000);
+    });
+
+    expect(
+      screen.getByText(/center document needs to look like a real markdown artifact/i)
     ).toBeVisible();
     expect(
       screen.getByRole("button", { name: /run heartbeat now/i })

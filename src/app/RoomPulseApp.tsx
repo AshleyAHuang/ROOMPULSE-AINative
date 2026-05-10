@@ -1764,6 +1764,9 @@ export default function RoomPulseApp() {
             <span className={`status-dot ${isPaused ? "" : "live"}`} />
             <span>{isPaused ? "Meeting paused" : "Meeting live"}</span>
             {isDemoRunning ? <span className="demo-pill">Demo running</span> : null}
+            {isHeartbeatRunning ? (
+              <span className="demo-pill">Reviewing in background</span>
+            ) : null}
             <span>{formatElapsed(meetingElapsedSeconds)} elapsed</span>
             <span>Heartbeat {heartbeatCount}</span>
           </div>
@@ -1823,6 +1826,11 @@ export default function RoomPulseApp() {
           </div>
 
           <div className="transcript-feed" ref={transcriptFeedRef}>
+            {isHeartbeatRunning ? (
+              <div className="review-progress-banner" role="status">
+                Heartbeat review is running; transcript capture continues live.
+              </div>
+            ) : null}
             {transcript.length === 0 ? (
               <p className="empty-state">
                 Raw transcript will appear here as speech or simulated lines arrive.
@@ -1897,6 +1905,7 @@ export default function RoomPulseApp() {
           <div className="review-meta">
             <span>{reviewVersions.length} versions</span>
             <span>{formatElapsed(meetingElapsedSeconds)} elapsed</span>
+            {isHeartbeatRunning ? <span>Reviewing latest heartbeat</span> : null}
             {currentOutput?.adapterNotice ? <span>{currentOutput.adapterNotice}</span> : null}
             {heartbeatError ? <span>{heartbeatError}</span> : null}
           </div>

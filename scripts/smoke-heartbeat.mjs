@@ -1,5 +1,6 @@
 const baseUrl = process.env.ROOMPULSE_SMOKE_BASE_URL ?? "http://localhost:3000";
 const timeoutMs = Number(process.env.ROOMPULSE_SMOKE_TIMEOUT_MS ?? 30_000);
+const maxElapsedMs = Number(process.env.ROOMPULSE_SMOKE_MAX_ELAPSED_MS ?? 8_000);
 const now = Date.now();
 
 const payload = {
@@ -78,6 +79,12 @@ try {
 
   if (typeof output.reviewMarkdown !== "string" || !output.reviewMarkdown.trim()) {
     throw new Error("Pi output did not include reviewMarkdown");
+  }
+
+  if (elapsedMs > maxElapsedMs) {
+    throw new Error(
+      `Heartbeat was too slow: ${elapsedMs}ms exceeded ${maxElapsedMs}ms`
+    );
   }
 
   console.log(
