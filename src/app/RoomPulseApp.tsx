@@ -846,10 +846,11 @@ export default function RoomPulseApp() {
     endingSessionRef.current = false;
     setIsInitializingReview(true);
     const demoMeeting: MeetingConfig = {
-      title: "Launch readiness review",
-      goal: "Leave with owners for every open launch risk.",
+      title: "RoomPulse MVP readiness review",
+      goal:
+        "Leave with owners for mic capture, transcription quality, Pi review latency, markdown rendering, and end-session export.",
       context:
-        "RoomPulse should surface risks, drift, and missing voices on the shared display.",
+        "RoomPulse is a room-visible AI meeting facilitator. The team is deciding whether the local MVP is ready for a realistic demo: browser microphone capture, local Whisper transcription, speaker clustering, Pi heartbeats, markdown review updates, SQLite sessions, and review/export after ending.",
       agenda: DEMO_AGENDA.map((title, index) => ({
         id: `agenda-${index + 1}`,
         title,
