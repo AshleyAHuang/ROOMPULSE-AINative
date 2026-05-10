@@ -139,7 +139,12 @@ export class LocalTranscriptionClient {
           downsample(input, this.audioContext.sampleRate, TARGET_SAMPLE_RATE)
         );
         if (pcm.byteLength > 0) {
-          this.socket.send(pcm);
+          try {
+            this.socket.send(pcm);
+          } catch {
+            this.onError("Local transcription audio send failed");
+            this.handleSocketClose(this.socket);
+          }
         }
       };
 
