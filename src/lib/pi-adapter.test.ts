@@ -357,6 +357,7 @@ describe("Pi adapter", () => {
 
     expect(promptResolved).toBe(false);
     expect(output.source).toBe("pi");
+    expect(output.cards[0]?.title).toBe("Pi tools applied");
     expect(output.reviewMarkdown).toContain("Updated by Pi");
     expect(output.agendaActions).toContainEqual({
       itemId: "a1",
@@ -454,6 +455,9 @@ describe("Pi adapter", () => {
     const output = await runPiHeartbeat(heartbeatInput);
 
     expect(output.source).toBe("openrouter");
+    expect(output.cards[0]?.title).toBe("OpenRouter tools applied");
+    expect(output.cards[0]?.body).toContain("OpenRouter updated");
+    expect(output.nextHeartbeatHint).toContain("OpenRouter");
     expect(output.reviewMarkdown).toContain("Updated by OpenRouter");
     expect(output.ephemeralReminder).toBe("Invite Speaker 2 before closing.");
     expect(createAgentSession).not.toHaveBeenCalled();

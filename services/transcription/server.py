@@ -217,7 +217,7 @@ class SpeechBrainVoiceEmbedder:
             signal = torch.from_numpy(audio.astype(np.float32)).unsqueeze(0)
             with torch.no_grad():
                 embedding = classifier.encode_batch(signal)
-            vector = embedding.squeeze().detach().cpu().numpy().astype(np.float32)
+            vector = embedding_to_numpy(embedding)
         return VoiceEmbedding(self.name, normalize_vector(vector), voice_embedding_quality(audio))
 
     def _load(self):
@@ -276,7 +276,7 @@ class PyannoteVoiceEmbedder:
                         os.unlink(path)
                     except OSError:
                         pass
-            vector = np.asarray(embedding, dtype=np.float32).reshape(-1)
+            vector = embedding_to_numpy(embedding)
         return VoiceEmbedding(self.name, normalize_vector(vector), voice_embedding_quality(audio))
 
     def _load(self):
@@ -331,6 +331,23 @@ class ResemblyzerVoiceEmbedder:
         return self._encoder, self._preprocess_wav
 
 
+class FallbackVoiceEmbedder:
+    def __init__(
+        self,
+        primary: VoiceEmbedder,
+        fallback: VoiceEmbedder | None = None,
+    ) -> None:
+        self.primary = primary
+        self.fallback = fallback or DspVoiceEmbedder()
+        self.name = f"{primary.name}+{self.fallback.name}-fallback"
+
+    def embed(self, audio: np.ndarray) -> VoiceEmbedding:
+        try:
+            return sanitize_voice_embedding(self.primary.embed(audio))
+        except Exception:
+            return sanitize_voice_embedding(self.fallback.embed(audio))
+
+
 class AutoVoiceEmbedder:
     name = "auto"
 
@@ -349,16 +366,21 @@ class AutoVoiceEmbedder:
                 candidates.extend([SpeechBrainVoiceEmbedder(), ResemblyzerVoiceEmbedder()])
                 for candidate in candidates:
                     try:
-                        embedding = candidate.embed(audio)
+                        embedding = sanitize_voice_embedding(candidate.embed(audio))
                         self._resolved = candidate
                         return embedding
                     except Exception:
                         continue
 
                 self._resolved = DspVoiceEmbedder()
-                return self._resolved.embed(audio)
+                return sanitize_voice_embedding(self._resolved.embed(audio))
 
-        return embedder.embed(audio)
+        try:
+            return sanitize_voice_embedding(embedder.embed(audio))
+        except Exception:
+            with self._lock:
+                self._resolved = DspVoiceEmbedder()
+                return sanitize_voice_embedding(self._resolved.embed(audio))
 
 
 voice_embedder_lock = threading.Lock()
@@ -374,16 +396,18 @@ def get_voice_embedder() -> VoiceEmbedder:
         if voice_embedder is not None:
             return voice_embedder
 
-        backend = os.getenv(
-            "ROOMPULSE_SPEAKER_EMBEDDING_BACKEND",
-            DEFAULT_SPEAKER_EMBEDDING_BACKEND,
-        ).lower()
+        backend = normalize_speaker_backend(
+            os.getenv(
+                "ROOMPULSE_SPEAKER_EMBEDDING_BACKEND",
+                DEFAULT_SPEAKER_EMBEDDING_BACKEND,
+            )
+        )
         if backend == "pyannote":
-            voice_embedder = PyannoteVoiceEmbedder()
+            voice_embedder = FallbackVoiceEmbedder(PyannoteVoiceEmbedder())
         elif backend == "speechbrain":
-            voice_embedder = SpeechBrainVoiceEmbedder()
+            voice_embedder = FallbackVoiceEmbedder(SpeechBrainVoiceEmbedder())
         elif backend == "resemblyzer":
-            voice_embedder = ResemblyzerVoiceEmbedder()
+            voice_embedder = FallbackVoiceEmbedder(ResemblyzerVoiceEmbedder())
         elif backend == "dsp":
             voice_embedder = DspVoiceEmbedder()
         else:
@@ -396,6 +420,24 @@ def active_voice_embedder_name() -> str:
     if isinstance(embedder, AutoVoiceEmbedder) and embedder._resolved is not None:
         return embedder._resolved.name
     return embedder.name if embedder is not None else "not-loaded"
+
+
+def normalize_speaker_backend(raw: str | None) -> str:
+    backend = (raw or DEFAULT_SPEAKER_EMBEDDING_BACKEND).strip().lower()
+    aliases = {
+        "pyannote-embedding": "pyannote",
+        "pyannote_audio": "pyannote",
+        "pyannote.audio": "pyannote",
+        "speechbrain-ecapa": "speechbrain",
+        "speechbrain_ecapa": "speechbrain",
+        "ecapa": "speechbrain",
+        "ecapa-tdnn": "speechbrain",
+        "voiceencoder": "resemblyzer",
+        "voice-encoder": "resemblyzer",
+        "local": "dsp",
+        "features": "dsp",
+    }
+    return aliases.get(backend, backend)
 
 
 def has_pyannote_token() -> bool:
@@ -689,6 +731,32 @@ def pcm16_to_float32(raw: bytes) -> np.ndarray:
         raw = raw[:-1]
     data = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
     return data / 32768.0
+
+
+def embedding_to_numpy(value: object) -> np.ndarray:
+    if not isinstance(value, np.ndarray) and hasattr(value, "data"):
+        data = getattr(value, "data")
+        if not isinstance(data, memoryview):
+            value = data
+    if hasattr(value, "detach"):
+        value = value.detach()  # type: ignore[assignment]
+    if hasattr(value, "cpu"):
+        value = value.cpu()  # type: ignore[assignment]
+    if hasattr(value, "numpy"):
+        value = value.numpy()  # type: ignore[assignment]
+    return np.asarray(value, dtype=np.float32).reshape(-1)
+
+
+def sanitize_voice_embedding(embedding: VoiceEmbedding) -> VoiceEmbedding:
+    vector = np.asarray(embedding.vector, dtype=np.float32).reshape(-1)
+    if vector.size == 0 or not np.all(np.isfinite(vector)):
+        raise ValueError(f"{embedding.backend} produced an invalid voice embedding")
+    if embedding.backend != "dsp":
+        vector = normalize_vector(vector)
+        if not np.any(vector):
+            raise ValueError(f"{embedding.backend} produced an empty voice embedding")
+    quality = clamp01(float(embedding.quality))
+    return VoiceEmbedding(embedding.backend, vector, quality)
 
 
 def write_temp_wav(audio: np.ndarray) -> str:
@@ -1059,4 +1127,7 @@ def normalize_vector(vector: np.ndarray) -> np.ndarray:
 
 
 def clamp01(value: float) -> float:
-    return max(0.0, min(1.0, float(value)))
+    value = float(value)
+    if not math.isfinite(value):
+        return 0.0
+    return max(0.0, min(1.0, value))

@@ -34,7 +34,10 @@ ROOMPULSE_SPEAKER_EMBEDDING_BACKEND=speechbrain \
 
 `ROOMPULSE_SPEAKER_EMBEDDING_BACKEND=auto` attempts pyannote first when a
 Hugging Face token is configured, then SpeechBrain, then Resemblyzer, then the
-built-in DSP embedder. Use `dsp` for the fastest dependency-free local path.
+built-in DSP embedder. Explicit neural selections accept common aliases such as
+`pyannote-embedding` and `speechbrain-ecapa`, and fall back to DSP per segment
+if the selected neural encoder cannot produce a valid embedding. Use `dsp` for
+the fastest dependency-free local path.
 
 Useful environment variables:
 

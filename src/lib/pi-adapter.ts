@@ -1362,12 +1362,13 @@ function buildOutputFromQueuedUiActions(
     .filter((action): action is FacilitatorOutput["agendaActions"][number] =>
       Boolean(action)
     );
+  const sourceLabel = source === "openrouter" ? "OpenRouter" : "Pi";
   const cards: FacilitatorOutput["cards"] = [
     {
       id: createPiCardId(input.now, "tools"),
       kind: "heartbeat",
-      title: "Pi tools applied",
-      body: "Pi updated the room display before its final JSON response completed.",
+      title: `${sourceLabel} tools applied`,
+      body: `${sourceLabel} updated the room display before its final JSON response completed.`,
       priority: "medium"
     }
   ];
@@ -1386,12 +1387,12 @@ function buildOutputFromQueuedUiActions(
     source,
     cards: cards.slice(0, MAX_CARDS),
     summary,
-    nextHeartbeatHint: "Continue with the next strict Pi heartbeat.",
+    nextHeartbeatHint: `Continue with the next strict ${sourceLabel} heartbeat.`,
     reviewMarkdown,
     agendaActions,
     uiActions: queuedUiActions,
     ephemeralReminder,
-    adapterNotice: `${source === "openrouter" ? "OpenRouter" : "Pi"} tool updates applied before final JSON completed: ${notice}`
+    adapterNotice: `${sourceLabel} tool updates applied before final JSON completed: ${notice}`
   };
 }
 

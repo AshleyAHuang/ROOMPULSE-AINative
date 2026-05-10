@@ -6,17 +6,20 @@ import numpy as np
 
 import server
 from server import (
+    AutoVoiceEmbedder,
     DEFAULT_NEURAL_SPEAKER_DISTANCE_THRESHOLDS,
     DEFAULT_BEAM_SIZE,
     DEFAULT_BEST_OF,
     DEFAULT_NO_SPEECH_THRESHOLD,
     SAMPLE_RATE,
     DspVoiceEmbedder,
+    FallbackVoiceEmbedder,
     PyannoteVoiceEmbedder,
     SpeakerClusterer,
     TranscriptionSession,
     VoiceEmbedding,
     build_dsp_voice_embedding,
+    embedding_to_numpy,
     frame_rms,
     get_voice_embedder,
     pre_emphasis_filter,
@@ -216,7 +219,64 @@ class SpeakerClustererTest(unittest.TestCase):
             else:
                 os.environ["ROOMPULSE_SPEAKER_EMBEDDING_BACKEND"] = previous_backend
 
-        self.assertIsInstance(embedder, PyannoteVoiceEmbedder)
+        self.assertIsInstance(embedder, FallbackVoiceEmbedder)
+        self.assertIsInstance(embedder.primary, PyannoteVoiceEmbedder)
+
+    def test_neural_backend_aliases_are_wrapped_with_dsp_fallback(self) -> None:
+        previous_backend = os.environ.get("ROOMPULSE_SPEAKER_EMBEDDING_BACKEND")
+        server.voice_embedder = None
+        os.environ["ROOMPULSE_SPEAKER_EMBEDDING_BACKEND"] = "speechbrain-ecapa"
+        try:
+            embedder = get_voice_embedder()
+        finally:
+            server.voice_embedder = None
+            restore_env("ROOMPULSE_SPEAKER_EMBEDDING_BACKEND", previous_backend)
+
+        self.assertIsInstance(embedder, FallbackVoiceEmbedder)
+        self.assertEqual(embedder.primary.name, "speechbrain-ecapa")
+
+    def test_fallback_voice_embedder_keeps_clustering_when_neural_backend_fails(self) -> None:
+        clusterer = SpeakerClusterer(
+            threshold=0.18,
+            embedder=FallbackVoiceEmbedder(FailingVoiceEmbedder(), DspVoiceEmbedder()),
+        )
+
+        first = asyncio.run(clusterer.assign(synthetic_voice(110)))
+        second = asyncio.run(clusterer.assign(synthetic_voice(190)))
+
+        self.assertEqual(first.label, "Speaker 1")
+        self.assertEqual(second.label, "Speaker 2")
+        self.assertEqual(first.backend, "dsp")
+
+    def test_auto_embedder_demotes_failed_resolved_backend_to_dsp(self) -> None:
+        embedder = AutoVoiceEmbedder()
+        embedder._resolved = FailingVoiceEmbedder()
+
+        embedding = embedder.embed(synthetic_voice(150))
+
+        self.assertEqual(embedding.backend, "dsp")
+        self.assertIsInstance(embedder._resolved, DspVoiceEmbedder)
+
+    def test_invalid_neural_embedding_falls_back_before_cluster_update(self) -> None:
+        clusterer = SpeakerClusterer(
+            threshold=0.18,
+            embedder=FallbackVoiceEmbedder(InvalidVoiceEmbedder(), DspVoiceEmbedder()),
+        )
+
+        speaker = asyncio.run(clusterer.assign(synthetic_voice(140)))
+
+        self.assertEqual(speaker.label, "Speaker 1")
+        self.assertEqual(speaker.backend, "dsp")
+
+    def test_embedding_to_numpy_accepts_pyannote_like_data_containers(self) -> None:
+        vector = embedding_to_numpy(FakePyannoteEmbedding([[0.1, 0.2, 0.3]]))
+
+        self.assertTrue(np.allclose(vector, np.array([0.1, 0.2, 0.3], dtype=np.float32)))
+
+    def test_embedding_to_numpy_keeps_numpy_arrays(self) -> None:
+        vector = embedding_to_numpy(np.array([[0.4, 0.5]], dtype=np.float32))
+
+        self.assertTrue(np.allclose(vector, np.array([0.4, 0.5], dtype=np.float32)))
 
     def test_transcription_window_normalizes_bad_env_order(self) -> None:
         previous_min = os.environ.get("ROOMPULSE_TRANSCRIPTION_MIN_SECONDS")
@@ -425,6 +485,29 @@ class FailingClusterer:
 
     def labels(self) -> list[str]:
         return []
+
+
+class FailingVoiceEmbedder:
+    name = "failing-neural"
+
+    def embed(self, _audio: np.ndarray) -> VoiceEmbedding:
+        raise RuntimeError("speaker encoder unavailable")
+
+
+class InvalidVoiceEmbedder:
+    name = "invalid-neural"
+
+    def embed(self, _audio: np.ndarray) -> VoiceEmbedding:
+        return VoiceEmbedding(
+            self.name,
+            np.array([float("nan"), 0.0, 0.0], dtype=np.float32),
+            0.9,
+        )
+
+
+class FakePyannoteEmbedding:
+    def __init__(self, data: list[list[float]]) -> None:
+        self.data = data
 
 
 def float32_to_pcm16(audio: np.ndarray) -> bytes:
