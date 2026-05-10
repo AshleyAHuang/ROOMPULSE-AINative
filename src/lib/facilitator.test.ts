@@ -773,6 +773,48 @@ describe("heartbeat facilitation", () => {
     ]);
   });
 
+  it("drops malformed agenda actions while capping facilitator output", () => {
+    const output = {
+      source: "pi",
+      cards: [
+        {
+          id: "card-1",
+          kind: "agenda",
+          title: "Agenda",
+          body: "Update agenda state.",
+          priority: "medium"
+        }
+      ],
+      summary: "Agenda actions.",
+      nextHeartbeatHint: "Continue.",
+      reviewMarkdown: "# Review",
+      agendaActions: [
+        null,
+        {
+          itemId: null,
+          done: true,
+          reason: "Bad item id."
+        },
+        {
+          itemId: "a1",
+          done: "true",
+          reason: "Bad done flag."
+        },
+        {
+          itemId: "a2",
+          done: false,
+          reason: "Valid action."
+        }
+      ],
+      uiActions: [],
+      ephemeralReminder: null
+    } as unknown as FacilitatorOutput;
+
+    expect(capFacilitatorOutput(output).agendaActions).toEqual([
+      { itemId: "a2", done: false, reason: "Valid action." }
+    ]);
+  });
+
   it("keeps capped facilitator card ids unique for stable rendering", () => {
     const output: FacilitatorOutput = {
       source: "pi",
@@ -811,6 +853,52 @@ describe("heartbeat facilitation", () => {
       "duplicate-card",
       "duplicate-card-3",
       "duplicate-card-2"
+    ]);
+  });
+
+  it("drops malformed cards while capping facilitator output", () => {
+    const output = {
+      source: "pi",
+      cards: [
+        null,
+        {
+          id: "unknown-kind",
+          kind: "external",
+          title: "Unknown",
+          body: "Unknown card kind.",
+          priority: "medium"
+        },
+        {
+          id: "bad-priority",
+          kind: "heartbeat",
+          title: "Bad priority",
+          body: "Priority should be known.",
+          priority: "urgent"
+        },
+        {
+          id: "valid-card",
+          kind: "heartbeat",
+          title: "Heartbeat",
+          body: "Keep going.",
+          priority: "medium"
+        }
+      ],
+      summary: "Cards.",
+      nextHeartbeatHint: "Continue.",
+      reviewMarkdown: "# Review",
+      agendaActions: [],
+      uiActions: [],
+      ephemeralReminder: null
+    } as unknown as FacilitatorOutput;
+
+    expect(capFacilitatorOutput(output).cards).toEqual([
+      {
+        id: "valid-card",
+        kind: "heartbeat",
+        title: "Heartbeat",
+        body: "Keep going.",
+        priority: "medium"
+      }
     ]);
   });
 

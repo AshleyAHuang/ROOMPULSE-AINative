@@ -187,7 +187,9 @@ export function capFacilitatorOutput(
 }
 
 function capCards(cards: FacilitatorCard[]): FacilitatorCard[] {
-  const cappedCards = cards.slice(0, MAX_FACILITATOR_OUTPUT_CARDS);
+  const cappedCards = cards
+    .filter(isRuntimeFacilitatorCard)
+    .slice(0, MAX_FACILITATOR_OUTPUT_CARDS);
   const originalIds = new Set(cappedCards.map((card) => card.id.trim()));
   const usedIds = new Set<string>();
 
@@ -210,6 +212,36 @@ function capCards(cards: FacilitatorCard[]): FacilitatorCard[] {
   });
 }
 
+function isRuntimeFacilitatorCard(value: unknown): value is FacilitatorCard {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    isFacilitatorCardKind(value.kind) &&
+    typeof value.title === "string" &&
+    typeof value.body === "string" &&
+    isFacilitatorCardPriority(value.priority)
+  );
+}
+
+function isFacilitatorCardKind(value: unknown): value is FacilitatorCardKind {
+  return (
+    value === "heartbeat" ||
+    value === "participation" ||
+    value === "risk" ||
+    value === "agenda" ||
+    value === "decision" ||
+    value === "action" ||
+    value === "drift" ||
+    value === "reminder"
+  );
+}
+
+function isFacilitatorCardPriority(
+  value: unknown
+): value is FacilitatorCard["priority"] {
+  return value === "low" || value === "medium" || value === "high";
+}
+
 function uniqueDerivedCardId(
   baseId: string,
   usedIds: Set<string>,
@@ -229,14 +261,21 @@ function capAgendaActions(actions: AgendaAction[]): AgendaAction[] {
   const byItem = new Map<string, AgendaAction>();
 
   for (const action of actions) {
-    const itemId = capText(action.itemId, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH);
+    if (!isRecord(action) || typeof action.done !== "boolean") {
+      continue;
+    }
+    const itemId = cappedStringParam(action.itemId);
+    const reason = cappedStringParam(action.reason);
+    if (!itemId || reason === undefined) {
+      continue;
+    }
     if (!byItem.has(itemId)) {
       order.push(itemId);
     }
     byItem.set(itemId, {
       itemId,
       done: action.done,
-      reason: capText(action.reason, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH)
+      reason
     });
   }
 
