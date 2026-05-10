@@ -1,8 +1,15 @@
 const baseUrl = process.env.ROOMPULSE_SMOKE_BASE_URL ?? "http://localhost:3000";
-const timeoutMs = Number(process.env.ROOMPULSE_SMOKE_TIMEOUT_MS ?? 30_000);
-const appPiTimeoutMs = Number(process.env.ROOMPULSE_PI_TIMEOUT_MS ?? 20_000);
-const maxElapsedMs = Number(
-  process.env.ROOMPULSE_SMOKE_MAX_ELAPSED_MS ?? appPiTimeoutMs
+const timeoutMs = parsePositiveMilliseconds(
+  process.env.ROOMPULSE_SMOKE_TIMEOUT_MS,
+  30_000
+);
+const appPiTimeoutMs = parsePositiveMilliseconds(
+  process.env.ROOMPULSE_PI_TIMEOUT_MS,
+  20_000
+);
+const maxElapsedMs = parsePositiveMilliseconds(
+  process.env.ROOMPULSE_SMOKE_MAX_ELAPSED_MS,
+  appPiTimeoutMs
 );
 const now = Date.now();
 const provider = process.env.ROOMPULSE_PI_PROVIDER ?? "openai-codex";
@@ -114,4 +121,13 @@ try {
   );
 } finally {
   clearTimeout(timeout);
+}
+
+function parsePositiveMilliseconds(raw, fallback) {
+  if (raw === undefined || raw === null || raw === "") {
+    return fallback;
+  }
+
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
 }
