@@ -267,6 +267,10 @@ export class LocalTranscriptionClient {
   }
 
   private handleMessage(event: MessageEvent): void {
+    if (this.stopped && !this.flushResolver) {
+      return;
+    }
+
     if (typeof event.data !== "string") {
       return;
     }

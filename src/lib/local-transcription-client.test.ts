@@ -580,6 +580,52 @@ describe("local transcription audio utilities", () => {
     );
   });
 
+  it("ignores stale socket messages after immediate mic cleanup", () => {
+    const onSegment = vi.fn();
+    const onStatus = vi.fn();
+    const onError = vi.fn();
+    const client = new LocalTranscriptionClient({
+      onSegment,
+      onStatus,
+      onError
+    });
+    const handleMessage = (
+      client as unknown as {
+        handleMessage: (event: MessageEvent) => void;
+      }
+    ).handleMessage.bind(client);
+
+    client.stopImmediately();
+    handleMessage({
+      data: JSON.stringify({
+        type: "final_transcript",
+        id: "late-line",
+        speakerId: "speaker-1",
+        speakerLabel: "Speaker 1",
+        text: "This late socket message should not reach the app.",
+        confidence: 0.9,
+        observedSpeakerLabels: ["Speaker 1"]
+      })
+    } as MessageEvent);
+    handleMessage({
+      data: JSON.stringify({
+        type: "engine_status",
+        status: "streaming",
+        message: "Late status."
+      })
+    } as MessageEvent);
+    handleMessage({
+      data: JSON.stringify({
+        type: "engine_error",
+        message: "Late error."
+      })
+    } as MessageEvent);
+
+    expect(onSegment).not.toHaveBeenCalled();
+    expect(onStatus).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+  });
+
   it("waits for the transcription server flush acknowledgement before closing", async () => {
     const closeSocket = vi.fn();
     const closeAudio = vi.fn();
