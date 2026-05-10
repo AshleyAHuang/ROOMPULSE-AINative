@@ -535,8 +535,8 @@ function isTranscriptSegment(
   { type: "final_transcript" } &
   LocalTranscriptSegment {
   return (
-    isNonEmptyString(value.id) &&
-    isNonEmptyString(value.speakerId) &&
+    isBoundedNonEmptyString(value.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
+    isBoundedNonEmptyString(value.speakerId, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
     isSafeSpeakerLabel(value.speakerLabel) &&
     isBoundedString(value.text, MAX_HEARTBEAT_INPUT_TEXT_LENGTH) &&
     isConfidence(value.confidence) &&
@@ -550,7 +550,7 @@ function isEngineStatus(
   { type: "engine_status" } &
   LocalTranscriptionStatus {
   return (
-    isNonEmptyString(value.status) &&
+    isBoundedNonEmptyString(value.status, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
     isBoundedString(value.message, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
     (value.observedSpeakerLabels === undefined ||
       isSafeObservedSpeakerLabels(value.observedSpeakerLabels))
@@ -580,6 +580,13 @@ function isNonEmptyString(value: unknown): value is string {
 
 function isBoundedString(value: unknown, maxLength: number): value is string {
   return typeof value === "string" && value.length <= maxLength;
+}
+
+function isBoundedNonEmptyString(
+  value: unknown,
+  maxLength: number
+): value is string {
+  return isNonEmptyString(value) && isBoundedString(value, maxLength);
 }
 
 function capText(value: string, maxLength: number): string {

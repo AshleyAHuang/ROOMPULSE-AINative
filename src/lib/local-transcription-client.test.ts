@@ -255,6 +255,54 @@ describe("local transcription audio utilities", () => {
     );
   });
 
+  it("rejects oversized transcript socket ids before updating the UI", () => {
+    const oversizedId = "x".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH + 1);
+    const payloads = [
+      {
+        type: "final_transcript",
+        id: oversizedId,
+        speakerId: "speaker-1",
+        speakerLabel: "Speaker 1",
+        text: "Oversized segment ids should be rejected.",
+        confidence: 0.9,
+        observedSpeakerLabels: ["Speaker 1"]
+      },
+      {
+        type: "final_transcript",
+        id: "line-1",
+        speakerId: oversizedId,
+        speakerLabel: "Speaker 1",
+        text: "Oversized speaker ids should be rejected.",
+        confidence: 0.9,
+        observedSpeakerLabels: ["Speaker 1"]
+      }
+    ];
+
+    for (const payload of payloads) {
+      const onSegment = vi.fn();
+      const onError = vi.fn();
+      const client = new LocalTranscriptionClient({
+        onSegment,
+        onStatus: vi.fn(),
+        onError
+      });
+      const handleMessage = (
+        client as unknown as {
+          handleMessage: (event: MessageEvent) => void;
+        }
+      ).handleMessage.bind(client);
+
+      handleMessage({
+        data: JSON.stringify(payload)
+      } as MessageEvent);
+
+      expect(onSegment).not.toHaveBeenCalled();
+      expect(onError).toHaveBeenCalledWith(
+        "Local transcription service sent a malformed transcript"
+      );
+    }
+  });
+
   it("rejects unbounded observed speaker labels from transcript messages", () => {
     const onSegment = vi.fn();
     const onError = vi.fn();
