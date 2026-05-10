@@ -151,6 +151,25 @@ describe("/api/meetings", () => {
     });
   });
 
+  it("rejects whitespace-only event types before writing log rows", async () => {
+    const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
+    const created = await createResponse.json();
+
+    const response = await POST_EVENT(
+      jsonRequest({
+        type: "   ",
+        timestamp: Date.now(),
+        payload: { ignored: true }
+      }),
+      routeContext(created.id)
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid log event payload"
+    });
+  });
+
   it("rejects transcript events with impossible speaker metadata", async () => {
     const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
     const created = await createResponse.json();

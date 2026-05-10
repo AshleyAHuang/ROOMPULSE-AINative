@@ -48,8 +48,7 @@ function isLogEventPayload(value: unknown): value is {
 } {
   return (
     isRecord(value) &&
-    typeof value.type === "string" &&
-    value.type.length > 0 &&
+    isNonEmptyString(value.type) &&
     isValidTimestamp(value.timestamp) &&
     "payload" in value &&
     isValidEventPayload(value.type, value.payload)
