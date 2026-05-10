@@ -76,23 +76,23 @@ function isMeeting(value: unknown): boolean {
   }
 
   return (
-    typeof value.title === "string" &&
-    typeof value.goal === "string" &&
+    isNonEmptyString(value.title) &&
+    isNonEmptyString(value.goal) &&
     typeof value.context === "string" &&
     Array.isArray(value.agenda) &&
     value.agenda.every(isAgendaItem) &&
-    isFiniteNumber(value.expectedParticipants) &&
+    isIntegerAtLeast(value.expectedParticipants, 1) &&
     Array.isArray(value.participants) &&
     value.participants.every(isParticipant) &&
-    isFiniteNumber(value.heartbeatIntervalSeconds)
+    isIntegerAtLeast(value.heartbeatIntervalSeconds, 15)
   );
 }
 
 function isAgendaItem(value: unknown): boolean {
   return (
     isRecord(value) &&
-    typeof value.id === "string" &&
-    typeof value.title === "string" &&
+    isNonEmptyString(value.id) &&
+    isNonEmptyString(value.title) &&
     typeof value.done === "boolean"
   );
 }
@@ -100,7 +100,7 @@ function isAgendaItem(value: unknown): boolean {
 function isParticipant(value: unknown): boolean {
   return (
     isRecord(value) &&
-    typeof value.name === "string" &&
+    isNonEmptyString(value.name) &&
     (value.role === undefined || typeof value.role === "string")
   );
 }
@@ -108,13 +108,13 @@ function isParticipant(value: unknown): boolean {
 function isTranscriptLine(value: unknown): boolean {
   return (
     isRecord(value) &&
-    typeof value.id === "string" &&
-    typeof value.speakerId === "string" &&
-    typeof value.speakerLabel === "string" &&
+    isNonEmptyString(value.id) &&
+    isNonEmptyString(value.speakerId) &&
+    isNonEmptyString(value.speakerLabel) &&
     typeof value.text === "string" &&
     isFiniteNumber(value.timestamp) &&
     isTranscriptSource(value.source) &&
-    isFiniteNumber(value.confidence)
+    isConfidence(value.confidence)
   );
 }
 
@@ -128,4 +128,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
+}
+
+function isIntegerAtLeast(value: unknown, min: number): value is number {
+  return isFiniteNumber(value) && Number.isInteger(value) && value >= min;
+}
+
+function isConfidence(value: unknown): value is number {
+  return isFiniteNumber(value) && value >= 0 && value <= 1;
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
 }

@@ -88,6 +88,36 @@ describe("POST /api/heartbeat", () => {
     expect(runPiHeartbeat).not.toHaveBeenCalled();
   });
 
+  it("rejects impossible heartbeat meeting and transcript values", async () => {
+    const response = await POST(
+      jsonRequest({
+        ...validPayload,
+        meeting: {
+          ...validPayload.meeting,
+          expectedParticipants: 0,
+          heartbeatIntervalSeconds: 0
+        },
+        transcript: [
+          {
+            id: "line-1",
+            speakerId: "speaker-1",
+            speakerLabel: "",
+            text: "This line has no usable speaker label.",
+            timestamp: 500,
+            source: "speech",
+            confidence: -0.2
+          }
+        ]
+      })
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid heartbeat payload"
+    });
+    expect(runPiHeartbeat).not.toHaveBeenCalled();
+  });
+
   it("marks strict Pi failures so the client does not silently fall back", async () => {
     process.env.ROOMPULSE_REQUIRE_PI = "1";
     vi.mocked(runPiHeartbeat).mockRejectedValue(new Error("Pi unavailable"));

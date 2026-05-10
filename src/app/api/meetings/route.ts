@@ -45,25 +45,23 @@ function isMeeting(value: unknown): value is MeetingConfig {
   if (!isRecord(value)) return false;
 
   return (
-    typeof value.title === "string" &&
-    typeof value.goal === "string" &&
+    isNonEmptyString(value.title) &&
+    isNonEmptyString(value.goal) &&
     typeof value.context === "string" &&
     Array.isArray(value.agenda) &&
     value.agenda.every(isAgendaItem) &&
-    typeof value.expectedParticipants === "number" &&
-    Number.isFinite(value.expectedParticipants) &&
+    isIntegerAtLeast(value.expectedParticipants, 1) &&
     Array.isArray(value.participants) &&
     value.participants.every(isParticipant) &&
-    typeof value.heartbeatIntervalSeconds === "number" &&
-    Number.isFinite(value.heartbeatIntervalSeconds)
+    isIntegerAtLeast(value.heartbeatIntervalSeconds, 15)
   );
 }
 
 function isAgendaItem(value: unknown): boolean {
   return (
     isRecord(value) &&
-    typeof value.id === "string" &&
-    typeof value.title === "string" &&
+    isNonEmptyString(value.id) &&
+    isNonEmptyString(value.title) &&
     typeof value.done === "boolean"
   );
 }
@@ -71,11 +69,24 @@ function isAgendaItem(value: unknown): boolean {
 function isParticipant(value: unknown): boolean {
   return (
     isRecord(value) &&
-    typeof value.name === "string" &&
+    isNonEmptyString(value.name) &&
     (value.role === undefined || typeof value.role === "string")
   );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isIntegerAtLeast(value: unknown, min: number): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    Number.isFinite(value) &&
+    value >= min
+  );
 }

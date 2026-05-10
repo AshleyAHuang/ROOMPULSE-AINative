@@ -150,6 +150,35 @@ describe("/api/meetings", () => {
     });
   });
 
+  it("rejects transcript events with impossible speaker metadata", async () => {
+    const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
+    const created = await createResponse.json();
+
+    const response = await POST_EVENT(
+      jsonRequest({
+        type: "transcript_line",
+        timestamp: Date.now(),
+        payload: {
+          line: {
+            id: "line-1",
+            speakerId: "",
+            speakerLabel: " ",
+            text: "Broken speaker metadata should not persist.",
+            timestamp: Date.now(),
+            source: "speech",
+            confidence: 1.4
+          }
+        }
+      }),
+      routeContext(created.id)
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid log event payload"
+    });
+  });
+
   it("rejects malformed persisted state and keeps ended meetings terminal", async () => {
     const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
     const created = await createResponse.json();
@@ -221,6 +250,24 @@ describe("/api/meetings", () => {
 
   it("returns 400 for invalid meeting payloads", async () => {
     const response = await POST(jsonRequest({ meeting: null }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid meeting payload"
+    });
+  });
+
+  it("rejects impossible meeting configuration before it reaches SQLite", async () => {
+    const response = await POST(
+      jsonRequest({
+        meeting: {
+          ...validMeeting,
+          expectedParticipants: -3,
+          heartbeatIntervalSeconds: 0,
+          agenda: [{ id: "", title: " ", done: false }]
+        }
+      })
+    );
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({

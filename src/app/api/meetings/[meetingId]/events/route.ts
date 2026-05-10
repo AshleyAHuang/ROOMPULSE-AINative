@@ -92,15 +92,15 @@ function isValidEventPayload(type: string, payload: unknown): boolean {
 function isTranscriptLine(value: unknown): boolean {
   return (
     isRecord(value) &&
-    typeof value.id === "string" &&
-    typeof value.speakerId === "string" &&
-    typeof value.speakerLabel === "string" &&
+    isNonEmptyString(value.id) &&
+    isNonEmptyString(value.speakerId) &&
+    isNonEmptyString(value.speakerLabel) &&
     typeof value.text === "string" &&
     isFiniteNumber(value.timestamp) &&
     (value.source === "speech" ||
       value.source === "simulated" ||
       value.source === "manual") &&
-    isFiniteNumber(value.confidence)
+    isConfidence(value.confidence)
   );
 }
 
@@ -121,6 +121,14 @@ function isReviewVersion(value: unknown): boolean {
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
+}
+
+function isConfidence(value: unknown): value is number {
+  return isFiniteNumber(value) && value >= 0 && value <= 1;
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 function isMeetingNotFound(error: unknown): boolean {
