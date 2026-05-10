@@ -129,11 +129,77 @@ function isHeartbeatOutput(value: unknown): boolean {
     (value.nextHeartbeatHint === undefined ||
       typeof value.nextHeartbeatHint === "string") &&
     typeof value.reviewMarkdown === "string" &&
-    (value.agendaActions === undefined || Array.isArray(value.agendaActions)) &&
-    (value.uiActions === undefined || Array.isArray(value.uiActions)) &&
+    (value.agendaActions === undefined ||
+      (Array.isArray(value.agendaActions) &&
+        value.agendaActions.every(isAgendaAction))) &&
+    (value.uiActions === undefined ||
+      (Array.isArray(value.uiActions) && value.uiActions.every(isUiAction))) &&
     (value.ephemeralReminder === undefined ||
       value.ephemeralReminder === null ||
       typeof value.ephemeralReminder === "string")
+  );
+}
+
+function isAgendaAction(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.itemId) &&
+    typeof value.done === "boolean" &&
+    isNonEmptyString(value.reason)
+  );
+}
+
+function isUiAction(value: unknown): boolean {
+  if (
+    !isRecord(value) ||
+    !isKnownUiTool(value.tool) ||
+    !isRecord(value.parameters) ||
+    !isNonEmptyString(value.reason)
+  ) {
+    return false;
+  }
+
+  if (value.tool === "add_agenda_item") {
+    return isNonEmptyString(value.parameters.title);
+  }
+
+  if (value.tool === "set_agenda_item") {
+    return (
+      isNonEmptyString(value.parameters.itemId) &&
+      typeof value.parameters.done === "boolean"
+    );
+  }
+
+  if (value.tool === "delete_agenda_item") {
+    return isNonEmptyString(value.parameters.itemId);
+  }
+
+  if (value.tool === "send_room_reminder") {
+    return (
+      isNonEmptyString(value.parameters.message) &&
+      (value.parameters.tone === undefined ||
+        typeof value.parameters.tone === "string")
+    );
+  }
+
+  if (value.tool === "update_review_document") {
+    return (
+      isNonEmptyString(value.parameters.markdown) &&
+      (value.parameters.summary === undefined ||
+        typeof value.parameters.summary === "string")
+    );
+  }
+
+  return false;
+}
+
+function isKnownUiTool(value: unknown): value is string {
+  return (
+    value === "add_agenda_item" ||
+    value === "set_agenda_item" ||
+    value === "delete_agenda_item" ||
+    value === "send_room_reminder" ||
+    value === "update_review_document"
   );
 }
 

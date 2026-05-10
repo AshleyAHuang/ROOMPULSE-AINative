@@ -237,6 +237,67 @@ describe("/api/meetings", () => {
     });
   });
 
+  it("rejects malformed heartbeat agenda and UI tool actions before storage", async () => {
+    const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
+    const created = await createResponse.json();
+    const baseOutput = {
+      source: "pi",
+      cards: [],
+      summary: "Malformed tools should not persist.",
+      nextHeartbeatHint: "Continue.",
+      reviewMarkdown: "# Review",
+      ephemeralReminder: null
+    };
+
+    const malformedAgendaAction = await POST_EVENT(
+      jsonRequest({
+        type: "heartbeat_output",
+        timestamp: Date.now(),
+        payload: {
+          reviewVersionId: "review-tools-1",
+          output: {
+            ...baseOutput,
+            agendaActions: [{ itemId: "a1", done: "yes", reason: "Bad done flag." }],
+            uiActions: []
+          }
+        }
+      }),
+      routeContext(created.id)
+    );
+
+    expect(malformedAgendaAction.status).toBe(400);
+    await expect(malformedAgendaAction.json()).resolves.toEqual({
+      error: "Invalid log event payload"
+    });
+
+    const malformedUiAction = await POST_EVENT(
+      jsonRequest({
+        type: "heartbeat_output",
+        timestamp: Date.now(),
+        payload: {
+          reviewVersionId: "review-tools-2",
+          output: {
+            ...baseOutput,
+            agendaActions: [],
+            uiActions: [
+              {
+                tool: "set_agenda_item",
+                parameters: { itemId: "a1", done: "true" },
+                reason: "Bad parameter type."
+              }
+            ]
+          }
+        }
+      }),
+      routeContext(created.id)
+    );
+
+    expect(malformedUiAction.status).toBe(400);
+    await expect(malformedUiAction.json()).resolves.toEqual({
+      error: "Invalid log event payload"
+    });
+  });
+
   it("keeps ended meetings terminal and rejects later materialized events", async () => {
     const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
     const created = await createResponse.json();
