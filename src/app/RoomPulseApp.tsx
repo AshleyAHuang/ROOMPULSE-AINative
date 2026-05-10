@@ -1529,11 +1529,13 @@ export default function RoomPulseApp() {
       const agenda = current.agenda.filter((item) => item.id !== id);
       agendaCountRef.current = agenda.length;
       logMeetingEvent("agenda_item_deleted", { item: deleted, reason });
+      setActiveAgendaItemId((activeId) =>
+        activeId === id
+          ? agenda.find((item) => !item.done)?.id ?? agenda[0]?.id ?? null
+          : activeId
+      );
       return { ...current, agenda };
     });
-    setActiveAgendaItemId((current) =>
-      current === id ? meeting.agenda.find((item) => item.id !== id)?.id ?? null : current
-    );
   }
 
   function setRuntimeHeartbeatInterval(value: number) {

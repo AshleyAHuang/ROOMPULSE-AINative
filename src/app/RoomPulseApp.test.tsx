@@ -585,6 +585,93 @@ describe("RoomPulseApp", () => {
     });
   });
 
+  it("keeps the active agenda on a current item after an agent deletes the active item", async () => {
+    let now = 1_700_000_020_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now++);
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/meetings" && method === "GET") {
+          return Response.json({ meetings: [] });
+        }
+        if (url.includes("/api/review-document/init")) {
+          return Response.json({
+            source: "pi",
+            markdown: "# Initial review",
+            summary: "Initialized."
+          });
+        }
+        if (url === "/api/meetings" && method === "POST") {
+          return Response.json(
+            {
+              id: "meeting-agenda-delete",
+              title: "Agenda delete review",
+              goal: "Validate agenda deletion.",
+              startedAt: Date.now(),
+              updatedAt: Date.now(),
+              endedAt: null,
+              status: "active",
+              isPaused: false,
+              eventCount: 0,
+              meeting: {},
+              state: null,
+              latestReviewMarkdown: "",
+              latestReviewVersionId: null
+            },
+            { status: 201 }
+          );
+        }
+        if (url.includes("/api/heartbeat")) {
+          return Response.json({
+            source: "pi",
+            cards: [],
+            summary: "Agenda item replaced.",
+            nextHeartbeatHint: "Continue.",
+            reviewMarkdown: "# Agenda delete review",
+            agendaActions: [],
+            uiActions: [
+              {
+                tool: "add_agenda_item",
+                parameters: { title: "New follow-up item" },
+                reason: "The room replaced the original agenda item."
+              },
+              {
+                tool: "delete_agenda_item",
+                parameters: { itemId: "agenda-1" },
+                reason: "The room dropped the original agenda item."
+              }
+            ],
+            ephemeralReminder: null
+          });
+        }
+        if (url.includes("/events")) {
+          return Response.json({ id: "event-1" }, { status: 201 });
+        }
+        return Response.json({});
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    fireEvent.change(screen.getByLabelText(/agenda/i), {
+      target: { value: "Original item" }
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /run heartbeat/i }));
+    });
+
+    const nowDiscussing = await screen.findByLabelText("Now discussing");
+    expect(
+      within(nowDiscussing).getByRole("heading", { name: /new follow-up item/i })
+    ).toBeVisible();
+    expect(screen.queryByText(/^Original item$/i)).not.toBeInTheDocument();
+  });
+
   it("creates unique ids when restoring the same review version repeatedly", async () => {
     vi.spyOn(Date, "now").mockReturnValue(1_700_000_010_000);
     const fetchMock = vi.fn(
