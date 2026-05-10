@@ -754,15 +754,9 @@ function readTranscriptLines(
     )
     .all(meetingId) as unknown as TranscriptRow[];
 
-  return rows.map((row) => ({
-    id: row.id,
-    speakerId: row.speaker_id,
-    speakerLabel: row.speaker_label,
-    text: row.text,
-    timestamp: row.timestamp,
-    source: row.source as TranscriptLine["source"],
-    confidence: row.confidence
-  }));
+  return rows
+    .map(transcriptLineFromRow)
+    .filter((line): line is TranscriptLine => line !== null);
 }
 
 function readReviewVersions(
@@ -778,13 +772,53 @@ function readReviewVersions(
     )
     .all(meetingId) as unknown as ReviewVersionRow[];
 
-  return rows.map((row) => ({
+  return rows
+    .map(reviewVersionFromRow)
+    .filter((version): version is ReviewVersion => version !== null);
+}
+
+function transcriptLineFromRow(row: TranscriptRow): TranscriptLine | null {
+  if (
+    !isNonEmptyString(row.id) ||
+    !isNonEmptyString(row.speaker_id) ||
+    !isNonEmptyString(row.speaker_label) ||
+    typeof row.text !== "string" ||
+    !isValidTimestamp(row.timestamp) ||
+    !isTranscriptSource(row.source) ||
+    !isConfidence(row.confidence)
+  ) {
+    return null;
+  }
+
+  return {
+    id: row.id,
+    speakerId: row.speaker_id,
+    speakerLabel: row.speaker_label,
+    text: row.text,
+    timestamp: row.timestamp,
+    source: row.source,
+    confidence: row.confidence
+  };
+}
+
+function reviewVersionFromRow(row: ReviewVersionRow): ReviewVersion | null {
+  if (
+    !isNonEmptyString(row.id) ||
+    !isValidTimestamp(row.timestamp) ||
+    !isReviewSource(row.source) ||
+    typeof row.markdown !== "string" ||
+    typeof row.summary !== "string"
+  ) {
+    return null;
+  }
+
+  return {
     id: row.id,
     timestamp: row.timestamp,
-    source: row.source as ReviewVersion["source"],
+    source: row.source,
     markdown: row.markdown,
     summary: row.summary
-  }));
+  };
 }
 
 function mergeStateWithMaterializedRows(

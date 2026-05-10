@@ -197,6 +197,90 @@ describe("meeting log store", () => {
     expect(snapshot.metadata.state).toBeNull();
   });
 
+  it("filters malformed materialized transcript and review rows on read", async () => {
+    const startedAt = Date.UTC(2026, 4, 9, 12, 0, 0);
+    const metadata = await createMeetingLog(meeting, startedAt);
+    const database = new DatabaseSync(join(logDir, "roompulse.sqlite"));
+    database
+      .prepare(
+        `INSERT INTO transcript_lines (
+          id,
+          meeting_id,
+          speaker_id,
+          speaker_label,
+          text,
+          timestamp,
+          source,
+          confidence
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "valid-line",
+        metadata.id,
+        "speaker-1",
+        "Speaker 1",
+        "Keep this transcript row.",
+        startedAt + 1_000,
+        "speech",
+        0.9
+      );
+    database
+      .prepare(
+        `INSERT INTO transcript_lines (
+          id,
+          meeting_id,
+          speaker_id,
+          speaker_label,
+          text,
+          timestamp,
+          source,
+          confidence
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "bad-line",
+        metadata.id,
+        "speaker-2",
+        "Speaker 2",
+        "Drop this malformed transcript row.",
+        startedAt + 2_000,
+        "bad-source",
+        0.9
+      );
+    database
+      .prepare(
+        `INSERT INTO review_versions (
+          id,
+          meeting_id,
+          timestamp,
+          source,
+          markdown,
+          summary
+        ) VALUES (?, ?, ?, ?, ?, ?)`
+      )
+      .run("valid-review", metadata.id, startedAt + 1_000, "pi", "# Good", "Good.");
+    database
+      .prepare(
+        `INSERT INTO review_versions (
+          id,
+          meeting_id,
+          timestamp,
+          source,
+          markdown,
+          summary
+        ) VALUES (?, ?, ?, ?, ?, ?)`
+      )
+      .run("bad-review", metadata.id, -1, "bad-source", "# Bad", "Bad.");
+    database.close();
+
+    const snapshot = await readMeetingLog(metadata.id);
+
+    expect(snapshot.transcript.map((line) => line.id)).toEqual(["valid-line"]);
+    expect(snapshot.reviewVersions.map((version) => version.id)).toEqual([
+      "valid-review"
+    ]);
+  });
+
   it("backfills legacy event counts and latest review metadata", async () => {
     const startedAt = Date.UTC(2026, 4, 9, 12, 0, 0);
     const database = new DatabaseSync(join(logDir, "roompulse.sqlite"));
