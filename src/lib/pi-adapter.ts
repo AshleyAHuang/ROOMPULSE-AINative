@@ -1532,13 +1532,47 @@ function parseAgendaActions(value: unknown): FacilitatorOutput["agendaActions"] 
 
 function extractJsonObject(text: string): string {
   const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-
-  if (start === -1 || end === -1 || end <= start) {
+  if (start === -1) {
     throw new Error("Pi response did not contain JSON");
   }
 
-  return text.slice(start, end + 1);
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = start; index < text.length; index += 1) {
+    const character = text[index];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (character === "\"") {
+      inString = true;
+      continue;
+    }
+
+    if (character === "{") {
+      depth += 1;
+      continue;
+    }
+
+    if (character === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return text.slice(start, index + 1);
+      }
+    }
+  }
+
+  throw new Error("Pi response did not contain a complete JSON object");
 }
 
 function extractAssistantText(messages: unknown[]): string {

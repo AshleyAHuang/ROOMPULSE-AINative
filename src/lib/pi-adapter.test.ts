@@ -218,6 +218,56 @@ describe("Pi adapter", () => {
     );
   });
 
+  it("parses the first complete Pi JSON object without swallowing trailing diagnostics", async () => {
+    writeFileSync(
+      process.env.ROOMPULSE_CODEX_AUTH_PATH!,
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: {
+          access_token: jwtWithExpiration(1_900_000_000),
+          refresh_token: "refresh-token",
+          account_id: "acct_123"
+        }
+      })
+    );
+    session.subscribe.mockImplementation((listener: (event: unknown) => void) => {
+      listener({
+        type: "message_update",
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta: [
+            "Here is the strict heartbeat JSON.\n",
+            JSON.stringify({
+              cards: [
+                {
+                  kind: "heartbeat",
+                  title: "Use the current review",
+                  body: "Trailing diagnostics should not poison the JSON object.",
+                  priority: "medium"
+                }
+              ],
+              summary: "One valid JSON object was parsed.",
+              nextHeartbeatHint: "Continue.",
+              reviewMarkdown:
+                "# Launch check\n\nKeep this {literal brace} text in markdown.",
+              agendaActions: [],
+              uiActions: [],
+              ephemeralReminder: null
+            }),
+            "\nDiagnostics: ",
+            JSON.stringify({ ignored: true })
+          ].join("")
+        }
+      });
+    });
+
+    const output = await runPiHeartbeat(heartbeatInput);
+
+    expect(output.source).toBe("pi");
+    expect(output.summary).toBe("One valid JSON object was parsed.");
+    expect(output.reviewMarkdown).toContain("{literal brace}");
+  });
+
   it("initializes the pre-meeting markdown document through Pi", async () => {
     writeFileSync(
       process.env.ROOMPULSE_CODEX_AUTH_PATH!,
