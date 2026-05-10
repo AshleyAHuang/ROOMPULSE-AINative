@@ -18,9 +18,14 @@ ROOMPULSE_WHISPER_MODEL=tiny.en uv run uvicorn server:app --host 127.0.0.1 --por
 ```
 
 Speaker clustering uses the deterministic local DSP embedder unless a stronger
-speaker-embedding backend is installed and selected. For better voice
-categorization, install the optional speaker stack and use a neural speaker
-encoder from the pyannote.audio, SpeechBrain, or Resemblyzer projects:
+speaker-embedding backend is installed and selected. The production clusterer
+keeps a bounded voiceprint exemplar set per `Speaker N`, so matching is based
+on stable speaker examples as well as the live centroid instead of letting one
+mixed or noisy segment drag every future voice into `Speaker 1`.
+
+For better voice categorization, install the optional speaker stack and use a
+neural speaker encoder from the pyannote.audio, SpeechBrain, or Resemblyzer
+projects:
 
 ```bash
 uv sync --extra speaker
@@ -40,6 +45,9 @@ if the selected neural encoder cannot produce a valid embedding. Explicit
 neural backends circuit-break to DSP after repeated failures so a missing gated
 model or broken local Torch install does not stall every transcript window. Use
 `dsp` for the fastest dependency-free local path.
+
+Repeated one-phrase Whisper hallucinations such as room-hum "I'm sorry" loops
+are filtered after transcription before they reach the live transcript.
 
 Useful environment variables:
 

@@ -19,6 +19,8 @@ from server import (
     TranscriptionSession,
     VoiceEmbedding,
     build_dsp_voice_embedding,
+    clean_transcript_text,
+    cluster_voice_distance,
     embedding_to_numpy,
     frame_rms,
     get_voice_embedder,
@@ -305,6 +307,53 @@ class SpeakerClustererTest(unittest.TestCase):
         self.assertIn(third.label, ["Speaker 1", "Speaker 2"])
         self.assertEqual(clusterer.labels(), ["Speaker 1", "Speaker 2"])
 
+    def test_clusterer_keeps_voiceprint_exemplars_for_robust_matching(self) -> None:
+        clusterer = SpeakerClusterer(
+            threshold=0.2,
+            embedder=FixedEmbeddingVoiceEmbedder(
+                [
+                    np.array([1.0, 0.0, 0.0], dtype=np.float32),
+                    np.array([0.96, 0.04, 0.0], dtype=np.float32),
+                    np.array([0.99, 0.01, 0.0], dtype=np.float32),
+                ]
+            ),
+        )
+
+        first = asyncio.run(clusterer.assign(synthetic_voice(110)))
+        second = asyncio.run(clusterer.assign(synthetic_voice(115)))
+        third = asyncio.run(clusterer.assign(synthetic_voice(118)))
+
+        self.assertEqual(first.label, "Speaker 1")
+        self.assertEqual(second.label, "Speaker 1")
+        self.assertEqual(third.label, "Speaker 1")
+        self.assertGreaterEqual(len(clusterer.clusters[0].exemplars), 1)
+        self.assertLess(
+            cluster_voice_distance(
+                clusterer.clusters[0],
+                np.array([1.0, 0.0, 0.0], dtype=np.float32),
+            ),
+            0.03,
+        )
+
+    def test_clusterer_bounds_voiceprint_exemplar_memory(self) -> None:
+        vectors = [
+            np.array([1.0, value / 1000.0, 0.0], dtype=np.float32)
+            for value in range(10)
+        ]
+        clusterer = SpeakerClusterer(
+            threshold=0.4,
+            embedder=FixedEmbeddingVoiceEmbedder(vectors),
+        )
+
+        for _vector in vectors:
+            asyncio.run(clusterer.assign(synthetic_voice(130)))
+
+        self.assertEqual(clusterer.labels(), ["Speaker 1"])
+        self.assertLessEqual(
+            len(clusterer.clusters[0].exemplars),
+            server.DEFAULT_CLUSTER_EXEMPLAR_LIMIT,
+        )
+
     def test_invalid_max_cluster_env_uses_default(self) -> None:
         previous_max = os.environ.get("ROOMPULSE_SPEAKER_MAX_CLUSTERS")
         os.environ["ROOMPULSE_SPEAKER_MAX_CLUSTERS"] = "0"
@@ -396,6 +445,23 @@ class SpeakerClustererTest(unittest.TestCase):
         self.assertEqual(
             model.kwargs["no_speech_threshold"],
             DEFAULT_NO_SPEECH_THRESHOLD,
+        )
+
+    def test_clean_transcript_text_drops_repeated_noise_hallucinations(self) -> None:
+        text = clean_transcript_text(
+            "I'm sorry. I'm sorry. I'm sorry. I'm sorry. I'm sorry."
+        )
+
+        self.assertEqual(text, "")
+
+    def test_clean_transcript_text_keeps_real_meeting_repetition(self) -> None:
+        text = clean_transcript_text(
+            "We need a launch owner. We need support coverage. We need final approval."
+        )
+
+        self.assertEqual(
+            text,
+            "We need a launch owner. We need support coverage. We need final approval.",
         )
 
     def test_flush_returns_to_listening_when_whisper_produces_no_text(self) -> None:

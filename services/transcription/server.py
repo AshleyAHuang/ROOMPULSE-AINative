@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import math
 import os
+import re
 import threading
 import time
 import wave
@@ -42,12 +44,22 @@ DEFAULT_SPEAKER_MIN_QUALITY = 0.18
 DEFAULT_SPEAKER_MAX_CLUSTERS = 12
 DEFAULT_SPEAKER_BACKEND_FAILURE_LIMIT = 1
 DEFAULT_SPEAKER_EMBEDDING_BACKEND = "auto"
+DEFAULT_CLUSTER_EXEMPLAR_LIMIT = 6
 DEFAULT_BEAM_SIZE = 5
 DEFAULT_BEST_OF = 5
 DEFAULT_NO_SPEECH_THRESHOLD = 0.55
 DEFAULT_VAD_MODE = 2
 SPEECHBRAIN_MODEL = "speechbrain/spkrec-ecapa-voxceleb"
 PYANNOTE_MODEL = "pyannote/embedding"
+REPEATED_NOISE_PHRASES = {
+    "i am sorry",
+    "i'm sorry",
+    "sorry",
+    "thank you",
+    "thanks",
+    "okay",
+    "ok",
+}
 
 try:
     import webrtcvad
@@ -87,6 +99,7 @@ async def health() -> JSONResponse:
             ),
             "speakerEmbeddingActiveBackend": active_voice_embedder_name(),
             "speakerMaxClusters": speaker_max_clusters(),
+            "speakerClusterExemplarLimit": DEFAULT_CLUSTER_EXEMPLAR_LIMIT,
             "voiceActivityDetector": (
                 "webrtcvad"
                 if webrtcvad is not None and os.getenv("ROOMPULSE_WEBRTC_VAD", "1") != "0"
@@ -178,6 +191,7 @@ class SpeakerCluster:
     centroid: np.ndarray
     samples: int = 1
     quality_sum: float = 1.0
+    exemplars: list[np.ndarray] = field(default_factory=list)
     last_seen_at: float = field(default_factory=time.time)
 
 
@@ -490,7 +504,7 @@ class SpeakerClusterer:
         for cluster in self.clusters:
             if cluster.backend != embedding.backend:
                 continue
-            distance = voice_distance(cluster.centroid, embedding.vector)
+            distance = cluster_voice_distance(cluster, embedding.vector)
             if best is None or distance < best[0]:
                 second_best_distance = best[0] if best is not None else None
                 best = (distance, cluster)
@@ -509,6 +523,7 @@ class SpeakerClusterer:
                 backend=embedding.backend,
                 centroid=embedding.vector,
                 quality_sum=max(embedding.quality, min_quality),
+                exemplars=[embedding.vector.copy()],
             )
             self.clusters.append(cluster)
             return cluster
@@ -536,6 +551,7 @@ class SpeakerClusterer:
             if embedding.backend != "dsp":
                 cluster.centroid = normalize_vector(cluster.centroid)
             cluster.quality_sum += embedding.quality
+            update_cluster_exemplars(cluster, embedding.vector)
         cluster.samples += 1
         cluster.last_seen_at = time.time()
         return cluster
@@ -560,6 +576,7 @@ class SpeakerClusterer:
             if embedding.backend != "dsp":
                 cluster.centroid = normalize_vector(cluster.centroid)
             cluster.quality_sum += embedding.quality
+            update_cluster_exemplars(cluster, embedding.vector)
         return cluster
 
     def labels(self) -> list[str]:
@@ -731,7 +748,9 @@ async def transcribe_audio(
                 "Ignore background noise, repeated apologies from noise, and room hum."
             ),
         )
-        return " ".join(segment.text.strip() for segment in segments).strip()
+        return clean_transcript_text(
+            " ".join(segment.text.strip() for segment in segments).strip()
+        )
 
     return await asyncio.to_thread(run)
 
@@ -786,6 +805,39 @@ def parse_probability(raw: str | None, default: float) -> float:
     except ValueError:
         return default
     return value if 0.0 <= value <= 1.0 else default
+
+
+def clean_transcript_text(text: str) -> str:
+    normalized = " ".join(text.strip().split())
+    if not normalized:
+        return ""
+
+    tokens = [
+        token
+        for token in (
+            re.sub(r"(^[^\w']+|[^\w']+$)", "", raw).lower()
+            for raw in normalized.split()
+        )
+        if token
+    ]
+    if len(tokens) < 6:
+        return normalized
+
+    for phrase_size in range(1, min(4, len(tokens) // 3) + 1):
+        chunk_count = len(tokens) // phrase_size
+        if chunk_count < 3:
+            continue
+        chunks = [
+            tuple(tokens[index : index + phrase_size])
+            for index in range(0, chunk_count * phrase_size, phrase_size)
+        ]
+        chunk, count = collections.Counter(chunks).most_common(1)[0]
+        coverage = (count * phrase_size) / len(tokens)
+        phrase = " ".join(chunk)
+        if count >= 3 and coverage >= 0.72 and phrase in REPEATED_NOISE_PHRASES:
+            return ""
+
+    return normalized
 
 
 def pcm16_to_float32(raw: bytes) -> np.ndarray:
@@ -1193,6 +1245,57 @@ def voice_distance(left: np.ndarray, right: np.ndarray) -> float:
 
     delta = np.abs(left - right) * VOICE_DISTANCE_WEIGHTS
     return float(np.sqrt(np.mean(np.square(delta))))
+
+
+def cluster_voice_distance(cluster: SpeakerCluster, vector: np.ndarray) -> float:
+    centroid_distance = voice_distance(cluster.centroid, vector)
+    exemplar_distances = [
+        voice_distance(exemplar, vector)
+        for exemplar in cluster.exemplars
+        if exemplar.size == vector.size
+    ]
+    if not exemplar_distances:
+        return centroid_distance
+
+    nearest_exemplar_distance = min(exemplar_distances)
+    return min(
+        centroid_distance,
+        nearest_exemplar_distance * 0.78 + centroid_distance * 0.22,
+    )
+
+
+def update_cluster_exemplars(cluster: SpeakerCluster, vector: np.ndarray) -> None:
+    if vector.size == 0:
+        return
+
+    candidate = vector.copy()
+    if cluster.backend != "dsp":
+        candidate = normalize_vector(candidate)
+
+    if cluster.exemplars:
+        exemplar_distances = [
+            (index, voice_distance(exemplar, candidate))
+            for index, exemplar in enumerate(cluster.exemplars)
+            if exemplar.size == candidate.size
+        ]
+        nearest_index, nearest_distance = min(
+            exemplar_distances,
+            key=lambda item: item[1],
+            default=(-1, 1.0),
+        )
+        if 0 <= nearest_index and nearest_distance < 0.012:
+            cluster.exemplars[nearest_index] = (
+                cluster.exemplars[nearest_index] * 0.9 + candidate * 0.1
+            ).astype(np.float32)
+            if cluster.backend != "dsp":
+                cluster.exemplars[nearest_index] = normalize_vector(
+                    cluster.exemplars[nearest_index]
+                )
+            return
+
+    cluster.exemplars.append(candidate.astype(np.float32))
+    if len(cluster.exemplars) > DEFAULT_CLUSTER_EXEMPLAR_LIMIT:
+        cluster.exemplars.pop(0)
 
 
 def normalize_vector(vector: np.ndarray) -> np.ndarray:
