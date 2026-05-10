@@ -219,8 +219,13 @@ function formatTranscript(snapshot: MeetingLogSnapshot): string {
 
 async function copyText(value: string): Promise<void> {
   if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(value);
-    return;
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // Some browsers expose navigator.clipboard but reject writes outside
+      // secure or focused contexts. Fall through to the DOM copy fallback.
+    }
   }
 
   const textarea = document.createElement("textarea");

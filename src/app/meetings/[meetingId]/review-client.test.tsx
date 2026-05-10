@@ -75,6 +75,25 @@ describe("MeetingReviewClient", () => {
     });
   });
 
+  it("falls back to DOM copy when clipboard write is rejected", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("NotAllowedError"));
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const execCommand = vi.fn(() => true);
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: execCommand
+    });
+
+    render(<MeetingReviewClient snapshot={snapshot} />);
+    fireEvent.click(screen.getByRole("button", { name: /copy latest review/i }));
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith("# Latest review");
+      expect(execCommand).toHaveBeenCalledWith("copy");
+      expect(screen.getByRole("status")).toHaveTextContent("Copied review");
+    });
+  });
+
   it("shows a clear copy failure message", async () => {
     vi.stubGlobal("navigator", {});
     Object.defineProperty(document, "execCommand", {
