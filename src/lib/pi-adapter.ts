@@ -12,7 +12,7 @@ import {
   type UiToolName
 } from "./facilitator";
 
-const DEFAULT_PI_TIMEOUT_MS = 12_000;
+const DEFAULT_PI_TIMEOUT_MS = 20_000;
 const DEFAULT_CODEX_PROVIDER = "openai-codex";
 const DEFAULT_CODEX_MODEL = "gpt-5.5";
 const OPENROUTER_PROVIDER = "openrouter";

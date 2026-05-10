@@ -126,7 +126,7 @@ const demoSnippets = [
   "This feels like a side topic for the parking lot."
 ];
 
-const DEFAULT_CLIENT_PI_TIMEOUT_MS = 15_000;
+const DEFAULT_CLIENT_PI_TIMEOUT_MS = 25_000;
 
 export default function RoomPulseApp() {
   const [phase, setPhase] = useState<Phase>("dashboard");
@@ -678,10 +678,14 @@ export default function RoomPulseApp() {
       if (!response.ok) {
         const payload = (await response.json().catch(() => null)) as {
           error?: string;
+          piRequired?: boolean;
         } | null;
-        throw new Error(
+        const initError = new Error(
           payload?.error ?? `Review initialization returned ${response.status}`
         );
+        (initError as Error & { piRequired?: boolean }).piRequired =
+          payload?.piRequired === true;
+        throw initError;
       }
 
       const document = normalizeInitialReviewDocument(
@@ -692,7 +696,10 @@ export default function RoomPulseApp() {
       return document;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (process.env.NEXT_PUBLIC_ROOMPULSE_REQUIRE_PI === "1") {
+      if (
+        process.env.NEXT_PUBLIC_ROOMPULSE_REQUIRE_PI === "1" ||
+        (error as Error & { piRequired?: boolean })?.piRequired === true
+      ) {
         throw new Error(
           error instanceof DOMException && error.name === "AbortError"
             ? `Pi initial review timed out after ${getClientPiTimeoutMs()}ms`
@@ -1853,6 +1860,11 @@ export default function RoomPulseApp() {
             >
               {isInitializingReview ? "Initializing..." : "Start meeting"}
             </button>
+            {heartbeatError ? (
+              <p className="setup-error" role="alert">
+                {heartbeatError}
+              </p>
+            ) : null}
           </form>
 
           <aside className="preview-panel">

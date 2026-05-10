@@ -1,6 +1,9 @@
 const baseUrl = process.env.ROOMPULSE_SMOKE_BASE_URL ?? "http://localhost:3000";
 const timeoutMs = Number(process.env.ROOMPULSE_SMOKE_TIMEOUT_MS ?? 30_000);
-const maxElapsedMs = Number(process.env.ROOMPULSE_SMOKE_MAX_ELAPSED_MS ?? 8_000);
+const appPiTimeoutMs = Number(process.env.ROOMPULSE_PI_TIMEOUT_MS ?? 20_000);
+const maxElapsedMs = Number(
+  process.env.ROOMPULSE_SMOKE_MAX_ELAPSED_MS ?? appPiTimeoutMs
+);
 const now = Date.now();
 const provider = process.env.ROOMPULSE_PI_PROVIDER ?? "openai-codex";
 const model =

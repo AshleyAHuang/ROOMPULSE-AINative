@@ -29,7 +29,8 @@ export async function POST(request: Request) {
         error:
           error instanceof Error
             ? error.message
-            : "Initial review document failed"
+            : "Initial review document failed",
+        piRequired: process.env.ROOMPULSE_REQUIRE_PI === "1"
       },
       { status: 500 }
     );

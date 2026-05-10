@@ -203,6 +203,43 @@ describe("RoomPulseApp", () => {
     expect(screen.getByText(/2 versions/i)).toBeVisible();
   });
 
+  it("blocks local initial-review fallback when the server requires Pi", async () => {
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/meetings" && method === "GET") {
+          return Response.json({ meetings: [] });
+        }
+        if (url.includes("/api/review-document/init")) {
+          return Response.json(
+            { error: "Codex auth missing", piRequired: true },
+            { status: 500 }
+          );
+        }
+        return Response.json({});
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /codex auth missing/i
+    );
+    expect(screen.queryByRole("button", { name: /run heartbeat/i }))
+      .not.toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) => String(url) === "/api/meetings" && init?.method === "POST"
+      )
+    ).toBe(false);
+  });
+
   it("versions the markdown produced by an update_review_document tool", async () => {
     const toolMarkdown = "# Tool markdown\n\nUpdated through the UI tool.";
     const fetchMock = vi.fn(

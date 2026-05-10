@@ -55,6 +55,25 @@ describe("POST /api/review-document/init", () => {
     });
     expect(runPiInitialReviewDocument).not.toHaveBeenCalled();
   });
+
+  it("marks failed initialization as Pi-required when strict mode is enabled", async () => {
+    process.env.ROOMPULSE_REQUIRE_PI = "1";
+    vi.mocked(runPiInitialReviewDocument).mockRejectedValue(
+      new Error("Codex auth missing")
+    );
+
+    try {
+      const response = await POST(jsonRequest({ meeting: validMeeting }));
+
+      expect(response.status).toBe(500);
+      await expect(response.json()).resolves.toEqual({
+        error: "Codex auth missing",
+        piRequired: true
+      });
+    } finally {
+      delete process.env.ROOMPULSE_REQUIRE_PI;
+    }
+  });
 });
 
 function jsonRequest(payload: unknown): Request {

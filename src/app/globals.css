@@ -1614,6 +1614,18 @@ button {
   cursor: wait;
 }
 
+.setup-error {
+  clear: both;
+  margin: 14px 0 0;
+  padding: 12px 14px;
+  border: 1px solid #f4b8b3;
+  border-radius: var(--radius-md);
+  background: var(--md-error-container);
+  color: #8c1d18;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .preview-panel {
   display: flex;
   flex-direction: column;
