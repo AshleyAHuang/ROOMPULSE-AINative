@@ -95,6 +95,43 @@ describe("MeetingReviewClient", () => {
     });
   });
 
+  it("uses the materialized newest review version before stale metadata", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const recoveredSnapshot: MeetingLogSnapshot = {
+      ...snapshot,
+      metadata: {
+        ...snapshot.metadata,
+        latestReviewMarkdown: "# Stale metadata review",
+        latestReviewVersionId: "stale-review"
+      },
+      reviewVersions: [
+        {
+          id: "newest-review",
+          timestamp: timestamp + 30_000,
+          source: "pi",
+          markdown: "# Materialized newest review",
+          summary: "Newest."
+        },
+        ...snapshot.reviewVersions
+      ]
+    };
+
+    render(<MeetingReviewClient snapshot={recoveredSnapshot} />);
+
+    expect(
+      screen.getByRole("heading", { name: /materialized newest review/i })
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("heading", { name: /stale metadata review/i })
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /copy latest review/i }));
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith("# Materialized newest review");
+    });
+  });
+
   it("treats epoch endedAt as a real meeting end in transcript export text", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });

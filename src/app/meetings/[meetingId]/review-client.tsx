@@ -13,8 +13,8 @@ export default function MeetingReviewClient({
   const copyMessageTimerRef = useRef<number | null>(null);
   const latestMarkdown = useMemo(() => {
     return (
-      snapshot.metadata.latestReviewMarkdown ||
       snapshot.reviewVersions[0]?.markdown ||
+      snapshot.metadata.latestReviewMarkdown ||
       snapshot.metadata.state?.reviewMarkdown ||
       ""
     );
