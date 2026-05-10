@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import RoomPulseApp from "./RoomPulseApp";
+import RoomPulseApp, { previousReviewVersion } from "./RoomPulseApp";
 
 describe("RoomPulseApp", () => {
   afterEach(() => {
@@ -29,6 +29,47 @@ describe("RoomPulseApp", () => {
       screen.getByRole("heading", { name: /roompulse setup/i })
     ).toBeInTheDocument();
   }
+
+  it("walks back restored review ids without confusing timestamp ids for sequence ids", () => {
+    const versions = [
+      {
+        id: "1700000010000-review",
+        timestamp: 1_700_000_010_000,
+        source: "pi" as const,
+        markdown: "# Heartbeat",
+        summary: "Heartbeat."
+      },
+      {
+        id: "1700000000000-initial-review",
+        timestamp: 1_700_000_000_000,
+        source: "initial" as const,
+        markdown: "# Initial",
+        summary: "Initial."
+      }
+    ];
+
+    expect(
+      previousReviewVersion(
+        versions,
+        "1700000020000-restored-1700000010000-review",
+        "# Not the fallback signal"
+      )?.id
+    ).toBe("1700000000000-initial-review");
+    expect(
+      previousReviewVersion(
+        versions,
+        "1700000020000-restored-1-1700000010000-review",
+        "# Not the fallback signal"
+      )?.id
+    ).toBe("1700000000000-initial-review");
+    expect(
+      previousReviewVersion(
+        versions,
+        "1700000020000-restored-r1-1700000010000-review",
+        "# Not the fallback signal"
+      )?.id
+    ).toBe("1700000000000-initial-review");
+  });
 
   it("starts on the dashboard and can browse local meeting logs", async () => {
     const now = Date.now();

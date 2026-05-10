@@ -1481,7 +1481,7 @@ export default function RoomPulseApp() {
     const restoredAt = Date.now();
     reviewRestoreSequenceRef.current += 1;
     const restoredVersion: ReviewVersion = {
-      id: `${restoredAt}-restored-${reviewRestoreSequenceRef.current}-${version.id}`,
+      id: `${restoredAt}-restored-r${reviewRestoreSequenceRef.current}-${version.id}`,
       timestamp: restoredAt,
       source: "restored",
       markdown: version.markdown,
@@ -2802,15 +2802,13 @@ function mergeReviewVersions(
   );
 }
 
-function previousReviewVersion(
+export function previousReviewVersion(
   versions: ReviewVersion[],
   currentId: string,
   currentMarkdown: string
 ): ReviewVersion | undefined {
   const historical = versions.filter((version) => version.source !== "restored");
-  const restoredSourceId =
-    currentId.match(/^\d+-restored-\d+-(.+)$/)?.[1] ??
-    currentId.match(/^\d+-restored-(.+)$/)?.[1];
+  const restoredSourceId = restoredHistoricalVersionId(currentId, historical);
   const activeHistoricalId = restoredSourceId ?? currentId;
   const activeIndex = historical.findIndex(
     (version) => version.id === activeHistoricalId
@@ -2819,6 +2817,21 @@ function previousReviewVersion(
     return historical[activeIndex + 1];
   }
   return historical.find((version) => version.markdown !== currentMarkdown);
+}
+
+function restoredHistoricalVersionId(
+  currentId: string,
+  historical: ReviewVersion[]
+): string | undefined {
+  const marked = currentId.match(/^\d+-restored-r\d+-(.+)$/)?.[1];
+  if (marked) return marked;
+
+  const sequenced = currentId.match(/^\d+-restored-\d+-(.+)$/)?.[1];
+  if (sequenced && historical.some((version) => version.id === sequenced)) {
+    return sequenced;
+  }
+
+  return currentId.match(/^\d+-restored-(.+)$/)?.[1];
 }
 
 async function runLocalHeartbeatInBrowser(input: ReturnType<typeof createHeartbeatInput>) {
