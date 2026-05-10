@@ -192,8 +192,48 @@ function isPipeLikeLine(line: string): boolean {
 
 function parseTableCells(line: string): string[] {
   const trimmed = line.trim();
-  const withoutEdges = trimmed.replace(/^\|/, "").replace(/\|$/, "");
-  return withoutEdges.split("|").map((cell) => cell.trim());
+  const cells = splitMarkdownTableRow(trimmed);
+  if (cells[0]?.trim() === "") {
+    cells.shift();
+  }
+  if (cells[cells.length - 1]?.trim() === "") {
+    cells.pop();
+  }
+  return cells.map((cell) => cell.trim());
+}
+
+function splitMarkdownTableRow(line: string): string[] {
+  const cells: string[] = [];
+  let current = "";
+  let inCode = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index] ?? "";
+    const next = line[index + 1];
+
+    if (char === "\\" && next === "|") {
+      current += "|";
+      index += 1;
+      continue;
+    }
+
+    if (char === "`") {
+      inCode = !inCode;
+      current += char;
+      continue;
+    }
+
+    if (char === "|" && !inCode) {
+      cells.push(current);
+      current = "";
+      continue;
+    }
+
+    current += char;
+  }
+
+  cells.push(current);
+  return cells;
 }
 
 function isSeparatorRow(cells: string[]): boolean {

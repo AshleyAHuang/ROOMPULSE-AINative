@@ -39,6 +39,24 @@ describe("MarkdownDocument", () => {
     ).toBeVisible();
   });
 
+  it("keeps escaped and inline-code pipes inside table cells", () => {
+    render(
+      <MarkdownDocument
+        markdown={[
+          "| Item | Note |",
+          "| --- | --- |",
+          "| Launch | use `A | B` and owner \\| backup |"
+        ].join("\n")}
+      />
+    );
+
+    const table = screen.getByRole("table");
+    expect(within(table).getByRole("cell", { name: "Launch" })).toBeVisible();
+    expect(within(table).getAllByRole("cell")[1]).toHaveTextContent(
+      "use A | B and owner | backup"
+    );
+  });
+
   it("groups bullet lines into semantic lists", () => {
     render(
       <MarkdownDocument
