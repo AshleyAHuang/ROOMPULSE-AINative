@@ -872,6 +872,9 @@ class TranscriptionSession:
         except json.JSONDecodeError:
             await self.send_error("Invalid control message")
             return
+        if not isinstance(message, dict):
+            await self.send_error("Invalid control message")
+            return
 
         if message.get("type") == "reset":
             async with self.flush_lock:

@@ -443,8 +443,17 @@ function getSocketFlushTimeoutMs(): number {
 function openSocket(url: string): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     let settled = false;
+    let timeout = 0;
     const socket = new WebSocket(url);
-    const timeout = window.setTimeout(() => {
+    const rejectConnection = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      window.clearTimeout(timeout);
+      reject(new Error(`Could not connect to ${url}`));
+    };
+    timeout = window.setTimeout(() => {
       if (settled) {
         return;
       }
@@ -461,14 +470,8 @@ function openSocket(url: string): Promise<WebSocket> {
       window.clearTimeout(timeout);
       resolve(socket);
     };
-    socket.onerror = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      window.clearTimeout(timeout);
-      reject(new Error(`Could not connect to ${url}`));
-    };
+    socket.onerror = rejectConnection;
+    socket.onclose = rejectConnection;
   });
 }
 

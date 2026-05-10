@@ -159,6 +159,71 @@ describe("local transcription audio utilities", () => {
     expect(stopTrack).toHaveBeenCalledOnce();
   });
 
+  it("rejects promptly when the transcription socket closes before opening", async () => {
+    const stopTrack = vi.fn();
+    let socket:
+      | {
+          onopen: (() => void) | null;
+          onerror: (() => void) | null;
+          onclose: (() => void) | null;
+          close: ReturnType<typeof vi.fn>;
+        }
+      | null = null;
+    const WebSocketMock = vi.fn(function WebSocketMock() {
+      socket = {
+        onopen: null,
+        onerror: null,
+        onclose: null,
+        close: vi.fn()
+      };
+      return socket;
+    });
+    Object.assign(WebSocketMock, { OPEN: 1 });
+    vi.stubGlobal("navigator", {
+      mediaDevices: {
+        getUserMedia: vi.fn().mockResolvedValue({
+          getTracks: () => [
+            {
+              onended: null,
+              stop: stopTrack
+            }
+          ]
+        })
+      }
+    });
+    vi.stubGlobal("WebSocket", WebSocketMock);
+    Object.defineProperty(window, "AudioContext", {
+      configurable: true,
+      value: vi.fn()
+    });
+
+    const client = new LocalTranscriptionClient({
+      onSegment: vi.fn(),
+      onStatus: vi.fn(),
+      onError: vi.fn()
+    });
+
+    const startPromise = client.start();
+    await Promise.resolve();
+    expect(socket?.onclose).toEqual(expect.any(Function));
+    socket?.onclose?.();
+    const outcome = await Promise.race([
+      startPromise.then(
+        () => "resolved",
+        (error) => `rejected:${error instanceof Error ? error.message : String(error)}`
+      ),
+      new Promise<string>((resolve) => {
+        window.setTimeout(() => resolve("pending"), 0);
+      })
+    ]);
+
+    socket?.onerror?.();
+    await startPromise.catch(() => undefined);
+
+    expect(outcome).toBe("rejected:Could not connect to ws://127.0.0.1:8765/ws");
+    expect(stopTrack).toHaveBeenCalledOnce();
+  });
+
   it("rejects malformed transcript socket messages before updating the UI", () => {
     const onSegment = vi.fn();
     const onError = vi.fn();
