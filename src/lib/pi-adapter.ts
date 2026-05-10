@@ -12,7 +12,7 @@ import {
   type UiToolName
 } from "./facilitator";
 
-const DEFAULT_PI_TIMEOUT_MS = 25_000;
+const DEFAULT_PI_TIMEOUT_MS = 12_000;
 const DEFAULT_CODEX_PROVIDER = "openai-codex";
 const DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark";
 const DEFAULT_THINKING_LEVEL = "minimal";
@@ -80,8 +80,9 @@ interface PiModule {
 export async function runPiHeartbeat(
   input: HeartbeatInput
 ): Promise<FacilitatorOutput> {
+  const timeoutMs = getPiTimeoutMs();
   try {
-    const output = await withTimeout(runPiSession(input), getPiTimeoutMs());
+    const output = await runPiSession(input, timeoutMs);
     return output;
   } catch (error) {
     if (process.env.ROOMPULSE_REQUIRE_PI === "1") {
@@ -106,8 +107,9 @@ export interface InitialReviewDocument {
 export async function runPiInitialReviewDocument(
   meeting: MeetingConfig
 ): Promise<InitialReviewDocument> {
+  const timeoutMs = getPiTimeoutMs();
   try {
-    return await withTimeout(runPiInitialReviewSession(meeting), getPiTimeoutMs());
+    return await runPiInitialReviewSession(meeting, timeoutMs);
   } catch (error) {
     if (process.env.ROOMPULSE_REQUIRE_PI === "1") {
       throw new Error(`Pi adapter required but unavailable: ${errorToMessage(error)}`);
@@ -122,11 +124,15 @@ export async function runPiInitialReviewDocument(
   }
 }
 
-async function runPiSession(input: HeartbeatInput): Promise<FacilitatorOutput> {
+async function runPiSession(
+  input: HeartbeatInput,
+  timeoutMs: number
+): Promise<FacilitatorOutput> {
   if (process.env.ROOMPULSE_PI_MODE === "local") {
     throw new Error("ROOMPULSE_PI_MODE=local");
   }
 
+  const deadline = Date.now() + timeoutMs;
   const config = getPiConfig();
   const pi = (await import(
     "@earendil-works/pi-coding-agent"
@@ -153,17 +159,21 @@ async function runPiSession(input: HeartbeatInput): Promise<FacilitatorOutput> {
   const cwd = process.cwd();
   const queuedUiActions: UiAction[] = [];
   const uiTools = createRoomPulseUiTools(queuedUiActions);
-  const { session } = await pi.createAgentSession({
-    authStorage,
-    customTools: uiTools,
-    cwd,
-    model,
-    modelRegistry,
-    noTools: "builtin",
-    sessionManager: pi.SessionManager.inMemory(cwd),
-    thinkingLevel: config.thinkingLevel,
-    tools: uiTools.map((tool) => tool.name)
-  });
+  const { session } = await withTimeout(
+    pi.createAgentSession({
+      authStorage,
+      customTools: uiTools,
+      cwd,
+      model,
+      modelRegistry,
+      noTools: "builtin",
+      sessionManager: pi.SessionManager.inMemory(cwd),
+      thinkingLevel: config.thinkingLevel,
+      tools: uiTools.map((tool) => tool.name)
+    }),
+    remainingTimeoutMs(deadline),
+    "Pi heartbeat session startup"
+  );
 
   const chunks: string[] = [];
   const unsubscribe = session.subscribe?.((event) => {
@@ -174,12 +184,41 @@ async function runPiSession(input: HeartbeatInput): Promise<FacilitatorOutput> {
   });
 
   try {
-    await session.prompt(buildPiPrompt(input));
+    try {
+      await withTimeout(
+        session.prompt(buildPiPrompt(input)),
+        remainingTimeoutMs(deadline),
+        "Pi heartbeat"
+      );
+    } catch (error) {
+      if (isPiTimeoutError(error) && queuedUiActions.length > 0) {
+        return buildOutputFromQueuedUiActions(
+          input,
+          queuedUiActions,
+          errorToMessage(error)
+        );
+      }
+
+      throw error;
+    }
 
     const text =
       chunks.join("").trim() ||
       extractAssistantText(session.state?.messages ?? session.messages ?? []);
-    const output = parsePiOutput(text);
+    let output: FacilitatorOutput;
+    try {
+      output = parsePiOutput(text);
+    } catch (error) {
+      if (queuedUiActions.length > 0) {
+        return buildOutputFromQueuedUiActions(
+          input,
+          queuedUiActions,
+          errorToMessage(error)
+        );
+      }
+
+      throw error;
+    }
     return {
       ...output,
       uiActions: mergeUiActions(output.uiActions, queuedUiActions)
@@ -191,12 +230,14 @@ async function runPiSession(input: HeartbeatInput): Promise<FacilitatorOutput> {
 }
 
 async function runPiInitialReviewSession(
-  meeting: MeetingConfig
+  meeting: MeetingConfig,
+  timeoutMs: number
 ): Promise<InitialReviewDocument> {
   if (process.env.ROOMPULSE_PI_MODE === "local") {
     throw new Error("ROOMPULSE_PI_MODE=local");
   }
 
+  const deadline = Date.now() + timeoutMs;
   const config = getPiConfig();
   const pi = (await import(
     "@earendil-works/pi-coding-agent"
@@ -221,16 +262,20 @@ async function runPiInitialReviewSession(
   }
 
   const cwd = process.cwd();
-  const { session } = await pi.createAgentSession({
-    authStorage,
-    cwd,
-    model,
-    modelRegistry,
-    noTools: "all",
-    sessionManager: pi.SessionManager.inMemory(cwd),
-    thinkingLevel: config.thinkingLevel,
-    tools: []
-  });
+  const { session } = await withTimeout(
+    pi.createAgentSession({
+      authStorage,
+      cwd,
+      model,
+      modelRegistry,
+      noTools: "all",
+      sessionManager: pi.SessionManager.inMemory(cwd),
+      thinkingLevel: config.thinkingLevel,
+      tools: []
+    }),
+    remainingTimeoutMs(deadline),
+    "Pi initial review session startup"
+  );
 
   const chunks: string[] = [];
   const unsubscribe = session.subscribe?.((event) => {
@@ -241,7 +286,11 @@ async function runPiInitialReviewSession(
   });
 
   try {
-    await session.prompt(buildInitialReviewPrompt(meeting));
+    await withTimeout(
+      session.prompt(buildInitialReviewPrompt(meeting)),
+      remainingTimeoutMs(deadline),
+      "Pi initial review"
+    );
 
     const text =
       chunks.join("").trim() ||
@@ -457,9 +506,11 @@ Respond with one JSON object only, matching:
 }
 
 Rules:
+- Keep the heartbeat fast. Prefer a compact, decisive update over a perfect report.
 - First update the markdown document: read the entire currentReviewMarkdown, then produce the complete revised document in "reviewMarkdown" before deciding any UI tool JSONs.
 - Treat reviewMarkdown as the room's living meeting artifact, not a heartbeat append log. Revise all relevant sections in place each heartbeat, including title, goal, context, agenda, participants, decisions, risks, and action items when the transcript supports changes.
-- Then respond with tool-call JSONs in "uiActions" only for the exposed RoomPulse tools: markdown document edits, agenda changes, and one-round reminders.
+- Use the actual RoomPulse UI tools when they match a change: call update_review_document for the markdown revision, agenda tools for agenda changes, and send_room_reminder for a one-round nudge.
+- Then respond with tool-call JSONs in "uiActions" only for those exposed RoomPulse tools: markdown document edits, agenda changes, and one-round reminders.
 - Maximum ${MAX_CARDS} cards. Prefer fewer, sharper cards over many shallow ones.
 - Each "title" is at most 6 words. Each "body" is one sentence under 140 characters.
 - Cards should reflect what is happening NOW: surface risks, ask for owners, flag agenda drift, nudge quiet voices, capture decisions or actions.
@@ -863,6 +914,96 @@ function mergeUiActions(primary: UiAction[], queued: UiAction[]): UiAction[] {
   return merged;
 }
 
+function buildOutputFromQueuedUiActions(
+  input: HeartbeatInput,
+  queuedUiActions: UiAction[],
+  notice: string
+): FacilitatorOutput {
+  const reviewAction = [...queuedUiActions]
+    .reverse()
+    .find((action) => action.tool === "update_review_document");
+  const reminderAction = [...queuedUiActions]
+    .reverse()
+    .find((action) => action.tool === "send_room_reminder");
+  const summary =
+    stringParameter(reviewAction?.parameters, "summary") ||
+    "Pi applied RoomPulse tool updates before the final JSON response completed.";
+  const reviewMarkdown =
+    stringParameter(reviewAction?.parameters, "markdown") ||
+    input.currentReviewMarkdown;
+  const ephemeralReminder =
+    stringParameter(reminderAction?.parameters, "message") || null;
+  const agendaActions = queuedUiActions
+    .filter((action) => action.tool === "set_agenda_item")
+    .map((action) => {
+      const itemId = stringParameter(action.parameters, "itemId");
+      const done = booleanParameter(action.parameters, "done");
+      if (!itemId || done === null) {
+        return null;
+      }
+
+      return {
+        itemId,
+        done,
+        reason: action.reason
+      };
+    })
+    .filter((action): action is FacilitatorOutput["agendaActions"][number] =>
+      Boolean(action)
+    );
+  const cards: FacilitatorOutput["cards"] = [
+    {
+      id: createPiCardId(input.now, "tools"),
+      kind: "heartbeat",
+      title: "Pi tools applied",
+      body: "Pi updated the room display before its final JSON response completed.",
+      priority: "medium"
+    }
+  ];
+
+  if (ephemeralReminder) {
+    cards.push({
+      id: createPiCardId(input.now, "reminder"),
+      kind: "reminder",
+      title: "Room reminder",
+      body: ephemeralReminder,
+      priority: "medium"
+    });
+  }
+
+  return {
+    source: "pi",
+    cards: cards.slice(0, MAX_CARDS),
+    summary,
+    nextHeartbeatHint: "Continue with the next strict Pi heartbeat.",
+    reviewMarkdown,
+    agendaActions,
+    uiActions: queuedUiActions,
+    ephemeralReminder,
+    adapterNotice: `Pi tool updates applied before final JSON completed: ${notice}`
+  };
+}
+
+function stringParameter(
+  params: Record<string, unknown> | undefined,
+  key: string
+): string | null {
+  const value = params?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function booleanParameter(
+  params: Record<string, unknown> | undefined,
+  key: string
+): boolean | null {
+  const value = params?.[key];
+  return typeof value === "boolean" ? value : null;
+}
+
+function createPiCardId(now: number, suffix: string): string {
+  return `${now}-pi-${suffix}`;
+}
+
 function parseAgendaActions(value: unknown): FacilitatorOutput["agendaActions"] {
   if (!Array.isArray(value)) {
     return [];
@@ -937,11 +1078,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+class PiTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PiTimeoutError";
+  }
+}
+
+function remainingTimeoutMs(deadline: number): number {
+  return Math.max(1, deadline - Date.now());
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string
+): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeout = setTimeout(() => {
-      reject(new Error(`Pi heartbeat timed out after ${timeoutMs}ms`));
+      reject(new PiTimeoutError(`${label} timed out after ${timeoutMs}ms`));
     }, timeoutMs);
   });
 
@@ -952,6 +1108,10 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
       clearTimeout(timeout);
     }
   }
+}
+
+function isPiTimeoutError(error: unknown): error is PiTimeoutError {
+  return error instanceof PiTimeoutError || errorToMessage(error).includes("timed out after");
 }
 
 function errorToMessage(error: unknown): string {

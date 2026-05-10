@@ -126,6 +126,8 @@ const demoSnippets = [
   "This feels like a side topic for the parking lot."
 ];
 
+const DEFAULT_CLIENT_PI_TIMEOUT_MS = 15_000;
+
 export default function RoomPulseApp() {
   const [phase, setPhase] = useState<Phase>("setup");
   const [meetingDraft, setMeetingDraft] = useState(defaultMeeting);
@@ -508,11 +510,16 @@ export default function RoomPulseApp() {
     setHeartbeatError(null);
 
     try {
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => {
+        controller.abort();
+      }, getClientPiTimeoutMs());
       const response = await fetch("/api/heartbeat", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
         },
+        signal: controller.signal,
         body: JSON.stringify({
           meeting,
           transcript,
@@ -526,6 +533,8 @@ export default function RoomPulseApp() {
           isPaused,
           heartbeatCount
         })
+      }).finally(() => {
+        window.clearTimeout(timeout);
       });
 
       if (!response.ok) {
@@ -546,7 +555,11 @@ export default function RoomPulseApp() {
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setHeartbeatError(message);
+      setHeartbeatError(
+        error instanceof DOMException && error.name === "AbortError"
+          ? `Pi heartbeat timed out after ${getClientPiTimeoutMs()}ms`
+          : message
+      );
       if (process.env.NEXT_PUBLIC_ROOMPULSE_REQUIRE_PI === "1") {
         return;
       }
@@ -581,12 +594,19 @@ export default function RoomPulseApp() {
     configuredMeeting: MeetingConfig
   ): Promise<InitialReviewDocument> {
     try {
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => {
+        controller.abort();
+      }, getClientPiTimeoutMs());
       const response = await fetch("/api/review-document/init", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
         },
+        signal: controller.signal,
         body: JSON.stringify({ meeting: configuredMeeting })
+      }).finally(() => {
+        window.clearTimeout(timeout);
       });
 
       if (!response.ok) {
@@ -606,6 +626,14 @@ export default function RoomPulseApp() {
       return document;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      if (process.env.NEXT_PUBLIC_ROOMPULSE_REQUIRE_PI === "1") {
+        throw new Error(
+          error instanceof DOMException && error.name === "AbortError"
+            ? `Pi initial review timed out after ${getClientPiTimeoutMs()}ms`
+            : message
+        );
+      }
+
       return {
         source: "local-fallback",
         markdown: createInitialReviewMarkdown(configuredMeeting),
@@ -845,6 +873,7 @@ export default function RoomPulseApp() {
   const launchLiveDemo = useCallback(async () => {
     endingSessionRef.current = false;
     setIsInitializingReview(true);
+    setHeartbeatError(null);
     const demoMeeting: MeetingConfig = {
       title: "RoomPulse MVP readiness review",
       goal:
@@ -861,7 +890,16 @@ export default function RoomPulseApp() {
       heartbeatIntervalSeconds: DEMO_HEARTBEAT_INTERVAL_SECONDS
     };
     const startedAt = Date.now();
-    const initialDocument = await initializeReviewDocument(demoMeeting);
+    let initialDocument: InitialReviewDocument;
+    try {
+      initialDocument = await initializeReviewDocument(demoMeeting);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setHeartbeatError(message);
+      setLogStatus(`Live demo blocked: ${message}`);
+      setIsInitializingReview(false);
+      return;
+    }
     const initialReview = initialDocument.markdown;
     const initialVersion: ReviewVersion = {
       id: `${startedAt}-initial-review`,
@@ -898,7 +936,7 @@ export default function RoomPulseApp() {
         }
       ],
       summary: initialDocument.summary,
-      nextHeartbeatHint: "First pulse will arrive at 15 seconds.",
+      nextHeartbeatHint: `First pulse will arrive at ${demoMeeting.heartbeatIntervalSeconds} seconds.`,
       reviewMarkdown: initialReview,
       agendaActions: [],
       uiActions: [],
@@ -1043,7 +1081,17 @@ export default function RoomPulseApp() {
     endingSessionRef.current = false;
     const configuredMeeting = configuredDraftMeeting;
     setIsInitializingReview(true);
-    const initialDocument = await initializeReviewDocument(configuredMeeting);
+    setHeartbeatError(null);
+    let initialDocument: InitialReviewDocument;
+    try {
+      initialDocument = await initializeReviewDocument(configuredMeeting);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setHeartbeatError(message);
+      setLogStatus(`Meeting start blocked: ${message}`);
+      setIsInitializingReview(false);
+      return;
+    }
     setIsInitializingReview(false);
 
     setMeeting(configuredMeeting);
@@ -2388,6 +2436,18 @@ function stringParam(value: unknown): string | null {
 
 function booleanParam(value: unknown): boolean | null {
   return typeof value === "boolean" ? value : null;
+}
+
+function getClientPiTimeoutMs(): number {
+  const configured = Number(
+    process.env.NEXT_PUBLIC_ROOMPULSE_PI_TIMEOUT_MS ??
+      process.env.ROOMPULSE_PI_TIMEOUT_MS
+  );
+  if (Number.isFinite(configured) && configured >= 1_000) {
+    return configured;
+  }
+
+  return DEFAULT_CLIENT_PI_TIMEOUT_MS;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

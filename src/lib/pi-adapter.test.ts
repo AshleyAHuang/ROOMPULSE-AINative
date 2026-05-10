@@ -22,6 +22,7 @@ const sessionManager = { kind: "in-memory-session-manager" };
 const session = {
   subscribe: vi.fn(),
   prompt: vi.fn(),
+  dispose: vi.fn(),
   state: {
     messages: []
   }
@@ -97,6 +98,7 @@ describe("Pi adapter", () => {
     delete process.env.ROOMPULSE_PI_PROVIDER;
     delete process.env.ROOMPULSE_PI_MODEL;
     delete process.env.ROOMPULSE_PI_THINKING_LEVEL;
+    delete process.env.ROOMPULSE_PI_TIMEOUT_MS;
     delete process.env.ROOMPULSE_REQUIRE_PI;
     process.env.ROOMPULSE_CODEX_AUTH_PATH = join(tempDir, "codex-auth.json");
 
@@ -260,6 +262,43 @@ describe("Pi adapter", () => {
     expect(output.source).toBe("local-fallback");
     expect(output.adapterNotice).toContain("OpenAI Codex auth is not configured");
     expect(createAgentSession).not.toHaveBeenCalled();
+  });
+
+  it("applies strict Pi tool updates when final JSON times out", async () => {
+    process.env.ROOMPULSE_REQUIRE_PI = "1";
+    process.env.ROOMPULSE_PI_TIMEOUT_MS = "1000";
+    session.subscribe.mockImplementation(() => undefined);
+    session.prompt.mockImplementation(async () => {
+      const options = createAgentSession.mock.calls[0]?.[0] as {
+        customTools?: Array<{
+          name: string;
+          execute: (
+            id: string,
+            params: Record<string, unknown>
+          ) => Promise<unknown>;
+        }>;
+      };
+      await options.customTools
+        ?.find((tool) => tool.name === "update_review_document")
+        ?.execute("tool-1", {
+          markdown: "# Updated by Pi\n\n- [ ] Risks",
+          summary: "Pi updated the markdown through a UI tool."
+        });
+      await options.customTools
+        ?.find((tool) => tool.name === "send_room_reminder")
+        ?.execute("tool-2", {
+          message: "Ask for the risk owner now."
+        });
+
+      return new Promise(() => undefined);
+    });
+
+    const output = await runPiHeartbeat(heartbeatInput);
+
+    expect(output.source).toBe("pi");
+    expect(output.reviewMarkdown).toContain("Updated by Pi");
+    expect(output.ephemeralReminder).toBe("Ask for the risk owner now.");
+    expect(output.adapterNotice).toContain("final JSON completed");
   });
 
   it("throws instead of falling back when Pi is required", async () => {

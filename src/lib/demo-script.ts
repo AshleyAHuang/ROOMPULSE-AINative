@@ -16,7 +16,7 @@ export interface DemoBeat {
   text: string;
 }
 
-export const DEMO_HEARTBEAT_INTERVAL_SECONDS = 60;
+export const DEMO_HEARTBEAT_INTERVAL_SECONDS = 30;
 export const DEMO_EXPECTED_PARTICIPANTS = 4;
 
 export const DEMO_AGENDA = [
