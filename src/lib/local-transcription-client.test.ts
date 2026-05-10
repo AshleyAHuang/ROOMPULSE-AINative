@@ -1051,6 +1051,47 @@ describe("local transcription audio utilities", () => {
     });
   });
 
+  it("ignores late transcript messages after the microphone ends before the socket opens", () => {
+    const stopTrack = vi.fn();
+    const closeAudio = vi.fn();
+    const onSegment = vi.fn();
+    const client = new LocalTranscriptionClient({
+      onSegment,
+      onStatus: vi.fn(),
+      onError: vi.fn()
+    });
+    Object.assign(client as unknown as Record<string, unknown>, {
+      socket: null,
+      stream: {
+        getTracks: () => [{ stop: stopTrack }]
+      },
+      audioContext: {
+        close: closeAudio
+      }
+    });
+    const clientInternals = client as unknown as {
+      handleInputDeviceEnded: () => void;
+      handleMessage: (event: MessageEvent) => void;
+    };
+
+    clientInternals.handleInputDeviceEnded();
+    clientInternals.handleMessage({
+      data: JSON.stringify({
+        type: "final_transcript",
+        id: "late-after-ended-input",
+        speakerId: "speaker-1",
+        speakerLabel: "Speaker 1",
+        text: "Late transcript after the microphone ended.",
+        confidence: 0.9,
+        observedSpeakerLabels: ["Speaker 1"]
+      })
+    } as MessageEvent);
+
+    expect(onSegment).not.toHaveBeenCalled();
+    expect(stopTrack).toHaveBeenCalledOnce();
+    expect(closeAudio).toHaveBeenCalledOnce();
+  });
+
   it("closes and releases resources when the socket errors without a close event", () => {
     const stopTrack = vi.fn();
     const closeSocket = vi.fn();
