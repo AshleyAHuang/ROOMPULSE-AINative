@@ -809,6 +809,7 @@ describe("/api/meetings", () => {
   });
 
   it("rejects out-of-range meeting and event timestamps before persistence", async () => {
+    const farFuture = Date.now() + 10 * 60_000;
     const invalidCreate = await POST(
       jsonRequest({
         meeting: validMeeting,
@@ -842,6 +843,17 @@ describe("/api/meetings", () => {
       error: "Invalid meeting timestamp"
     });
 
+    const futureCreate = await POST(
+      jsonRequest({
+        meeting: validMeeting,
+        startedAt: farFuture
+      })
+    );
+    expect(futureCreate.status).toBe(400);
+    await expect(futureCreate.json()).resolves.toEqual({
+      error: "Invalid meeting timestamp"
+    });
+
     const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
     const created = await createResponse.json();
     const invalidEvent = await POST_EVENT(
@@ -870,6 +882,19 @@ describe("/api/meetings", () => {
       error: "Invalid log event payload"
     });
 
+    const futureEvent = await POST_EVENT(
+      jsonRequest({
+        type: "meeting_started",
+        timestamp: farFuture,
+        payload: { meeting: validMeeting }
+      }),
+      routeContext(created.id)
+    );
+    expect(futureEvent.status).toBe(400);
+    await expect(futureEvent.json()).resolves.toEqual({
+      error: "Invalid log event payload"
+    });
+
     const invalidEndedAt = await POST_EVENT(
       jsonRequest({
         type: "meeting_ended",
@@ -880,6 +905,19 @@ describe("/api/meetings", () => {
     );
     expect(invalidEndedAt.status).toBe(400);
     await expect(invalidEndedAt.json()).resolves.toEqual({
+      error: "Invalid log event payload"
+    });
+
+    const futureEndedAt = await POST_EVENT(
+      jsonRequest({
+        type: "meeting_ended",
+        timestamp: Date.now(),
+        payload: { endedAt: farFuture }
+      }),
+      routeContext(created.id)
+    );
+    expect(futureEndedAt.status).toBe(400);
+    await expect(futureEndedAt.json()).resolves.toEqual({
       error: "Invalid log event payload"
     });
 
@@ -902,6 +940,17 @@ describe("/api/meetings", () => {
     );
     expect(negativePatch.status).toBe(400);
     await expect(negativePatch.json()).resolves.toEqual({
+      error: "Invalid meeting timestamp"
+    });
+
+    const futurePatch = await PATCH(
+      jsonRequest({
+        updatedAt: farFuture
+      }),
+      routeContext(created.id)
+    );
+    expect(futurePatch.status).toBe(400);
+    await expect(futurePatch.json()).resolves.toEqual({
       error: "Invalid meeting timestamp"
     });
   });

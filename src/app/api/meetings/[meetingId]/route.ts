@@ -16,6 +16,8 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const MAX_TIMESTAMP_FUTURE_SKEW_MS = 5 * 60 * 1000;
+
 interface RouteContext {
   params: Promise<{
     meetingId: string;
@@ -295,7 +297,8 @@ function isValidTimestamp(value: unknown): value is number {
     typeof value === "number" &&
     value >= 0 &&
     Number.isSafeInteger(value) &&
-    !Number.isNaN(new Date(value).getTime())
+    !Number.isNaN(new Date(value).getTime()) &&
+    value <= Date.now() + MAX_TIMESTAMP_FUTURE_SKEW_MS
   );
 }
 
