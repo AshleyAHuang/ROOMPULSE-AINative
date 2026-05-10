@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import {
+  MAX_EXPECTED_PARTICIPANTS,
   createHeartbeatInput,
   type CreateHeartbeatInputArgs
 } from "@/lib/facilitator";
@@ -51,24 +52,37 @@ function isHeartbeatPayload(value: unknown): value is CreateHeartbeatInputArgs {
     return false;
   }
 
+  if (
+    !isValidTimestamp(value.lastHeartbeatAt) ||
+    !isValidTimestamp(value.now) ||
+    value.now < value.lastHeartbeatAt
+  ) {
+    return false;
+  }
+  const now = value.now;
+
   return (
     isMeeting(value.meeting) &&
     Array.isArray(value.transcript) &&
-    value.transcript.every(isTranscriptLine) &&
+    value.transcript.every(
+      (line) => isTranscriptLine(line) && line.timestamp <= now
+    ) &&
     Array.isArray(value.observedSpeakerLabels) &&
     value.observedSpeakerLabels.every(isNonEmptyString) &&
-    isValidTimestamp(value.lastHeartbeatAt) &&
-    isValidTimestamp(value.now) &&
-    value.now >= value.lastHeartbeatAt &&
     Array.isArray(value.priorInterventions) &&
-    value.priorInterventions.every(isTimelineEntry) &&
+    value.priorInterventions.every(
+      (entry) => isTimelineEntry(entry) && entry.timestamp <= now
+    ) &&
     (value.currentReviewMarkdown === undefined ||
       typeof value.currentReviewMarkdown === "string") &&
     (value.reviewVersions === undefined ||
       (Array.isArray(value.reviewVersions) &&
-        value.reviewVersions.every(isReviewVersion))) &&
+        value.reviewVersions.every(
+          (version) => isReviewVersion(version) && version.timestamp <= now
+        ))) &&
     (value.meetingStartedAt === undefined ||
-      isValidTimestamp(value.meetingStartedAt)) &&
+      (isValidTimestamp(value.meetingStartedAt) &&
+        value.meetingStartedAt <= now)) &&
     (value.isPaused === undefined || typeof value.isPaused === "boolean") &&
     (value.heartbeatCount === undefined ||
       isIntegerAtLeast(value.heartbeatCount, 0))
@@ -86,7 +100,7 @@ function isMeeting(value: unknown): boolean {
     typeof value.context === "string" &&
     Array.isArray(value.agenda) &&
     value.agenda.every(isAgendaItem) &&
-    isIntegerAtLeast(value.expectedParticipants, 1) &&
+    isIntegerInRange(value.expectedParticipants, 1, MAX_EXPECTED_PARTICIPANTS) &&
     Array.isArray(value.participants) &&
     value.participants.every(isParticipant) &&
     isIntegerAtLeast(value.heartbeatIntervalSeconds, 15)
@@ -197,6 +211,14 @@ function isFiniteNumber(value: unknown): value is number {
 
 function isIntegerAtLeast(value: unknown, min: number): value is number {
   return isFiniteNumber(value) && Number.isInteger(value) && value >= min;
+}
+
+function isIntegerInRange(
+  value: unknown,
+  min: number,
+  max: number
+): value is number {
+  return isIntegerAtLeast(value, min) && value <= max;
 }
 
 function isValidTimestamp(value: unknown): value is number {

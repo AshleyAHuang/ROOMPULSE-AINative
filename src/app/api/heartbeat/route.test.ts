@@ -165,12 +165,19 @@ describe("POST /api/heartbeat", () => {
       { ...validPayload, lastHeartbeatAt: 2_000, now: 1_000 },
       { ...validPayload, meetingStartedAt: 1e100 },
       { ...validPayload, meetingStartedAt: -1 },
+      { ...validPayload, meetingStartedAt: 2_000, now: 1_000 },
       { ...validPayload, heartbeatCount: -1 },
       { ...validPayload, transcript: [{ ...validLine, timestamp: 1e100 }] },
       { ...validPayload, transcript: [{ ...validLine, timestamp: -1 }] },
+      { ...validPayload, transcript: [{ ...validLine, timestamp: 2_000 }], now: 1_000 },
       {
         ...validPayload,
         priorInterventions: [{ ...validIntervention, timestamp: 1e100 }]
+      },
+      {
+        ...validPayload,
+        priorInterventions: [{ ...validIntervention, timestamp: 2_000 }],
+        now: 1_000
       },
       {
         ...validPayload,
@@ -183,6 +190,19 @@ describe("POST /api/heartbeat", () => {
             summary: "Broken timestamp."
           }
         ]
+      },
+      {
+        ...validPayload,
+        reviewVersions: [
+          {
+            id: "review-1",
+            timestamp: 2_000,
+            source: "pi",
+            markdown: "# Review",
+            summary: "Future review."
+          }
+        ],
+        now: 1_000
       }
     ];
 
@@ -193,6 +213,24 @@ describe("POST /api/heartbeat", () => {
         error: "Invalid heartbeat payload"
       });
     }
+    expect(runPiHeartbeat).not.toHaveBeenCalled();
+  });
+
+  it("rejects excessive expected participants before creating heartbeat input", async () => {
+    const response = await POST(
+      jsonRequest({
+        ...validPayload,
+        meeting: {
+          ...validPayload.meeting,
+          expectedParticipants: 10_000
+        }
+      })
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid heartbeat payload"
+    });
     expect(runPiHeartbeat).not.toHaveBeenCalled();
   });
 
