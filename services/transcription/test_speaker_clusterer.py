@@ -325,6 +325,51 @@ class SpeakerClustererTest(unittest.TestCase):
         )
         self.assertEqual(messages[-1].get("status"), "listening")
 
+    def test_flush_keeps_transcript_when_speaker_clustering_fails(self) -> None:
+        async def run() -> list[dict]:
+            websocket = FakeWebSocket()
+            session = TranscriptionSession(websocket)
+            session.min_seconds = 0.1
+            session.max_seconds = 2.0
+            session.clusterer = FailingClusterer()
+            await session.append_audio(float32_to_pcm16(synthetic_voice(150, seconds=0.5)))
+
+            previous_model = server.ensure_model_loaded
+            previous_transcribe = server.transcribe_audio
+
+            async def fake_model():
+                return object()
+
+            async def fake_transcribe(_model, _audio, _language):
+                return "hello despite clustering"
+
+            server.ensure_model_loaded = fake_model
+            server.transcribe_audio = fake_transcribe
+            try:
+                await session.flush(force=True)
+            finally:
+                server.ensure_model_loaded = previous_model
+                server.transcribe_audio = previous_transcribe
+
+            return websocket.messages
+
+        messages = asyncio.run(run())
+        transcript = next(
+            message for message in messages if message.get("type") == "final_transcript"
+        )
+
+        self.assertIn(
+            {
+                "type": "engine_error",
+                "message": "Speaker clustering failed: cluster backend failed",
+            },
+            messages,
+        )
+        self.assertEqual(transcript["speakerLabel"], "Speaker 1")
+        self.assertEqual(transcript["text"], "hello despite clustering")
+        self.assertEqual(transcript["observedSpeakerLabels"], ["Speaker 1"])
+        self.assertEqual(messages[-1].get("status"), "listening")
+
 
 class FixedEmbeddingVoiceEmbedder:
     name = "test-neural"
@@ -372,6 +417,14 @@ class FakeWebSocket:
 
     async def send_json(self, payload: dict) -> None:
         self.messages.append(payload)
+
+
+class FailingClusterer:
+    async def assign(self, _audio: np.ndarray):
+        raise RuntimeError("cluster backend failed")
+
+    def labels(self) -> list[str]:
+        return []
 
 
 def float32_to_pcm16(audio: np.ndarray) -> bytes:

@@ -560,18 +560,27 @@ class TranscriptionSession:
             return
 
         self.sequence += 1
-        speaker = await self.clusterer.assign(audio)
+        try:
+            speaker = await self.clusterer.assign(audio)
+            speaker_id = speaker.id
+            speaker_label = speaker.label
+            observed_speaker_labels = self.clusterer.labels()
+        except Exception as exc:
+            await self.send_error(f"Speaker clustering failed: {exc}")
+            speaker_id = "speaker-1"
+            speaker_label = "Speaker 1"
+            observed_speaker_labels = self.clusterer.labels() or [speaker_label]
         duration_ms = round((len(audio) / SAMPLE_RATE) * 1000)
         await self.websocket.send_json(
             {
                 "type": "final_transcript",
                 "id": f"local-{int(time.time() * 1000)}-{self.sequence}",
-                "speakerId": speaker.id,
-                "speakerLabel": speaker.label,
+                "speakerId": speaker_id,
+                "speakerLabel": speaker_label,
                 "text": text,
                 "confidence": 0.9,
                 "durationMs": duration_ms,
-                "observedSpeakerLabels": self.clusterer.labels(),
+                "observedSpeakerLabels": observed_speaker_labels,
             }
         )
         await self.send_status("listening", "Listening")
