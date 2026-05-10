@@ -1330,8 +1330,7 @@ export default function RoomPulseApp() {
       await client.start();
       if (
         micStartTokenRef.current !== startToken ||
-        transcriptionClientRef.current !== client ||
-        transcriptMode !== "mic"
+        transcriptionClientRef.current !== client
       ) {
         await client.stop();
         return;

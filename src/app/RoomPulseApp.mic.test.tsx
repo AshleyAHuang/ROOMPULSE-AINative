@@ -79,4 +79,33 @@ describe("RoomPulseApp mic lifecycle", () => {
 
     expect(screen.queryByText(/late microphone segment/i)).not.toBeInTheDocument();
   });
+
+  it("keeps the microphone client alive when switching from demo back to mic", async () => {
+    render(<RoomPulseApp />);
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: /new meeting/i })[0]);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    expect(
+      await screen.findByRole("button", { name: /run heartbeat now/i })
+    ).toBeInTheDocument();
+    await waitFor(() => {
+      expect(clients).toHaveLength(1);
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^demo$/i }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^mic$/i }));
+    });
+
+    await waitFor(() => {
+      expect(clients).toHaveLength(2);
+    });
+    expect(clients[1].stop).not.toHaveBeenCalled();
+  });
 });
