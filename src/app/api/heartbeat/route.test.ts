@@ -155,6 +155,7 @@ describe("POST /api/heartbeat", () => {
   });
 
   it("rejects unsafe heartbeat timestamps and counters before calling the agent", async () => {
+    const farFuture = Date.now() + 10 * 60_000;
     const validLine = {
       id: "line-1",
       speakerId: "speaker-1",
@@ -182,18 +183,25 @@ describe("POST /api/heartbeat", () => {
     };
     const invalidPayloads = [
       { ...validPayload, now: 1e100 },
+      { ...validPayload, now: farFuture },
       { ...validPayload, now: -1 },
       { ...validPayload, lastHeartbeatAt: 2_000, now: 1_000 },
       { ...validPayload, meetingStartedAt: 1e100 },
+      { ...validPayload, meetingStartedAt: farFuture },
       { ...validPayload, meetingStartedAt: -1 },
       { ...validPayload, meetingStartedAt: 2_000, now: 1_000 },
       { ...validPayload, heartbeatCount: -1 },
       { ...validPayload, transcript: [{ ...validLine, timestamp: 1e100 }] },
+      { ...validPayload, transcript: [{ ...validLine, timestamp: farFuture }] },
       { ...validPayload, transcript: [{ ...validLine, timestamp: -1 }] },
       { ...validPayload, transcript: [{ ...validLine, timestamp: 2_000 }], now: 1_000 },
       {
         ...validPayload,
         priorInterventions: [{ ...validIntervention, timestamp: 1e100 }]
+      },
+      {
+        ...validPayload,
+        priorInterventions: [{ ...validIntervention, timestamp: farFuture }]
       },
       {
         ...validPayload,
@@ -209,6 +217,18 @@ describe("POST /api/heartbeat", () => {
             source: "pi",
             markdown: "# Review",
             summary: "Broken timestamp."
+          }
+        ]
+      },
+      {
+        ...validPayload,
+        reviewVersions: [
+          {
+            id: "review-1",
+            timestamp: farFuture,
+            source: "pi",
+            markdown: "# Review",
+            summary: "Future timestamp."
           }
         ]
       },

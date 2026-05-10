@@ -12,6 +12,8 @@ import { runPiHeartbeat } from "@/lib/pi-adapter";
 
 export const runtime = "nodejs";
 
+const MAX_TIMESTAMP_FUTURE_SKEW_MS = 5 * 60 * 1000;
+
 export async function POST(request: Request) {
   let payload: unknown;
 
@@ -236,7 +238,8 @@ function isValidTimestamp(value: unknown): value is number {
     typeof value === "number" &&
     value >= 0 &&
     Number.isSafeInteger(value) &&
-    !Number.isNaN(new Date(value).getTime())
+    !Number.isNaN(new Date(value).getTime()) &&
+    value <= Date.now() + MAX_TIMESTAMP_FUTURE_SKEW_MS
   );
 }
 
