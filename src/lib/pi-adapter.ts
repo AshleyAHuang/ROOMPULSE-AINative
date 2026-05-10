@@ -659,7 +659,7 @@ async function postOpenRouterChat(
 
     return message;
   } catch (error) {
-    if (error instanceof DOMException && error.name === "AbortError") {
+    if (isAbortError(error)) {
       throw new PiTimeoutError(`${label} timed out after ${timeoutMs}ms`);
     }
     throw error;
@@ -1777,6 +1777,15 @@ async function withTimeout<T>(
 
 function isPiTimeoutError(error: unknown): error is PiTimeoutError {
   return error instanceof PiTimeoutError || errorToMessage(error).includes("timed out after");
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    error instanceof DOMException && error.name === "AbortError"
+  ) || (
+    isRecord(error) &&
+    error.name === "AbortError"
+  );
 }
 
 function errorToMessage(error: unknown): string {

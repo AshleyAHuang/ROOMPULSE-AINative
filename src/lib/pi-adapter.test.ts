@@ -927,6 +927,24 @@ describe("Pi adapter", () => {
     );
   });
 
+  it("normalizes OpenRouter abort errors as heartbeat timeouts", async () => {
+    process.env.ROOMPULSE_PI_PROVIDER = "openrouter";
+    process.env.ROOMPULSE_OPENROUTER_API_KEY = "openrouter-key";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(
+        Object.assign(new Error("The operation was aborted."), {
+          name: "AbortError"
+        })
+      )
+    );
+
+    const output = await runPiHeartbeat(heartbeatInput);
+
+    expect(output.source).toBe("local-fallback");
+    expect(output.adapterNotice).toContain("OpenRouter heartbeat timed out after");
+  });
+
   it("initializes review markdown through OpenRouter JSON output", async () => {
     process.env.ROOMPULSE_PI_PROVIDER = "openrouter";
     process.env.ROOMPULSE_OPENROUTER_API_KEY = "openrouter-key";
