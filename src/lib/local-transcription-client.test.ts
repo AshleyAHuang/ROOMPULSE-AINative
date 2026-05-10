@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { downsample, floatToPcm16 } from "./local-transcription-client";
+import { describe, expect, it, vi } from "vitest";
+import {
+  downsample,
+  floatToPcm16,
+  LocalTranscriptionClient
+} from "./local-transcription-client";
 
 describe("local transcription audio utilities", () => {
   it("downsamples browser audio to the transcription service sample rate", () => {
@@ -27,5 +31,52 @@ describe("local transcription audio utilities", () => {
     const pcm = new Int16Array(buffer);
 
     expect(Array.from(pcm)).toEqual([-32768, 0, 32767]);
+  });
+
+  it("releases browser audio resources when the socket closes during stop flush", async () => {
+    const stopTrack = vi.fn();
+    const closeSocket = vi.fn();
+    const closeAudio = vi.fn();
+    const disconnectProcessor = vi.fn();
+    const disconnectSource = vi.fn();
+    const disconnectGain = vi.fn();
+    const client = new LocalTranscriptionClient({
+      onSegment: vi.fn(),
+      onStatus: vi.fn(),
+      onError: vi.fn()
+    });
+    Object.assign(client as unknown as Record<string, unknown>, {
+      socket: {
+        readyState: WebSocket.OPEN,
+        send: vi.fn(() => {
+          throw new Error("socket closed");
+        }),
+        close: closeSocket
+      },
+      stream: {
+        getTracks: () => [{ stop: stopTrack }]
+      },
+      audioContext: {
+        close: closeAudio
+      },
+      processor: {
+        disconnect: disconnectProcessor
+      },
+      source: {
+        disconnect: disconnectSource
+      },
+      silentGain: {
+        disconnect: disconnectGain
+      }
+    });
+
+    await expect(client.stop()).resolves.toBeUndefined();
+
+    expect(disconnectProcessor).toHaveBeenCalledOnce();
+    expect(disconnectSource).toHaveBeenCalledOnce();
+    expect(disconnectGain).toHaveBeenCalledOnce();
+    expect(stopTrack).toHaveBeenCalledOnce();
+    expect(closeAudio).toHaveBeenCalledOnce();
+    expect(closeSocket).toHaveBeenCalledOnce();
   });
 });

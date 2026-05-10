@@ -131,9 +131,12 @@ export class LocalTranscriptionClient {
   }
 
   async stop(): Promise<void> {
-    await this.flushOpenSocket();
-    this.disconnectAudioGraph();
-    this.closeResources();
+    try {
+      await this.flushOpenSocket();
+    } finally {
+      this.disconnectAudioGraph();
+      this.closeResources();
+    }
   }
 
   stopImmediately(): void {
@@ -185,7 +188,11 @@ export class LocalTranscriptionClient {
       };
       const timeout = window.setTimeout(finish, SOCKET_FLUSH_TIMEOUT_MS);
       this.flushResolver = finish;
-      socket.send(JSON.stringify({ type: "flush" }));
+      try {
+        socket.send(JSON.stringify({ type: "flush" }));
+      } catch {
+        finish();
+      }
     });
   }
 
