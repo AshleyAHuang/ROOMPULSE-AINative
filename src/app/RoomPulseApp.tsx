@@ -1784,7 +1784,7 @@ export default function RoomPulseApp() {
           </StatusPill>
           <StatusPill>
             <MaterialIcon name={currentOutput?.source === "pi" ? "auto_awesome" : "memory"} />
-            {currentOutput?.source === "pi" ? "Pi · GPT-5.3 Spark" : "Local"}
+            {currentOutput?.source === "pi" ? "Pi · GPT-5.5 fast" : "Local"}
           </StatusPill>
           <StatusPill>
             <MaterialIcon name={isPaused ? "pause" : "schedule"} />
@@ -1892,7 +1892,7 @@ export default function RoomPulseApp() {
               <div className="section-kicker">AI reviews</div>
               <h2>Live review document</h2>
             </div>
-            <span>{currentOutput?.source === "pi" ? "GPT-5.3 Spark" : "Local"}</span>
+            <span>{currentOutput?.source === "pi" ? "GPT-5.5 fast" : "Local"}</span>
           </div>
           <div className="review-meta">
             <span>{reviewVersions.length} versions</span>

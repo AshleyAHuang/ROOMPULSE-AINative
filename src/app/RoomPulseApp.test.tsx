@@ -1,10 +1,11 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import RoomPulseApp from "./RoomPulseApp";
 
 describe("RoomPulseApp", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   beforeEach(() => {
@@ -170,6 +171,70 @@ describe("RoomPulseApp", () => {
     expect(screen.getAllByText(/strict pi initialization/i).length).toBeGreaterThan(
       0
     );
+  });
+
+  it("keeps scripted transcript running while heartbeat review is pending", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (
+        url.includes("/api/review-document/init") ||
+        url.includes("/api/heartbeat")
+      ) {
+        return new Promise<Response>(() => undefined);
+      }
+      if (url === "/api/meetings") {
+        return Response.json(
+          {
+            id: "demo-session",
+            title: "RoomPulse MVP readiness review",
+            goal: "Strict review is pending.",
+            startedAt: Date.now(),
+            updatedAt: Date.now(),
+            endedAt: null,
+            status: "active",
+            isPaused: false,
+            eventCount: 0,
+            meeting: {},
+            state: null,
+            latestReviewMarkdown: "",
+            latestReviewVersionId: null
+          },
+          { status: 201 }
+        );
+      }
+      if (url.includes("/events")) {
+        return Response.json({ id: "event-1" }, { status: 201 });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /launch live demo/i }));
+    });
+    expect(screen.getByRole("button", { name: /run heartbeat/i })).toBeVisible();
+
+    act(() => {
+      vi.advanceTimersByTime(150);
+    });
+    fireEvent.click(screen.getByRole("button", { name: /run heartbeat/i }));
+    expect(
+      screen.getByRole("button", { name: /run heartbeat now/i })
+    ).toBeDisabled();
+
+    act(() => {
+      vi.advanceTimersByTime(8_100);
+    });
+
+    expect(
+      screen.getByText(/let's start the roompulse readiness review/i)
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: /run heartbeat now/i })
+    ).toBeDisabled();
   });
 
   it("clamps invalid numeric setup values before starting the room display", async () => {

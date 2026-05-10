@@ -96,8 +96,8 @@ By default, RoomPulse uses Pi's OpenAI Codex subscription provider:
 
 ```bash
 ROOMPULSE_PI_PROVIDER=openai-codex
-ROOMPULSE_PI_MODEL=gpt-5.3-codex-spark
-ROOMPULSE_PI_THINKING_LEVEL=minimal
+ROOMPULSE_PI_MODEL=gpt-5.5
+ROOMPULSE_PI_THINKING_LEVEL=off
 ```
 
 If Pi does not already have `openai-codex` auth, RoomPulse reads the local Codex CLI ChatGPT login from `~/.codex/auth.json` into the in-memory Pi auth store for the heartbeat session. Run `codex login` first on the machine hosting the Next.js server. You can disable that bridge with:
@@ -110,12 +110,22 @@ Useful adapter overrides:
 
 ```bash
 ROOMPULSE_PI_PROVIDER=openai-codex
-ROOMPULSE_PI_MODEL=gpt-5.3-codex-spark
-ROOMPULSE_PI_THINKING_LEVEL=minimal
+ROOMPULSE_PI_MODEL=gpt-5.5
+ROOMPULSE_PI_THINKING_LEVEL=off
 ROOMPULSE_PI_TIMEOUT_MS=12000
 NEXT_PUBLIC_ROOMPULSE_PI_TIMEOUT_MS=15000
 ROOMPULSE_CODEX_AUTH_PATH=/path/to/codex/auth.json
 ```
+
+For a real strict smoke test against the running local API, start
+`npm run dev:strict` and run:
+
+```bash
+npm run smoke:heartbeat
+```
+
+That command posts a heartbeat to `/api/heartbeat` and fails unless the response
+comes from Pi, not the local fallback.
 
 If Pi auth, model configuration, or runtime access is missing, the adapter catches the failure and returns deterministic local fallback facilitation. For a guaranteed local-only demo:
 

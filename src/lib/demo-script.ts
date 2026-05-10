@@ -51,7 +51,7 @@ export const DEMO_SCRIPT: DemoBeat[] = [
   {
     delayMs: 83_000,
     speaker: "Speaker 3",
-    text: "On the Pi side, I am worried about latency. The review agent was running on GPT-5.5, and that made the initial markdown and heartbeat feel slow. Moving the default to GPT-5.3 Spark should make the meeting flow feel less stuck."
+    text: "On the Pi side, I am worried about latency. We tried GPT-5.3 Spark, but the review still felt slow in strict mode. Let's switch the default back to GPT-5.5 with thinking off and verify it with a real heartbeat API call."
   },
   {
     delayMs: 112_000,
@@ -131,7 +131,7 @@ export const DEMO_SCRIPT: DemoBeat[] = [
   {
     delayMs: 548_000,
     speaker: "Speaker 3",
-    text: "For Pi latency, I already changed the default model to GPT-5.3 Spark. The remaining question is whether we should reuse a session or keep one session per heartbeat for isolation."
+    text: "For Pi latency, I changed the default model back to GPT-5.5 fast. The remaining question is whether we should reuse a session or keep one session per heartbeat for isolation."
   },
   {
     delayMs: 578_000,
@@ -141,22 +141,22 @@ export const DEMO_SCRIPT: DemoBeat[] = [
   {
     delayMs: 607_000,
     speaker: "Speaker 3",
-    text: "That means the latency mitigation is model choice, smaller context where safe, and a timeout that falls back locally. Spark plus minimal thinking should be acceptable for the room display."
+    text: "That means the latency mitigation is model choice, smaller context where safe, and a timeout that surfaces strict Pi errors quickly. GPT-5.5 with thinking off should be the fastest credible path for the room display."
   },
   {
     delayMs: 637_000,
     speaker: "Speaker 4",
-    text: "The UI should show that clearly. If the agent is running locally, say Local. If Pi answers, say GPT-5.3 Spark. That way people do not confuse fallback output with the actual Pi behavior."
+    text: "The UI should show that clearly. If the agent is running locally, say Local. If Pi answers, say GPT-5.5 fast. That way people do not confuse fallback output with the actual Pi behavior."
   },
   {
     delayMs: 668_000,
     speaker: "Speaker 1",
-    text: "Decision proposal: for the MVP, we accept fresh Pi sessions per heartbeat, switch the default to GPT-5.3 Spark, and keep deterministic local fallback when Pi auth or runtime is unavailable."
+    text: "Decision proposal: for the MVP, we accept fresh Pi sessions per heartbeat, switch the default to GPT-5.5 fast, and keep deterministic local fallback when strict mode is not enabled."
   },
   {
     delayMs: 699_000,
     speaker: "Speaker 3",
-    text: "I support that. I will own the Pi adapter defaults and tests, including verifying that the review initialization and heartbeat both use the same Spark default."
+    text: "I support that. I will own the Pi adapter defaults and tests, including verifying that the review initialization and heartbeat both use the same GPT-5.5 fast default."
   },
   {
     delayMs: 729_000,
@@ -226,7 +226,7 @@ export const DEMO_SCRIPT: DemoBeat[] = [
   {
     delayMs: 1_102_000,
     speaker: "Speaker 3",
-    text: "We've also covered Pi heartbeat and review behavior. I will own the Spark default, the full-context prompt, and the allowed UI tools for markdown, agenda, and reminders."
+    text: "We've also covered Pi heartbeat and review behavior. I will own the GPT-5.5 fast default, the full-context prompt, and the allowed UI tools for markdown, agenda, and reminders."
   },
   {
     delayMs: 1_128_000,
@@ -241,7 +241,7 @@ export const DEMO_SCRIPT: DemoBeat[] = [
   {
     delayMs: 1_176_000,
     speaker: "Speaker 1",
-    text: "That covers owners and next steps. The next checkpoint is a real local run: mic permission prompt, transcript lines, Spark heartbeat, markdown table rendering, and End and review export all working in one pass."
+    text: "That covers owners and next steps. The next checkpoint is a real local run: mic permission prompt, transcript lines, GPT-5.5 heartbeat, markdown table rendering, and End and review export all working in one pass."
   }
 ];
 

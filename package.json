@@ -10,6 +10,7 @@
     "transcription": "cd services/transcription && uv run uvicorn server:app --host 127.0.0.1 --port 8765",
     "build": "next build",
     "start": "next start",
+    "smoke:heartbeat": "node scripts/smoke-heartbeat.mjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },
