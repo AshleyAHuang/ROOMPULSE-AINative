@@ -58,10 +58,20 @@ export async function PATCH(request: Request, context: RouteContext) {
     isPersistedMeetingState(payload.state) ? payload.state : undefined;
 
   if (
-    (typeof payload.endedAt === "number" && endedAt === undefined) ||
-    (typeof payload.updatedAt === "number" && updatedAt === undefined)
+    ("endedAt" in payload &&
+      payload.endedAt !== null &&
+      endedAt === undefined) ||
+    ("updatedAt" in payload && updatedAt === undefined)
   ) {
     return NextResponse.json({ error: "Invalid meeting timestamp" }, { status: 400 });
+  }
+
+  if (
+    ("status" in payload && status === undefined) ||
+    ("isPaused" in payload && typeof payload.isPaused !== "boolean") ||
+    ("state" in payload && state === undefined)
+  ) {
+    return NextResponse.json({ error: "Invalid meeting state payload" }, { status: 400 });
   }
 
   if (
@@ -108,16 +118,16 @@ function isPersistedMeetingState(value: unknown): value is PersistedMeetingState
     typeof value.reviewMarkdown === "string" &&
     Array.isArray(value.reviewVersions) &&
     value.reviewVersions.every(isReviewVersion) &&
-    typeof value.currentReviewVersionId === "string" &&
+    isNonEmptyString(value.currentReviewVersionId) &&
     Array.isArray(value.timeline) &&
     value.timeline.every(isTimelineEntry) &&
     isValidTimestamp(value.lastHeartbeatAt) &&
     isValidTimestamp(value.nextHeartbeatAt) &&
     isValidTimestamp(value.meetingStartedAt) &&
-    isFiniteNumber(value.heartbeatCount) &&
+    isIntegerAtLeast(value.heartbeatCount, 0) &&
     typeof value.isPaused === "boolean" &&
     (value.activeAgendaItemId === null ||
-      typeof value.activeAgendaItemId === "string") &&
+      isNonEmptyString(value.activeAgendaItemId)) &&
     isValidTimestamp(value.updatedAt) &&
     (value.endedAt === undefined ||
       value.endedAt === null ||
@@ -178,7 +188,7 @@ function isTranscriptSource(value: unknown): boolean {
 function isReviewVersion(value: unknown): boolean {
   return (
     isRecord(value) &&
-    typeof value.id === "string" &&
+    isNonEmptyString(value.id) &&
     isValidTimestamp(value.timestamp) &&
     isReviewSource(value.source) &&
     typeof value.markdown === "string" &&
@@ -199,7 +209,7 @@ function isReviewSource(value: unknown): boolean {
 function isTimelineEntry(value: unknown): boolean {
   return (
     isRecord(value) &&
-    typeof value.id === "string" &&
+    isNonEmptyString(value.id) &&
     isValidTimestamp(value.timestamp) &&
     isReviewSource(value.source) &&
     Array.isArray(value.cards) &&
@@ -216,13 +226,26 @@ function isTimelineEntry(value: unknown): boolean {
 function isFacilitatorCard(value: unknown): boolean {
   return (
     isRecord(value) &&
-    typeof value.id === "string" &&
-    typeof value.kind === "string" &&
-    typeof value.title === "string" &&
+    isNonEmptyString(value.id) &&
+    isFacilitatorCardKind(value.kind) &&
+    isNonEmptyString(value.title) &&
     typeof value.body === "string" &&
     (value.priority === "low" ||
       value.priority === "medium" ||
       value.priority === "high")
+  );
+}
+
+function isFacilitatorCardKind(value: unknown): boolean {
+  return (
+    value === "heartbeat" ||
+    value === "participation" ||
+    value === "risk" ||
+    value === "agenda" ||
+    value === "decision" ||
+    value === "action" ||
+    value === "drift" ||
+    value === "reminder"
   );
 }
 

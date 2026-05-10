@@ -228,9 +228,26 @@ export async function updateMeetingLogState(
         }
       : update.state;
   const mergedState = state ? mergeStateWithMaterializedRows(db, meetingId, state) : state;
-  const status = wasEnded || requestedEnded ? "ended" : update.status ?? state?.status;
+  const requestedStatus = update.status ?? state?.status;
+  const requestedIsPaused = update.isPaused ?? state?.isPaused;
+  const status =
+    wasEnded || requestedEnded
+      ? "ended"
+      : requestedStatus ??
+        (typeof requestedIsPaused === "boolean"
+          ? requestedIsPaused
+            ? "paused"
+            : "active"
+          : undefined);
   const isPaused =
-    wasEnded || requestedEnded ? true : update.isPaused ?? state?.isPaused;
+    wasEnded || requestedEnded
+      ? true
+      : requestedIsPaused ??
+        (requestedStatus === "paused"
+          ? true
+          : requestedStatus === "active"
+            ? false
+            : undefined);
   const endedAt = effectiveEndedAt;
   const meeting = mergedState?.meeting;
   const latestReviewMarkdown = mergedState?.reviewMarkdown;

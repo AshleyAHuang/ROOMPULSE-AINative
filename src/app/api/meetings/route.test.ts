@@ -468,6 +468,90 @@ describe("/api/meetings", () => {
     });
   });
 
+  it("rejects persisted state with invalid counters and review history", async () => {
+    const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
+    const created = await createResponse.json();
+    const timestamp = Date.now();
+    const baseState = persistedState(timestamp);
+    const invalidStates = [
+      { ...baseState, heartbeatCount: -1 },
+      { ...baseState, currentReviewVersionId: "" },
+      {
+        ...baseState,
+        reviewVersions: [{ ...baseState.reviewVersions[0], id: " " }]
+      },
+      {
+        ...baseState,
+        timeline: [
+          {
+            ...baseState.timeline[0],
+            cards: [{ ...baseState.timeline[0].cards[0], kind: "unknown" }]
+          }
+        ]
+      }
+    ];
+
+    for (const state of invalidStates) {
+      const response = await PATCH(
+        jsonRequest({
+          updatedAt: timestamp + 1,
+          state
+        }),
+        routeContext(created.id)
+      );
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: "Invalid meeting state payload"
+      });
+    }
+  });
+
+  it("keeps patched pause status and isPaused flags coherent", async () => {
+    const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
+    const created = await createResponse.json();
+    const timestamp = Date.now();
+
+    const pausedByStatus = await PATCH(
+      jsonRequest({
+        status: "paused",
+        updatedAt: timestamp
+      }),
+      routeContext(created.id)
+    );
+    expect(pausedByStatus.status).toBe(200);
+    await expect(pausedByStatus.json()).resolves.toMatchObject({
+      status: "paused",
+      isPaused: true
+    });
+
+    const activeByFlag = await PATCH(
+      jsonRequest({
+        isPaused: false,
+        updatedAt: timestamp + 1
+      }),
+      routeContext(created.id)
+    );
+    expect(activeByFlag.status).toBe(200);
+    await expect(activeByFlag.json()).resolves.toMatchObject({
+      status: "active",
+      isPaused: false
+    });
+
+    const pausedByFlag = await PATCH(
+      jsonRequest({
+        isPaused: true,
+        updatedAt: timestamp + 2
+      }),
+      routeContext(created.id)
+    );
+    expect(pausedByFlag.status).toBe(200);
+    await expect(pausedByFlag.json()).resolves.toMatchObject({
+      status: "paused",
+      isPaused: true
+    });
+  });
+
   it("rejects malformed persisted state and keeps ended meetings terminal", async () => {
     const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
     const created = await createResponse.json();
@@ -628,5 +712,50 @@ function jsonRequest(payload: unknown): Request {
 function routeContext(meetingId: string) {
   return {
     params: Promise.resolve({ meetingId })
+  };
+}
+
+function persistedState(timestamp: number) {
+  return {
+    status: "active",
+    meeting: validMeeting,
+    transcript: [],
+    reviewMarkdown: "# Review",
+    reviewVersions: [
+      {
+        id: "review-1",
+        timestamp,
+        source: "pi",
+        markdown: "# Review",
+        summary: "Current review."
+      }
+    ],
+    currentReviewVersionId: "review-1",
+    timeline: [
+      {
+        id: "pulse-1",
+        timestamp,
+        source: "pi",
+        cards: [
+          {
+            id: "card-1",
+            kind: "heartbeat",
+            title: "Heartbeat",
+            body: "Keep going.",
+            priority: "medium"
+          }
+        ],
+        summary: "One cue.",
+        reminder: null
+      }
+    ],
+    lastHeartbeatAt: timestamp,
+    nextHeartbeatAt: timestamp + 30_000,
+    meetingStartedAt: timestamp,
+    heartbeatCount: 1,
+    isPaused: false,
+    currentOutput: null,
+    activeAgendaItemId: "a1",
+    updatedAt: timestamp
   };
 }
