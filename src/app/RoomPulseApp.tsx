@@ -213,6 +213,7 @@ export default function RoomPulseApp() {
   const meetingLogIdRef = useRef<string | null>(null);
   const pendingLogEventsRef = useRef<PendingMeetingLogEvent[]>([]);
   const isFlushingLogEventsRef = useRef(false);
+  const flushLogEventsPromiseRef = useRef<Promise<void> | null>(null);
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const endingSessionRef = useRef(false);
   const meetingStartAttemptRef = useRef(0);
@@ -339,13 +340,13 @@ export default function RoomPulseApp() {
     );
   }, [activeAgendaItemId, agendaProgress.active, meeting.agenda]);
 
-  const flushPendingLogEvents = useCallback(async (meetingId: string) => {
-    if (isFlushingLogEventsRef.current) {
-      return;
+  const flushPendingLogEvents = useCallback((meetingId: string) => {
+    if (flushLogEventsPromiseRef.current) {
+      return flushLogEventsPromiseRef.current;
     }
 
-    isFlushingLogEventsRef.current = true;
-    try {
+    const flushPromise = (async () => {
+      isFlushingLogEventsRef.current = true;
       while (
         pendingLogEventsRef.current.length > 0 &&
         meetingLogIdRef.current === meetingId
@@ -367,9 +368,15 @@ export default function RoomPulseApp() {
           }
         }
       }
-    } finally {
+    })();
+
+    flushLogEventsPromiseRef.current = flushPromise;
+    return flushPromise.finally(() => {
+      if (flushLogEventsPromiseRef.current === flushPromise) {
+        flushLogEventsPromiseRef.current = null;
+      }
       isFlushingLogEventsRef.current = false;
-    }
+    });
   }, []);
 
   const logMeetingEvent = useCallback(
@@ -785,7 +792,10 @@ export default function RoomPulseApp() {
   async function openMeetingLog(id: string) {
     try {
       if (phase === "meeting" && meetingLogIdRef.current !== id) {
-        await checkpointCurrentMeetingBeforeLeaving();
+        const checkpointed = await checkpointCurrentMeetingBeforeLeaving();
+        if (!checkpointed) {
+          return;
+        }
       }
       const response = await fetch(`/api/meetings/${encodeURIComponent(id)}`);
       if (!response.ok) {
@@ -1646,10 +1656,10 @@ export default function RoomPulseApp() {
     }
   }
 
-  async function checkpointCurrentMeetingBeforeLeaving() {
+  async function checkpointCurrentMeetingBeforeLeaving(): Promise<boolean> {
     const id = meetingLogIdRef.current;
     if (phase !== "meeting" || !id || endingSessionRef.current) {
-      return;
+      return true;
     }
 
     const updatedAt = Date.now();
@@ -1659,16 +1669,19 @@ export default function RoomPulseApp() {
       updatedAt
     });
     try {
+      await flushPendingLogEvents(id);
       await sendMeetingState(id, {
         status: "paused",
         isPaused: true,
         updatedAt,
         state
       });
+      return true;
     } catch (error) {
       setLogStatus(
         `Session checkpoint failed: ${error instanceof Error ? error.message : String(error)}`
       );
+      return false;
     }
   }
 
@@ -1676,7 +1689,10 @@ export default function RoomPulseApp() {
     invalidatePendingHeartbeat();
     meetingStartAttemptRef.current += 1;
     if (phase === "meeting") {
-      await checkpointCurrentMeetingBeforeLeaving();
+      const checkpointed = await checkpointCurrentMeetingBeforeLeaving();
+      if (!checkpointed) {
+        return;
+      }
     }
     endingSessionRef.current = false;
     stopMic();

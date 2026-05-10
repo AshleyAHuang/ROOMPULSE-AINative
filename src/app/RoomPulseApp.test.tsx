@@ -1358,6 +1358,111 @@ describe("RoomPulseApp", () => {
     ).toBeVisible();
   });
 
+  it("does not leave the active meeting when checkpointing fails", async () => {
+    const now = Date.now();
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/meetings" && method === "GET") {
+          return Response.json({
+            meetings: [
+              {
+                id: "other-session",
+                title: "Other active session",
+                goal: "Resume safely.",
+                startedAt: now - 60_000,
+                updatedAt: now,
+                endedAt: null,
+                status: "paused",
+                isPaused: true,
+                eventCount: 2,
+                meeting: {},
+                state: null,
+                latestReviewMarkdown: "# Other",
+                latestReviewVersionId: "other-review"
+              }
+            ]
+          });
+        }
+        if (url.includes("/api/review-document/init")) {
+          return Response.json({
+            source: "pi",
+            markdown: "# Current session",
+            summary: "Initialized current session."
+          });
+        }
+        if (url === "/api/meetings" && method === "POST") {
+          return Response.json(
+            {
+              id: "current-session",
+              title: "Current session",
+              goal: "Checkpoint before leaving.",
+              startedAt: now,
+              updatedAt: now,
+              endedAt: null,
+              status: "active",
+              isPaused: false,
+              eventCount: 0,
+              meeting: {},
+              state: null,
+              latestReviewMarkdown: "",
+              latestReviewVersionId: null
+            },
+            { status: 201 }
+          );
+        }
+        if (url === "/api/meetings/current-session" && method === "PATCH") {
+          return Response.json({ error: "disk full" }, { status: 500 });
+        }
+        if (url.includes("/events")) {
+          return Response.json({ id: "event-1" }, { status: 201 });
+        }
+        if (url === "/api/meetings/other-session") {
+          return Response.json({});
+        }
+        return Response.json({});
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    expect(
+      await screen.findByRole("button", { name: /run heartbeat now/i })
+    ).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /past meetings/i }));
+    });
+    await act(async () => {
+      fireEvent.click(
+        await screen.findByRole("button", { name: /other active session/i })
+      );
+    });
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url) === "/api/meetings/current-session" &&
+            init?.method === "PATCH"
+        )
+      ).toBe(true);
+    });
+    expect(
+      fetchMock.mock.calls.some(
+        ([url]) => String(url) === "/api/meetings/other-session"
+      )
+    ).toBe(false);
+    expect(
+      screen.getByRole("heading", { name: /product readiness review/i })
+    ).toBeVisible();
+  });
+
   it("ignores stale heartbeat results after opening another saved meeting", async () => {
     const now = Date.now();
     let resolveHeartbeat: ((response: Response) => void) | null = null;
