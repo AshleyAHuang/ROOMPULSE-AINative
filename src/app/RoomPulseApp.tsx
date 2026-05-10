@@ -163,6 +163,8 @@ export default function RoomPulseApp() {
   const [isMicRunning, setIsMicRunning] = useState(false);
   const [isDemoRunning, setIsDemoRunning] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
+  const [isEndingSession, setIsEndingSession] = useState(false);
+  const [reviewHandoffUrl, setReviewHandoffUrl] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [isPastMeetingsOpen, setIsPastMeetingsOpen] = useState(false);
   const [activeAgendaItemId, setActiveAgendaItemId] = useState<string | null>(
@@ -742,8 +744,12 @@ export default function RoomPulseApp() {
   }
 
   async function endMeetingSession() {
+    if (isEndingSession) {
+      return;
+    }
+
     endingSessionRef.current = true;
-    const id = meetingLogIdRef.current;
+    setIsEndingSession(true);
     const endedAt = Date.now();
     const state = buildPersistedMeetingState({
       status: "ended",
@@ -760,8 +766,11 @@ export default function RoomPulseApp() {
       autosaveTimerRef.current = null;
     }
 
+    const id = await waitForMeetingLogId(meetingLogIdRef, 2500);
     if (!id) {
-      setPhase("setup");
+      endingSessionRef.current = false;
+      setIsEndingSession(false);
+      setLogStatus("End session blocked: local session log is not ready yet.");
       return;
     }
 
@@ -780,9 +789,11 @@ export default function RoomPulseApp() {
         state
       });
       await refreshPastMeetings();
+      setReviewHandoffUrl(`/meetings/${encodeURIComponent(id)}`);
       navigateToMeetingReview(id);
     } catch (error) {
       endingSessionRef.current = false;
+      setIsEndingSession(false);
       setLogStatus(
         `End session failed: ${error instanceof Error ? error.message : String(error)}`
       );
@@ -1938,7 +1949,7 @@ export default function RoomPulseApp() {
         <button
           aria-label="Run heartbeat now"
           className="pill-btn primary"
-          disabled={isHeartbeatRunning}
+          disabled={isHeartbeatRunning || isEndingSession}
           type="button"
           onClick={() => void runHeartbeat()}
         >
@@ -1948,15 +1959,27 @@ export default function RoomPulseApp() {
         <span className="bottom-divider" />
         <button
           className="pill-btn danger"
+          disabled={isEndingSession}
           type="button"
           onClick={() => {
             void endMeetingSession();
           }}
         >
           <MaterialIcon name="call_end" filled />
-          End
+          {isEndingSession ? "Ending..." : "End & review"}
         </button>
       </div>
+
+      {reviewHandoffUrl ? (
+        <div className="review-handoff" role="status">
+          <MaterialIcon name="article" filled />
+          <div>
+            <span>Meeting ended</span>
+            <p>The review and export page is ready.</p>
+          </div>
+          <a href={reviewHandoffUrl}>Open review/export</a>
+        </div>
+      ) : null}
 
       {ephemeralReminder ? (
         <div className="reminder-snackbar" role="status">
@@ -2214,6 +2237,17 @@ async function sendMeetingState(
 
 function navigateToMeetingReview(meetingLogId: string) {
   window.location.assign(`/meetings/${encodeURIComponent(meetingLogId)}`);
+}
+
+async function waitForMeetingLogId(
+  ref: { current: string | null },
+  timeoutMs: number
+): Promise<string | null> {
+  const startedAt = Date.now();
+  while (!ref.current && Date.now() - startedAt < timeoutMs) {
+    await new Promise((resolve) => window.setTimeout(resolve, 80));
+  }
+  return ref.current;
 }
 
 function fallbackStateFromSnapshot(

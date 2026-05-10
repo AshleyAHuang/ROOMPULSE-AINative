@@ -35,6 +35,7 @@ Local run flow:
    - left: live raw transcript
    - center: a versioned AI review markdown document
    - right: agenda, participation, and a quiet one-heartbeat reminder
+6. Click `End & review` when the meeting is over. RoomPulse marks the session ended and opens `/meetings/{meetingId}` with copy/export controls.
 
 Agenda checkboxes remain manually editable. Agent-driven agenda changes happen
 through the Pi tool contract during heartbeats; the deterministic local

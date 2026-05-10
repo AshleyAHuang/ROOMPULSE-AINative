@@ -2434,6 +2434,51 @@ button {
   font-weight: 500;
 }
 
+.review-handoff {
+  position: fixed;
+  right: 24px;
+  bottom: 92px;
+  z-index: 55;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 420px;
+  padding: 14px 16px;
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--radius-lg);
+  background: var(--md-surface);
+  box-shadow: var(--md-elev-3);
+}
+
+.review-handoff > .material-symbols-outlined {
+  color: var(--md-primary);
+}
+
+.review-handoff div {
+  min-width: 0;
+}
+
+.review-handoff span {
+  display: block;
+  color: var(--md-on-surface);
+  font-family: var(--font-display);
+  font-weight: 500;
+}
+
+.review-handoff p {
+  margin: 2px 0 0;
+  color: var(--md-on-surface-variant);
+  font-size: 12.5px;
+}
+
+.review-handoff a {
+  margin-left: auto;
+  color: var(--md-primary);
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
 @media (max-width: 1240px) {
   .setup-workspace {
     grid-template-columns: 1fr;
