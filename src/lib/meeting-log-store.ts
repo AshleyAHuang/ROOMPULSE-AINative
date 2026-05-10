@@ -2,11 +2,12 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import type {
-  MeetingConfig,
-  ReviewVersion,
-  TimelineEntry,
-  TranscriptLine
+import {
+  MAX_EXPECTED_PARTICIPANTS,
+  type MeetingConfig,
+  type ReviewVersion,
+  type TimelineEntry,
+  type TranscriptLine
 } from "./facilitator";
 
 export type MeetingStatus = "active" | "paused" | "ended";
@@ -1092,7 +1093,7 @@ function isMeetingConfig(value: unknown): value is MeetingConfig {
     typeof value.context === "string" &&
     Array.isArray(value.agenda) &&
     value.agenda.every(isAgendaItem) &&
-    isIntegerAtLeast(value.expectedParticipants, 1) &&
+    isIntegerInRange(value.expectedParticipants, 1, MAX_EXPECTED_PARTICIPANTS) &&
     Array.isArray(value.participants) &&
     value.participants.every(isParticipant) &&
     isIntegerAtLeast(value.heartbeatIntervalSeconds, 15)
@@ -1189,6 +1190,14 @@ function isFacilitatorCardKind(value: unknown): boolean {
 
 function isIntegerAtLeast(value: unknown, min: number): value is number {
   return isFiniteNumber(value) && Number.isInteger(value) && value >= min;
+}
+
+function isIntegerInRange(
+  value: unknown,
+  min: number,
+  max: number
+): value is number {
+  return isIntegerAtLeast(value, min) && value <= max;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
