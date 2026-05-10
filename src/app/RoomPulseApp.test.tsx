@@ -867,6 +867,102 @@ describe("RoomPulseApp", () => {
     ).toBeDisabled();
   });
 
+  it("uses the latest runtime heartbeat interval after a pending review finishes", async () => {
+    let resolveHeartbeat:
+      | ((response: Response) => void)
+      | undefined;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url.includes("/api/review-document/init")) {
+          return Response.json({
+            source: "pi",
+            markdown: "# Runtime interval",
+            summary: "Initialized."
+          });
+        }
+        if (url === "/api/meetings" && method === "POST") {
+          return Response.json(
+            {
+              id: "runtime-interval-session",
+              title: "Runtime interval",
+              goal: "Use latest interval.",
+              startedAt: Date.now(),
+              updatedAt: Date.now(),
+              endedAt: null,
+              status: "active",
+              isPaused: false,
+              eventCount: 0,
+              meeting: {},
+              state: null,
+              latestReviewMarkdown: "",
+              latestReviewVersionId: null
+            },
+            { status: 201 }
+          );
+        }
+        if (url.includes("/api/heartbeat")) {
+          return new Promise<Response>((resolve) => {
+            resolveHeartbeat = resolve;
+          });
+        }
+        if (url.includes("/events")) {
+          return Response.json({ id: "event-1" }, { status: 201 });
+        }
+        return Response.json({});
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /run heartbeat/i }));
+    });
+    fireEvent.click(screen.getByRole("button", { name: /meeting settings/i }));
+    fireEvent.change(screen.getByLabelText(/heartbeat interval/i), {
+      target: { value: "60" }
+    });
+
+    await act(async () => {
+      resolveHeartbeat?.(
+        Response.json({
+          source: "pi",
+          cards: [
+            {
+              id: "heartbeat-card",
+              kind: "heartbeat",
+              title: "Interval applied",
+              body: "The next heartbeat should use the newest interval.",
+              priority: "medium"
+            }
+          ],
+          summary: "Heartbeat complete.",
+          nextHeartbeatHint: "Continue.",
+          reviewMarkdown: "# Runtime interval\n\nUpdated.",
+          agendaActions: [],
+          uiActions: [],
+          ephemeralReminder: null
+        })
+      );
+      await Promise.resolve();
+    });
+
+    const countdownValue = within(
+      screen.getByLabelText(/heartbeat countdown/i)
+    ).getByText((content, element) => {
+      return (
+        element?.tagName.toLowerCase() === "strong" &&
+        Number(content) >= 55
+      );
+    });
+    expect(countdownValue).toBeVisible();
+  });
+
   it("checkpoints the current session before opening another saved meeting", async () => {
     const now = Date.now();
     const fetchMock = vi.fn(

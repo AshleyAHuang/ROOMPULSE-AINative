@@ -219,6 +219,9 @@ export default function RoomPulseApp() {
   const agendaCountRef = useRef(defaultMeeting.agenda.length);
   const reviewRestoreSequenceRef = useRef(0);
   const reviewLastUpdatedAtRef = useRef(Date.now());
+  const heartbeatIntervalSecondsRef = useRef(
+    defaultMeeting.heartbeatIntervalSeconds
+  );
 
   const observedSpeakerLabels = useMemo(
     () => Array.from(new Set(transcript.map((line) => line.speakerLabel))),
@@ -313,6 +316,10 @@ export default function RoomPulseApp() {
   useEffect(() => {
     agendaCountRef.current = meeting.agenda.length;
   }, [meeting.agenda.length]);
+
+  useEffect(() => {
+    heartbeatIntervalSecondsRef.current = meeting.heartbeatIntervalSeconds;
+  }, [meeting.heartbeatIntervalSeconds]);
 
   useEffect(() => {
     if (
@@ -633,7 +640,7 @@ export default function RoomPulseApp() {
       setHeartbeatCount((count) => count + 1);
       setLastHeartbeatAt(heartbeatNow);
       setNextHeartbeatAt(
-        Date.now() + meeting.heartbeatIntervalSeconds * 1000
+        Date.now() + heartbeatIntervalSecondsRef.current * 1000
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -647,7 +654,7 @@ export default function RoomPulseApp() {
         (error as Error & { piRequired?: boolean })?.piRequired === true
       ) {
         setNextHeartbeatAt(
-          Date.now() + meeting.heartbeatIntervalSeconds * 1000
+          Date.now() + heartbeatIntervalSecondsRef.current * 1000
         );
         return;
       }
@@ -657,7 +664,7 @@ export default function RoomPulseApp() {
       setHeartbeatCount((count) => count + 1);
       setLastHeartbeatAt(heartbeatNow);
       setNextHeartbeatAt(
-        Date.now() + meeting.heartbeatIntervalSeconds * 1000
+        Date.now() + heartbeatIntervalSecondsRef.current * 1000
       );
     } finally {
       setIsHeartbeatRunning(false);
