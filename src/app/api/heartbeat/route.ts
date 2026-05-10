@@ -70,12 +70,14 @@ function isHeartbeatPayload(value: unknown): value is CreateHeartbeatInputArgs {
   return (
     isMeeting(value.meeting) &&
     Array.isArray(value.transcript) &&
+    hasUniqueRecordIds(value.transcript) &&
     value.transcript.every(
       (line) => isTranscriptLine(line) && line.timestamp <= now
     ) &&
     Array.isArray(value.observedSpeakerLabels) &&
     value.observedSpeakerLabels.every(isNonEmptyString) &&
     Array.isArray(value.priorInterventions) &&
+    hasUniqueRecordIds(value.priorInterventions) &&
     value.priorInterventions.every(
       (entry) => isTimelineEntry(entry) && entry.timestamp <= now
     ) &&
@@ -83,6 +85,7 @@ function isHeartbeatPayload(value: unknown): value is CreateHeartbeatInputArgs {
       typeof value.currentReviewMarkdown === "string") &&
     (value.reviewVersions === undefined ||
       (Array.isArray(value.reviewVersions) &&
+        hasUniqueRecordIds(value.reviewVersions) &&
         value.reviewVersions.every(
           (version) => isReviewVersion(version) && version.timestamp <= now
         ))) &&
@@ -136,6 +139,13 @@ function hasUniqueAgendaIds(agenda: unknown[]): boolean {
   return new Set(ids).size === ids.length;
 }
 
+function hasUniqueRecordIds(items: unknown[]): boolean {
+  const ids = items.map((item) =>
+    isRecord(item) && typeof item.id === "string" ? item.id.trim() : ""
+  );
+  return new Set(ids).size === ids.length;
+}
+
 function isParticipant(value: unknown): boolean {
   return (
     isRecord(value) &&
@@ -171,6 +181,7 @@ function isTimelineEntry(value: unknown): boolean {
       value.source === "local-fallback") &&
     Array.isArray(value.cards) &&
     value.cards.every(isFacilitatorCard) &&
+    hasUniqueRecordIds(value.cards) &&
     typeof value.summary === "string" &&
     (value.reviewMarkdown === undefined ||
       typeof value.reviewMarkdown === "string") &&

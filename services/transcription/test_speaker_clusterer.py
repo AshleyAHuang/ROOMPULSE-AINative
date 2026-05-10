@@ -456,6 +456,26 @@ class SpeakerClustererTest(unittest.TestCase):
 
         self.assertGreater(distance, 0.2)
 
+    def test_centroid_match_still_requires_exemplar_support(self) -> None:
+        cluster = server.SpeakerCluster(
+            id="speaker-1",
+            label="Speaker 1",
+            backend="test-neural",
+            centroid=np.array([1.0, 0.0, 0.0], dtype=np.float32),
+            exemplars=[
+                np.array([0.0, 1.0, 0.0], dtype=np.float32),
+                np.array([0.0, 0.98, 0.02], dtype=np.float32),
+                np.array([0.0, 0.96, 0.04], dtype=np.float32),
+            ],
+        )
+
+        distance = cluster_voice_distance(
+            cluster,
+            np.array([1.0, 0.0, 0.0], dtype=np.float32),
+        )
+
+        self.assertGreater(distance, 0.2)
+
     def test_clusterer_bounds_voiceprint_exemplar_memory(self) -> None:
         vectors = [
             np.array([1.0, value / 1000.0, 0.0], dtype=np.float32)

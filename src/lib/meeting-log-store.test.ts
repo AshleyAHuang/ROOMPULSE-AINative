@@ -409,6 +409,91 @@ describe("meeting log store", () => {
     expect(snapshot.metadata.state).toBeNull();
   });
 
+  it("drops persisted meeting state with duplicate child ids", async () => {
+    const startedAt = Date.UTC(2026, 4, 9, 12, 0, 0);
+    const metadata = await createMeetingLog(meeting, startedAt);
+    const state = {
+      status: "active",
+      meeting,
+      transcript: [
+        {
+          id: "duplicate-line",
+          speakerId: "speaker-1",
+          speakerLabel: "Speaker 1",
+          text: "First duplicate transcript line.",
+          timestamp: startedAt,
+          source: "speech",
+          confidence: 0.9
+        },
+        {
+          id: "duplicate-line",
+          speakerId: "speaker-2",
+          speakerLabel: "Speaker 2",
+          text: "Second duplicate transcript line.",
+          timestamp: startedAt,
+          source: "speech",
+          confidence: 0.9
+        }
+      ],
+      reviewMarkdown: "# Review",
+      reviewVersions: [
+        {
+          id: "review-1",
+          timestamp: startedAt,
+          source: "initial",
+          markdown: "# Review",
+          summary: "Initial."
+        }
+      ],
+      currentReviewVersionId: "review-1",
+      timeline: [
+        {
+          id: "pulse-1",
+          timestamp: startedAt,
+          source: "pi",
+          cards: [
+            {
+              id: "card-1",
+              kind: "heartbeat",
+              title: "First",
+              body: "First.",
+              priority: "medium"
+            },
+            {
+              id: "card-1",
+              kind: "heartbeat",
+              title: "Second",
+              body: "Second.",
+              priority: "medium"
+            }
+          ],
+          summary: "Duplicate child ids."
+        }
+      ],
+      lastHeartbeatAt: startedAt,
+      nextHeartbeatAt: startedAt + 30_000,
+      meetingStartedAt: startedAt,
+      heartbeatCount: 0,
+      isPaused: false,
+      currentOutput: null,
+      activeAgendaItemId: null,
+      updatedAt: startedAt
+    };
+    const database = new DatabaseSync(join(logDir, "roompulse.sqlite"));
+    database
+      .prepare(
+        `UPDATE meeting_sessions
+          SET state_json = ?
+          WHERE id = ?`
+      )
+      .run(JSON.stringify(state), metadata.id);
+    database.close();
+
+    const snapshot = await readMeetingLog(metadata.id);
+
+    expect(snapshot.metadata.state).toBeNull();
+  });
+
   it("backfills missing endedAt for legacy ended sessions on state update", async () => {
     const startedAt = Date.UTC(2026, 4, 9, 12, 0, 0);
     const metadata = await createMeetingLog(meeting, startedAt);

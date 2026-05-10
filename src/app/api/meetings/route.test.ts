@@ -571,6 +571,58 @@ describe("/api/meetings", () => {
       },
       {
         ...baseState,
+        transcript: [
+          {
+            id: "duplicate-line",
+            speakerId: "speaker-1",
+            speakerLabel: "Speaker 1",
+            text: "First duplicate line.",
+            timestamp,
+            source: "speech",
+            confidence: 0.9
+          },
+          {
+            id: "duplicate-line",
+            speakerId: "speaker-2",
+            speakerLabel: "Speaker 2",
+            text: "Second duplicate line.",
+            timestamp,
+            source: "speech",
+            confidence: 0.9
+          }
+        ]
+      },
+      {
+        ...baseState,
+        reviewVersions: [
+          baseState.reviewVersions[0],
+          { ...baseState.reviewVersions[0], markdown: "# Duplicate review" }
+        ]
+      },
+      {
+        ...baseState,
+        timeline: [
+          baseState.timeline[0],
+          { ...baseState.timeline[0], summary: "Duplicate timeline entry." }
+        ]
+      },
+      {
+        ...baseState,
+        timeline: [
+          {
+            ...baseState.timeline[0],
+            cards: [
+              baseState.timeline[0].cards[0],
+              {
+                ...baseState.timeline[0].cards[0],
+                body: "Duplicate card id."
+              }
+            ]
+          }
+        ]
+      },
+      {
+        ...baseState,
         timeline: [
           {
             ...baseState.timeline[0],

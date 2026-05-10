@@ -1584,10 +1584,12 @@ def cluster_voice_distance(cluster: SpeakerCluster, vector: np.ndarray) -> float
     nearest_exemplar_distance = float(
         np.mean(exemplar_distances[:nearest_exemplar_count])
     )
-    return min(
-        centroid_distance,
-        nearest_exemplar_distance * 0.72 + centroid_distance * 0.28,
-    )
+    if len(exemplar_distances) >= DEFAULT_CLUSTER_EXEMPLAR_MATCH_TOP_K:
+        return max(
+            centroid_distance * 0.35 + nearest_exemplar_distance * 0.65,
+            nearest_exemplar_distance * 0.82,
+        )
+    return centroid_distance * 0.45 + nearest_exemplar_distance * 0.55
 
 
 def update_cluster_exemplars(cluster: SpeakerCluster, vector: np.ndarray) -> None:

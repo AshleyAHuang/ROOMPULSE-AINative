@@ -160,6 +160,121 @@ describe("POST /api/heartbeat", () => {
     expect(runPiHeartbeat).not.toHaveBeenCalled();
   });
 
+  it("rejects duplicate heartbeat history ids before creating heartbeat input", async () => {
+    const duplicateTranscript = await POST(
+      jsonRequest({
+        ...validPayload,
+        transcript: [
+          {
+            id: "line-1",
+            speakerId: "speaker-1",
+            speakerLabel: "Speaker 1",
+            text: "First.",
+            timestamp: 100,
+            source: "speech",
+            confidence: 0.9
+          },
+          {
+            id: "line-1",
+            speakerId: "speaker-2",
+            speakerLabel: "Speaker 2",
+            text: "Second.",
+            timestamp: 200,
+            source: "speech",
+            confidence: 0.9
+          }
+        ]
+      })
+    );
+
+    const duplicateReview = await POST(
+      jsonRequest({
+        ...validPayload,
+        reviewVersions: [
+          {
+            id: "review-1",
+            timestamp: 100,
+            source: "pi",
+            markdown: "# Review",
+            summary: "First."
+          },
+          {
+            id: "review-1",
+            timestamp: 200,
+            source: "pi",
+            markdown: "# Review",
+            summary: "Second."
+          }
+        ]
+      })
+    );
+
+    const duplicateIntervention = await POST(
+      jsonRequest({
+        ...validPayload,
+        priorInterventions: [
+          {
+            id: "pulse-1",
+            timestamp: 100,
+            source: "pi",
+            cards: [],
+            summary: "First."
+          },
+          {
+            id: "pulse-1",
+            timestamp: 200,
+            source: "pi",
+            cards: [],
+            summary: "Second."
+          }
+        ]
+      })
+    );
+
+    const duplicateCards = await POST(
+      jsonRequest({
+        ...validPayload,
+        priorInterventions: [
+          {
+            id: "pulse-1",
+            timestamp: 100,
+            source: "pi",
+            cards: [
+              {
+                id: "card-1",
+                kind: "heartbeat",
+                title: "First",
+                body: "First.",
+                priority: "medium"
+              },
+              {
+                id: "card-1",
+                kind: "heartbeat",
+                title: "Second",
+                body: "Second.",
+                priority: "medium"
+              }
+            ],
+            summary: "Duplicate card ids."
+          }
+        ]
+      })
+    );
+
+    for (const response of [
+      duplicateTranscript,
+      duplicateReview,
+      duplicateIntervention,
+      duplicateCards
+    ]) {
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: "Invalid heartbeat payload"
+      });
+    }
+    expect(runPiHeartbeat).not.toHaveBeenCalled();
+  });
+
   it("rejects malformed prior interventions before creating heartbeat input", async () => {
     const response = await POST(
       jsonRequest({

@@ -1069,12 +1069,15 @@ function isPersistedMeetingState(value: unknown): value is PersistedMeetingState
     !isMeetingConfig(value.meeting) ||
     !Array.isArray(value.transcript) ||
     !value.transcript.every(isTranscriptLine) ||
+    !hasUniqueRecordIds(value.transcript) ||
     typeof value.reviewMarkdown !== "string" ||
     !Array.isArray(value.reviewVersions) ||
     !value.reviewVersions.every(isReviewVersion) ||
+    !hasUniqueRecordIds(value.reviewVersions) ||
     !isNonEmptyString(value.currentReviewVersionId) ||
     !Array.isArray(value.timeline) ||
     !value.timeline.every(isTimelineEntry) ||
+    !hasUniqueRecordIds(value.timeline) ||
     !isValidTimestamp(value.lastHeartbeatAt) ||
     !isValidTimestamp(value.nextHeartbeatAt) ||
     !isValidTimestamp(value.meetingStartedAt) ||
@@ -1155,6 +1158,13 @@ function hasUniqueAgendaIds(agenda: unknown[]): boolean {
   return new Set(ids).size === ids.length;
 }
 
+function hasUniqueRecordIds(items: unknown[]): boolean {
+  const ids = items.map((item) =>
+    isRecord(item) && typeof item.id === "string" ? item.id.trim() : ""
+  );
+  return new Set(ids).size === ids.length;
+}
+
 function isParticipant(value: unknown): boolean {
   return (
     isRecord(value) &&
@@ -1195,6 +1205,7 @@ function isTimelineEntry(value: unknown): value is TimelineEntry {
     isReviewSource(value.source) &&
     Array.isArray(value.cards) &&
     value.cards.every(isFacilitatorCard) &&
+    hasUniqueRecordIds(value.cards) &&
     typeof value.summary === "string" &&
     (value.reviewMarkdown === undefined ||
       typeof value.reviewMarkdown === "string") &&
