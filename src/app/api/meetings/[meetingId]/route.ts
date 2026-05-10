@@ -135,7 +135,10 @@ function isPersistedMeetingState(value: unknown): value is PersistedMeetingState
     !Array.isArray(value.reviewVersions) ||
     !value.reviewVersions.every(isReviewVersion) ||
     !hasUniqueRecordIds(value.reviewVersions) ||
-    !isNonEmptyString(value.currentReviewVersionId) ||
+    !isBoundedNonEmptyString(
+      value.currentReviewVersionId,
+      MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+    ) ||
     !Array.isArray(value.timeline) ||
     !value.timeline.every(isTimelineEntry) ||
     !hasUniqueRecordIds(value.timeline) ||
@@ -146,7 +149,10 @@ function isPersistedMeetingState(value: unknown): value is PersistedMeetingState
     typeof value.isPaused !== "boolean" ||
     (value.currentOutput !== null && !isFacilitatorOutput(value.currentOutput)) ||
     (value.activeAgendaItemId !== null &&
-      !isNonEmptyString(value.activeAgendaItemId)) ||
+      !isBoundedNonEmptyString(
+        value.activeAgendaItemId,
+        MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+      )) ||
     !isValidTimestamp(value.updatedAt) ||
     (value.endedAt !== undefined &&
       value.endedAt !== null &&
@@ -235,8 +241,8 @@ function isParticipant(value: unknown): boolean {
 function isTranscriptLine(value: unknown): boolean {
   return (
     isRecord(value) &&
-    isNonEmptyString(value.id) &&
-    isNonEmptyString(value.speakerId) &&
+    isBoundedNonEmptyString(value.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
+    isBoundedNonEmptyString(value.speakerId, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
     isSafeSpeakerLabel(value.speakerLabel) &&
     typeof value.text === "string" &&
     isValidTimestamp(value.timestamp) &&
@@ -252,7 +258,7 @@ function isTranscriptSource(value: unknown): boolean {
 function isReviewVersion(value: unknown): boolean {
   return (
     isRecord(value) &&
-    isNonEmptyString(value.id) &&
+    isBoundedNonEmptyString(value.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
     isValidTimestamp(value.timestamp) &&
     isReviewSource(value.source) &&
     isBoundedString(value.markdown, MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH) &&
@@ -273,7 +279,7 @@ function isReviewSource(value: unknown): boolean {
 function isTimelineEntry(value: unknown): boolean {
   return (
     isRecord(value) &&
-    isNonEmptyString(value.id) &&
+    isBoundedNonEmptyString(value.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
     isValidTimestamp(value.timestamp) &&
     isReviewSource(value.source) &&
     Array.isArray(value.cards) &&
@@ -323,7 +329,7 @@ function isFacilitatorSource(value: unknown): boolean {
 function isFacilitatorCard(value: unknown): boolean {
   return (
     isRecord(value) &&
-    isNonEmptyString(value.id) &&
+    isBoundedNonEmptyString(value.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
     isFacilitatorCardKind(value.kind) &&
     isBoundedNonEmptyString(value.title, MAX_FACILITATOR_CARD_TEXT_LENGTH) &&
     isBoundedString(value.body, MAX_FACILITATOR_CARD_TEXT_LENGTH) &&

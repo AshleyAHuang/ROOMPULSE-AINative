@@ -5,6 +5,7 @@ import {
   MAX_AGENDA_ITEMS,
   MAX_EXPECTED_PARTICIPANTS,
   MAX_FACILITATOR_OUTPUT_CARDS,
+  MAX_FACILITATOR_OUTPUT_TEXT_LENGTH,
   MAX_HEARTBEAT_HISTORY_ITEMS,
   MAX_HEARTBEAT_INPUT_TEXT_LENGTH,
   MAX_HEARTBEAT_INTERVAL_SECONDS,
@@ -571,6 +572,93 @@ describe("POST /api/heartbeat", () => {
             source: "pi",
             markdown: "R".repeat(MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH + 1),
             summary: "Review."
+          }
+        ]
+      }
+    ];
+
+    for (const payload of oversizedPayloads) {
+      const response = await POST(jsonRequest(payload));
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: "Invalid heartbeat payload"
+      });
+    }
+    expect(runPiHeartbeat).not.toHaveBeenCalled();
+  });
+
+  it("rejects oversized heartbeat ids before creating heartbeat input", async () => {
+    const oversizedId = "x".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH + 1);
+    const oversizedPayloads = [
+      {
+        ...validPayload,
+        transcript: [
+          {
+            id: oversizedId,
+            speakerId: "speaker-1",
+            speakerLabel: "Speaker 1",
+            text: "Transcript id should be bounded.",
+            timestamp: 100,
+            source: "speech",
+            confidence: 0.9
+          }
+        ]
+      },
+      {
+        ...validPayload,
+        transcript: [
+          {
+            id: "line-1",
+            speakerId: oversizedId,
+            speakerLabel: "Speaker 1",
+            text: "Speaker id should be bounded.",
+            timestamp: 100,
+            source: "speech",
+            confidence: 0.9
+          }
+        ]
+      },
+      {
+        ...validPayload,
+        priorInterventions: [
+          {
+            id: oversizedId,
+            timestamp: 100,
+            source: "pi",
+            cards: [],
+            summary: "Timeline id should be bounded."
+          }
+        ]
+      },
+      {
+        ...validPayload,
+        priorInterventions: [
+          {
+            id: "pulse-1",
+            timestamp: 100,
+            source: "pi",
+            cards: [
+              {
+                id: oversizedId,
+                kind: "heartbeat",
+                title: "Card id",
+                body: "Card id should be bounded.",
+                priority: "medium"
+              }
+            ],
+            summary: "Card id should be bounded."
+          }
+        ]
+      },
+      {
+        ...validPayload,
+        reviewVersions: [
+          {
+            id: oversizedId,
+            timestamp: 100,
+            source: "pi",
+            markdown: "# Review",
+            summary: "Review id should be bounded."
           }
         ]
       }

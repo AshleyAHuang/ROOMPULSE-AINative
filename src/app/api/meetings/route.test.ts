@@ -1223,10 +1223,17 @@ describe("/api/meetings", () => {
     const created = await createResponse.json();
     const timestamp = Date.now();
     const baseState = persistedState(timestamp);
+    const oversizedId = "x".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH + 1);
     const invalidStates = [
       { ...baseState, heartbeatCount: -1 },
       { ...baseState, currentReviewVersionId: "" },
       { ...baseState, currentReviewVersionId: "missing-review" },
+      {
+        ...baseState,
+        currentReviewVersionId: oversizedId,
+        reviewVersions: [{ ...baseState.reviewVersions[0], id: oversizedId }]
+      },
+      { ...baseState, activeAgendaItemId: oversizedId },
       {
         ...baseState,
         reviewVersions: [{ ...baseState.reviewVersions[0], id: " " }]
@@ -1249,6 +1256,34 @@ describe("/api/meetings", () => {
             speakerId: "speaker-2",
             speakerLabel: "Speaker 2",
             text: "Second duplicate line.",
+            timestamp,
+            source: "speech",
+            confidence: 0.9
+          }
+        ]
+      },
+      {
+        ...baseState,
+        transcript: [
+          {
+            id: oversizedId,
+            speakerId: "speaker-1",
+            speakerLabel: "Speaker 1",
+            text: "Oversized transcript ids should not persist.",
+            timestamp,
+            source: "speech",
+            confidence: 0.9
+          }
+        ]
+      },
+      {
+        ...baseState,
+        transcript: [
+          {
+            id: "line-1",
+            speakerId: oversizedId,
+            speakerLabel: "Speaker 1",
+            text: "Oversized transcript speaker ids should not persist.",
             timestamp,
             source: "speech",
             confidence: 0.9
@@ -1303,6 +1338,24 @@ describe("/api/meetings", () => {
         timeline: [
           baseState.timeline[0],
           { ...baseState.timeline[0], summary: "Duplicate timeline entry." }
+        ]
+      },
+      {
+        ...baseState,
+        timeline: [
+          {
+            ...baseState.timeline[0],
+            id: oversizedId
+          }
+        ]
+      },
+      {
+        ...baseState,
+        timeline: [
+          {
+            ...baseState.timeline[0],
+            cards: [{ ...baseState.timeline[0].cards[0], id: oversizedId }]
+          }
         ]
       },
       {
@@ -1394,6 +1447,27 @@ describe("/api/meetings", () => {
             summary: "S".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH + 1)
           }
         ]
+      },
+      {
+        ...baseState,
+        currentOutput: {
+          source: "pi",
+          cards: [
+            {
+              id: oversizedId,
+              kind: "heartbeat",
+              title: "Heartbeat",
+              body: "Current output card id should be bounded.",
+              priority: "medium"
+            }
+          ],
+          summary: "Oversized current output card id.",
+          nextHeartbeatHint: "Continue.",
+          reviewMarkdown: "# Review",
+          agendaActions: [],
+          uiActions: [],
+          ephemeralReminder: null
+        }
       },
       {
         ...baseState,

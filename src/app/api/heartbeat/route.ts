@@ -181,8 +181,8 @@ function isParticipant(value: unknown): boolean {
 function isTranscriptLine(value: unknown): boolean {
   return (
     isRecord(value) &&
-    isNonEmptyString(value.id) &&
-    isNonEmptyString(value.speakerId) &&
+    isNonEmptyBoundedString(value.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
+    isNonEmptyBoundedString(value.speakerId, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
     isSafeSpeakerLabel(value.speakerLabel) &&
     isBoundedString(value.text, MAX_HEARTBEAT_INPUT_TEXT_LENGTH) &&
     isValidTimestamp(value.timestamp) &&
@@ -198,7 +198,7 @@ function isTranscriptSource(value: unknown): boolean {
 function isTimelineEntry(value: unknown): boolean {
   return (
     isRecord(value) &&
-    isNonEmptyString(value.id) &&
+    isNonEmptyBoundedString(value.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
     isValidTimestamp(value.timestamp) &&
     (value.source === "pi" ||
       value.source === "openrouter" ||
@@ -222,7 +222,7 @@ function isTimelineEntry(value: unknown): boolean {
 function isFacilitatorCard(value: unknown): boolean {
   return (
     isRecord(value) &&
-    isNonEmptyString(value.id) &&
+    isNonEmptyBoundedString(value.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
     isFacilitatorCardKind(value.kind) &&
     isNonEmptyBoundedString(value.title, MAX_FACILITATOR_CARD_TEXT_LENGTH) &&
     isBoundedString(value.body, MAX_FACILITATOR_CARD_TEXT_LENGTH) &&
@@ -235,7 +235,7 @@ function isFacilitatorCard(value: unknown): boolean {
 function isReviewVersion(value: unknown): boolean {
   return (
     isRecord(value) &&
-    isNonEmptyString(value.id) &&
+    isNonEmptyBoundedString(value.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
     isValidTimestamp(value.timestamp) &&
     (value.source === "pi" ||
       value.source === "openrouter" ||

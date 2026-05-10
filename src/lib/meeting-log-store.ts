@@ -865,8 +865,11 @@ function readReviewVersions(
 
 function transcriptLineFromRow(row: TranscriptRow): TranscriptLine | null {
   if (
-    !isNonEmptyString(row.id) ||
-    !isNonEmptyString(row.speaker_id) ||
+    !isBoundedNonEmptyString(row.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) ||
+    !isBoundedNonEmptyString(
+      row.speaker_id,
+      MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+    ) ||
     !isSafeSpeakerLabel(row.speaker_label) ||
     !isBoundedString(row.text, MAX_HEARTBEAT_INPUT_TEXT_LENGTH) ||
     !isValidTimestamp(row.timestamp) ||
@@ -889,7 +892,7 @@ function transcriptLineFromRow(row: TranscriptRow): TranscriptLine | null {
 
 function reviewVersionFromRow(row: ReviewVersionRow): ReviewVersion | null {
   if (
-    !isNonEmptyString(row.id) ||
+    !isBoundedNonEmptyString(row.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) ||
     !isValidTimestamp(row.timestamp) ||
     !isReviewSource(row.source) ||
     !isBoundedString(row.markdown, MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH) ||
@@ -1124,8 +1127,11 @@ function lineFromPayload(payload: unknown): TranscriptLine | null {
   if (!isRecord(payload) || !isRecord(payload.line)) return null;
   const line = payload.line;
   if (
-    !isNonEmptyString(line.id) ||
-    !isNonEmptyString(line.speakerId) ||
+    !isBoundedNonEmptyString(line.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) ||
+    !isBoundedNonEmptyString(
+      line.speakerId,
+      MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+    ) ||
     !isSafeSpeakerLabel(line.speakerLabel) ||
     !isBoundedString(line.text, MAX_HEARTBEAT_INPUT_TEXT_LENGTH) ||
     !isValidTimestamp(line.timestamp) ||
@@ -1165,7 +1171,10 @@ function reviewVersionFromHeartbeatPayload(
 
   return {
     id:
-      isNonEmptyString(payload.reviewVersionId)
+      isBoundedNonEmptyString(
+        payload.reviewVersionId,
+        MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+      )
         ? payload.reviewVersionId
         : `${timestamp}-review`,
     timestamp,
@@ -1179,7 +1188,7 @@ function reviewVersionFromRestorePayload(payload: unknown): ReviewVersion | null
   if (!isRecord(payload) || !isRecord(payload.restoredVersion)) return null;
   const version = payload.restoredVersion;
   if (
-    !isNonEmptyString(version.id) ||
+    !isBoundedNonEmptyString(version.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) ||
     !isValidTimestamp(version.timestamp) ||
     !isReviewSource(version.source) ||
     !isBoundedString(version.markdown, MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH) ||
@@ -1203,7 +1212,7 @@ function reviewVersionFromInitializedPayload(
   if (!isRecord(payload) || !isRecord(payload.reviewVersion)) return null;
   const version = payload.reviewVersion;
   if (
-    !isNonEmptyString(version.id) ||
+    !isBoundedNonEmptyString(version.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) ||
     !isValidTimestamp(version.timestamp) ||
     !isReviewSource(version.source) ||
     !isBoundedString(version.markdown, MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH) ||
@@ -1349,7 +1358,10 @@ function isPersistedMeetingState(value: unknown): value is PersistedMeetingState
     value.reviewVersions.length === 0 ||
     !value.reviewVersions.every(isReviewVersion) ||
     !hasUniqueRecordIds(value.reviewVersions) ||
-    !isNonEmptyString(value.currentReviewVersionId) ||
+    !isBoundedNonEmptyString(
+      value.currentReviewVersionId,
+      MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+    ) ||
     !Array.isArray(value.timeline) ||
     !value.timeline.every(isTimelineEntry) ||
     !hasUniqueRecordIds(value.timeline) ||
@@ -1360,7 +1372,10 @@ function isPersistedMeetingState(value: unknown): value is PersistedMeetingState
     typeof value.isPaused !== "boolean" ||
     (value.currentOutput !== null && !isFacilitatorOutput(value.currentOutput)) ||
     (value.activeAgendaItemId !== null &&
-      !isNonEmptyString(value.activeAgendaItemId)) ||
+      !isBoundedNonEmptyString(
+        value.activeAgendaItemId,
+        MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+      )) ||
     !isValidTimestamp(value.updatedAt) ||
     (value.endedAt !== undefined &&
       value.endedAt !== null &&
@@ -1451,8 +1466,8 @@ function isParticipant(value: unknown): boolean {
 function isTranscriptLine(value: unknown): value is TranscriptLine {
   return (
     isRecord(value) &&
-    isNonEmptyString(value.id) &&
-    isNonEmptyString(value.speakerId) &&
+    isBoundedNonEmptyString(value.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
+    isBoundedNonEmptyString(value.speakerId, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
     isSafeSpeakerLabel(value.speakerLabel) &&
     isBoundedString(value.text, MAX_HEARTBEAT_INPUT_TEXT_LENGTH) &&
     isValidTimestamp(value.timestamp) &&
@@ -1464,7 +1479,7 @@ function isTranscriptLine(value: unknown): value is TranscriptLine {
 function isReviewVersion(value: unknown): value is ReviewVersion {
   return (
     isRecord(value) &&
-    isNonEmptyString(value.id) &&
+    isBoundedNonEmptyString(value.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
     isValidTimestamp(value.timestamp) &&
     isReviewSource(value.source) &&
     isBoundedString(value.markdown, MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH) &&
@@ -1475,7 +1490,7 @@ function isReviewVersion(value: unknown): value is ReviewVersion {
 function isTimelineEntry(value: unknown): value is TimelineEntry {
   return (
     isRecord(value) &&
-    isNonEmptyString(value.id) &&
+    isBoundedNonEmptyString(value.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
     isValidTimestamp(value.timestamp) &&
     isReviewSource(value.source) &&
     Array.isArray(value.cards) &&
@@ -1525,7 +1540,7 @@ function isFacilitatorSource(value: unknown): boolean {
 function isFacilitatorCard(value: unknown): boolean {
   return (
     isRecord(value) &&
-    isNonEmptyString(value.id) &&
+    isBoundedNonEmptyString(value.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
     isFacilitatorCardKind(value.kind) &&
     isBoundedNonEmptyString(value.title, MAX_FACILITATOR_CARD_TEXT_LENGTH) &&
     isBoundedString(value.body, MAX_FACILITATOR_CARD_TEXT_LENGTH) &&
