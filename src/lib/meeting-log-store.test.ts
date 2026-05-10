@@ -154,6 +154,49 @@ describe("meeting log store", () => {
     expect(snapshot.transcript[0]?.source).toBe("speech");
   });
 
+  it("drops malformed persisted state and falls back for malformed meeting JSON", async () => {
+    const startedAt = Date.UTC(2026, 4, 9, 12, 0, 0);
+    const metadata = await createMeetingLog(meeting, startedAt);
+    const database = new DatabaseSync(join(logDir, "roompulse.sqlite"));
+    database
+      .prepare(
+        `UPDATE meeting_sessions
+          SET meeting_json = ?,
+              state_json = ?
+          WHERE id = ?`
+      )
+      .run(
+        JSON.stringify({ title: "Broken only" }),
+        JSON.stringify({
+          status: "paused",
+          meeting: { title: "bad" },
+          transcript: [{ id: "line-without-speaker" }],
+          reviewMarkdown: "# Bad",
+          reviewVersions: [],
+          currentReviewVersionId: "bad",
+          timeline: [],
+          lastHeartbeatAt: startedAt,
+          nextHeartbeatAt: startedAt,
+          meetingStartedAt: startedAt,
+          heartbeatCount: 0,
+          isPaused: true,
+          activeAgendaItemId: null,
+          updatedAt: startedAt
+        }),
+        metadata.id
+      );
+    database.close();
+
+    const snapshot = await readMeetingLog(metadata.id);
+
+    expect(snapshot.metadata.meeting).toMatchObject({
+      title: "Persistence review",
+      goal: "Keep local meeting logs",
+      expectedParticipants: 1
+    });
+    expect(snapshot.metadata.state).toBeNull();
+  });
+
   it("backfills legacy event counts and latest review metadata", async () => {
     const startedAt = Date.UTC(2026, 4, 9, 12, 0, 0);
     const database = new DatabaseSync(join(logDir, "roompulse.sqlite"));

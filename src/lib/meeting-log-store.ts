@@ -579,6 +579,7 @@ function assertMeetingAcceptsEvent(db: DatabaseSync, meetingId: string): void {
 }
 
 function rowToMetadata(row: MeetingRow): MeetingLogMetadata {
+  const fallback = fallbackMeeting(row.title, row.goal);
   return {
     id: row.id,
     title: row.title,
@@ -589,8 +590,8 @@ function rowToMetadata(row: MeetingRow): MeetingLogMetadata {
     status: normalizeStatus(row.status),
     isPaused: row.is_paused === 1,
     eventCount: row.event_count,
-    meeting: parseJson(row.meeting_json, fallbackMeeting(row.title, row.goal)),
-    state: parseJson(row.state_json, null),
+    meeting: parseMeetingJson(row.meeting_json, fallback),
+    state: parsePersistedStateJson(row.state_json),
     latestReviewMarkdown: row.latest_review_markdown ?? "",
     latestReviewVersionId: row.latest_review_version_id
   };
@@ -995,6 +996,16 @@ function parseJson<T>(raw: string | null, fallback: T): T {
   }
 }
 
+function parseMeetingJson(raw: string | null, fallback: MeetingConfig): MeetingConfig {
+  const parsed = parseJson<unknown>(raw, null);
+  return isMeetingConfig(parsed) ? parsed : fallback;
+}
+
+function parsePersistedStateJson(raw: string | null): PersistedMeetingState | null {
+  const parsed = parseJson<unknown>(raw, null);
+  return isPersistedMeetingState(parsed) ? parsed : null;
+}
+
 function toJson(value: unknown): string {
   return JSON.stringify(value);
 }
@@ -1009,6 +1020,140 @@ function fallbackMeeting(title: string, goal: string): MeetingConfig {
     participants: [],
     heartbeatIntervalSeconds: 45
   };
+}
+
+function isPersistedMeetingState(value: unknown): value is PersistedMeetingState {
+  return (
+    isRecord(value) &&
+    isMeetingStatus(value.status) &&
+    isMeetingConfig(value.meeting) &&
+    Array.isArray(value.transcript) &&
+    value.transcript.every(isTranscriptLine) &&
+    typeof value.reviewMarkdown === "string" &&
+    Array.isArray(value.reviewVersions) &&
+    value.reviewVersions.every(isReviewVersion) &&
+    isNonEmptyString(value.currentReviewVersionId) &&
+    Array.isArray(value.timeline) &&
+    value.timeline.every(isTimelineEntry) &&
+    isValidTimestamp(value.lastHeartbeatAt) &&
+    isValidTimestamp(value.nextHeartbeatAt) &&
+    isValidTimestamp(value.meetingStartedAt) &&
+    isIntegerAtLeast(value.heartbeatCount, 0) &&
+    typeof value.isPaused === "boolean" &&
+    (value.activeAgendaItemId === null ||
+      isNonEmptyString(value.activeAgendaItemId)) &&
+    isValidTimestamp(value.updatedAt) &&
+    (value.endedAt === undefined ||
+      value.endedAt === null ||
+      isValidTimestamp(value.endedAt))
+  );
+}
+
+function isMeetingConfig(value: unknown): value is MeetingConfig {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.title) &&
+    isNonEmptyString(value.goal) &&
+    typeof value.context === "string" &&
+    Array.isArray(value.agenda) &&
+    value.agenda.every(isAgendaItem) &&
+    isIntegerAtLeast(value.expectedParticipants, 1) &&
+    Array.isArray(value.participants) &&
+    value.participants.every(isParticipant) &&
+    isIntegerAtLeast(value.heartbeatIntervalSeconds, 15)
+  );
+}
+
+function isMeetingStatus(value: unknown): value is MeetingStatus {
+  return value === "active" || value === "paused" || value === "ended";
+}
+
+function isAgendaItem(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.id) &&
+    isNonEmptyString(value.title) &&
+    typeof value.done === "boolean"
+  );
+}
+
+function isParticipant(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.name) &&
+    (value.role === undefined || typeof value.role === "string")
+  );
+}
+
+function isTranscriptLine(value: unknown): value is TranscriptLine {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.id) &&
+    isNonEmptyString(value.speakerId) &&
+    isNonEmptyString(value.speakerLabel) &&
+    typeof value.text === "string" &&
+    isValidTimestamp(value.timestamp) &&
+    isTranscriptSource(value.source) &&
+    isConfidence(value.confidence)
+  );
+}
+
+function isReviewVersion(value: unknown): value is ReviewVersion {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.id) &&
+    isValidTimestamp(value.timestamp) &&
+    isReviewSource(value.source) &&
+    typeof value.markdown === "string" &&
+    typeof value.summary === "string"
+  );
+}
+
+function isTimelineEntry(value: unknown): value is TimelineEntry {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.id) &&
+    isValidTimestamp(value.timestamp) &&
+    isReviewSource(value.source) &&
+    Array.isArray(value.cards) &&
+    value.cards.every(isFacilitatorCard) &&
+    typeof value.summary === "string" &&
+    (value.reviewMarkdown === undefined ||
+      typeof value.reviewMarkdown === "string") &&
+    (value.reminder === undefined ||
+      value.reminder === null ||
+      typeof value.reminder === "string")
+  );
+}
+
+function isFacilitatorCard(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.id) &&
+    isFacilitatorCardKind(value.kind) &&
+    isNonEmptyString(value.title) &&
+    typeof value.body === "string" &&
+    (value.priority === "low" ||
+      value.priority === "medium" ||
+      value.priority === "high")
+  );
+}
+
+function isFacilitatorCardKind(value: unknown): boolean {
+  return (
+    value === "heartbeat" ||
+    value === "participation" ||
+    value === "risk" ||
+    value === "agenda" ||
+    value === "decision" ||
+    value === "action" ||
+    value === "drift" ||
+    value === "reminder"
+  );
+}
+
+function isIntegerAtLeast(value: unknown, min: number): value is number {
+  return isFiniteNumber(value) && Number.isInteger(value) && value >= min;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
