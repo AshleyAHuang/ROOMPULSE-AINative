@@ -127,7 +127,13 @@ export function createParticipationStatus(
   observedLabels: string[]
 ): ParticipationStatus {
   const expected = Math.max(0, Math.floor(expectedParticipants));
-  const uniqueLabels = Array.from(new Set(observedLabels));
+  const uniqueLabels = Array.from(
+    new Set(
+      observedLabels
+        .map((label) => label.trim())
+        .filter((label) => label.length > 0)
+    )
+  );
   const observed = uniqueLabels.length;
   const missingCount = Math.max(0, expected - observed);
 

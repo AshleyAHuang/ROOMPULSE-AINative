@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { SpeakerTracker, type VoiceFeatures } from "./speaker-tracker";
+import {
+  SpeakerTracker,
+  createParticipationStatus,
+  type VoiceFeatures
+} from "./speaker-tracker";
 
 const features = (
   centroid: number,
@@ -55,6 +59,16 @@ describe("SpeakerTracker", () => {
       needsNudge: true,
       reminder:
         "3 people have not been heard yet. Invite quieter voices before moving on."
+    });
+  });
+
+  it("does not count blank or whitespace-variant labels as extra speakers", () => {
+    expect(
+      createParticipationStatus(3, ["Speaker 1", " Speaker 1 ", "", "   "])
+    ).toMatchObject({
+      observed: 1,
+      missingCount: 2,
+      observedLabels: ["Speaker 1"]
     });
   });
 });
