@@ -23,11 +23,11 @@ export default function MarkdownDocument({ markdown }: { markdown: string }) {
       }
     }
 
-    if (isBulletLine(line)) {
+    if (isUnorderedListLine(line)) {
       const items: string[] = [];
       const start = index;
-      while (index < lines.length && isBulletLine(lines[index] ?? "")) {
-        items.push((lines[index] ?? "").slice(2));
+      while (index < lines.length && isUnorderedListLine(lines[index] ?? "")) {
+        items.push(stripUnorderedMarker(lines[index] ?? ""));
         index += 1;
       }
       nodes.push(
@@ -38,6 +38,25 @@ export default function MarkdownDocument({ markdown }: { markdown: string }) {
             </li>
           ))}
         </ul>
+      );
+      continue;
+    }
+
+    if (isOrderedListLine(line)) {
+      const items: string[] = [];
+      const start = index;
+      while (index < lines.length && isOrderedListLine(lines[index] ?? "")) {
+        items.push(stripOrderedMarker(lines[index] ?? ""));
+        index += 1;
+      }
+      nodes.push(
+        <ol key={`ordered-list-${start}`}>
+          {items.map((item, itemIndex) => (
+            <li key={`${itemIndex}-${item.slice(0, 12)}`}>
+              {renderInlineMarkdown(item)}
+            </li>
+          ))}
+        </ol>
       );
       continue;
     }
@@ -63,17 +82,18 @@ function renderMarkdownLine(line: string, index: number): ReactNode {
   if (line.startsWith("#### ")) {
     return <h4 key={key}>{renderInlineMarkdown(line.slice(5))}</h4>;
   }
-  if (line.startsWith("- [x] ") || line.startsWith("- [ ] ")) {
-    const checked = line.startsWith("- [x] ");
+  const checkbox = line.match(/^\s*[-*]\s+\[([ xX])\]\s+(.+)$/);
+  if (checkbox) {
+    const checked = checkbox[1]?.toLowerCase() === "x";
     return (
       <p className="markdown-check" key={key}>
         <input checked={checked} readOnly type="checkbox" />
-        <span>{renderInlineMarkdown(line.slice(6))}</span>
+        <span>{renderInlineMarkdown(checkbox[2] ?? "")}</span>
       </p>
     );
   }
-  if (line.startsWith("- ")) {
-    return <li key={key}>{renderInlineMarkdown(line.slice(2))}</li>;
+  if (isUnorderedListLine(line)) {
+    return <li key={key}>{renderInlineMarkdown(stripUnorderedMarker(line))}</li>;
   }
   if (!line.trim()) {
     return <div className="markdown-gap" key={key} />;
@@ -81,12 +101,20 @@ function renderMarkdownLine(line: string, index: number): ReactNode {
   return <p key={key}>{renderInlineMarkdown(line)}</p>;
 }
 
-function isBulletLine(line: string): boolean {
-  return (
-    line.startsWith("- ") &&
-    !line.startsWith("- [x] ") &&
-    !line.startsWith("- [ ] ")
-  );
+function isUnorderedListLine(line: string): boolean {
+  return /^\s*[-*]\s+(?!\[[ xX]\]\s+)/.test(line);
+}
+
+function stripUnorderedMarker(line: string): string {
+  return line.replace(/^\s*[-*]\s+/, "");
+}
+
+function isOrderedListLine(line: string): boolean {
+  return /^\s*\d+[.)]\s+/.test(line);
+}
+
+function stripOrderedMarker(line: string): string {
+  return line.replace(/^\s*\d+[.)]\s+/, "");
 }
 
 function MarkdownTableView({ table }: { table: MarkdownTable }) {

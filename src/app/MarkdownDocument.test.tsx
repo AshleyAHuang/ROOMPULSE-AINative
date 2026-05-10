@@ -55,4 +55,25 @@ describe("MarkdownDocument", () => {
     expect(within(list).getByText("Support:")).toBeVisible();
     expect(within(list).getByText("Old launch owner")).toBeVisible();
   });
+
+  it("renders common agent markdown list variants", () => {
+    render(
+      <MarkdownDocument
+        markdown={[
+          "## Follow-up",
+          "1. Confirm owner",
+          "2. Send notes",
+          "* Capture blockers",
+          "- [X] Goal confirmed"
+        ].join("\n")}
+      />
+    );
+
+    const orderedList = screen.getAllByRole("list")[0];
+    expect(within(orderedList).getAllByRole("listitem")).toHaveLength(2);
+    expect(screen.getByText("Capture blockers")).toBeVisible();
+    const checkbox = screen.getByRole("checkbox") as HTMLInputElement;
+    expect(checkbox.checked).toBe(true);
+    expect(screen.getByText("Goal confirmed")).toBeVisible();
+  });
 });
