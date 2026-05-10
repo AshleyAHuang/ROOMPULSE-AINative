@@ -275,6 +275,38 @@ describe("RoomPulseApp mic lifecycle", () => {
     expect(screen.getByText("S1")).toBeVisible();
   });
 
+  it("keeps oversized canonical speaker numbers from overflowing live badges", async () => {
+    render(<RoomPulseApp />);
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: /new meeting/i })[0]);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    expect(
+      await screen.findByRole("button", { name: /run heartbeat now/i })
+    ).toBeInTheDocument();
+    await waitFor(() => {
+      expect(clients).toHaveLength(1);
+    });
+
+    act(() => {
+      clients[0].options.onSegment({
+        id: "huge-speaker",
+        speakerId: "speaker-1000000",
+        speakerLabel: "Speaker 1000000",
+        text: "The full label stays visible, but the badge must stay compact.",
+        confidence: 0.9,
+        observedSpeakerLabels: ["Speaker 1000000"]
+      });
+    });
+
+    expect(screen.getAllByText("Speaker 1000000").length).toBeGreaterThan(0);
+    expect(screen.queryByText("S1000000")).not.toBeInTheDocument();
+    expect(screen.getByText("S99+")).toBeVisible();
+  });
+
   it("normalizes unsafe mic speaker labels before adding transcript lines", async () => {
     render(<RoomPulseApp />);
 

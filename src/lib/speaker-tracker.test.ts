@@ -4,6 +4,8 @@ import {
   createParticipationStatus,
   isSafeSpeakerLabel,
   normalizeSpeakerLabel,
+  speakerBadgeClass,
+  speakerBadgeLabel,
   type VoiceFeatures
 } from "./speaker-tracker";
 
@@ -137,6 +139,16 @@ describe("SpeakerTracker", () => {
 
     expect(label).toBe("Speaker 1");
     expect(label ? isSafeSpeakerLabel(label) : false).toBe(true);
+  });
+
+  it("caps oversized speaker badge text while cycling known color classes", () => {
+    expect(speakerBadgeLabel("Speaker 1000000")).toBe("S99+");
+    expect(speakerBadgeClass("Speaker 1000000")).toBe("speaker-4");
+  });
+
+  it("falls invalid speaker badge labels back to the first badge", () => {
+    expect(speakerBadgeLabel("Speaker 0")).toBe("S1");
+    expect(speakerBadgeClass("not a numbered speaker")).toBe("speaker-1");
   });
 
   it("normalizes impossible expected participant counts before computing gaps", () => {

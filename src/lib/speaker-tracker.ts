@@ -30,6 +30,8 @@ export interface SpeakerTrackerOptions {
 const DEFAULT_DISTANCE_THRESHOLD = 0.22;
 export const MAX_OBSERVED_SPEAKER_LABELS = 24;
 export const MAX_SPEAKER_LABEL_LENGTH = 80;
+export const MAX_SPEAKER_BADGE_NUMBER = 99;
+export const SPEAKER_BADGE_COLOR_COUNT = 6;
 
 export class SpeakerTracker {
   private readonly distanceThreshold: number;
@@ -208,6 +210,26 @@ export function normalizeSpeakerLabel(value: string): string | null {
   }
 
   return `${compacted.slice(0, MAX_SPEAKER_LABEL_LENGTH - 3)}...`;
+}
+
+export function speakerBadgeNumber(label: string): number {
+  const normalizedLabel = normalizeSpeakerLabel(label);
+  const match = normalizedLabel?.match(/^Speaker (\d+)$/);
+  const value = match ? Number(match[1]) : 1;
+  return Number.isSafeInteger(value) && value > 0 ? value : 1;
+}
+
+export function speakerBadgeLabel(label: string): string {
+  const value = speakerBadgeNumber(label);
+  return value > MAX_SPEAKER_BADGE_NUMBER
+    ? `S${MAX_SPEAKER_BADGE_NUMBER}+`
+    : `S${value}`;
+}
+
+export function speakerBadgeClass(label: string): string {
+  const value = speakerBadgeNumber(label);
+  const colorNumber = ((value - 1) % SPEAKER_BADGE_COLOR_COUNT) + 1;
+  return `speaker-${colorNumber}`;
 }
 
 export function isSafeSpeakerLabel(value: unknown): value is string {

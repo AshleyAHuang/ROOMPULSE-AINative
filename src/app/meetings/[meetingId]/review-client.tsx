@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import MarkdownDocument from "@/app/MarkdownDocument";
 import type { MeetingLogSnapshot } from "@/lib/meeting-log-store";
-import { normalizeSpeakerLabel } from "@/lib/speaker-tracker";
+import { speakerBadgeClass, speakerBadgeLabel } from "@/lib/speaker-tracker";
 
 export default function MeetingReviewClient({
   snapshot
@@ -166,8 +166,8 @@ export default function MeetingReviewClient({
             ) : (
               snapshot.transcript.map((line) => (
                 <article className="transcript-line" key={line.id}>
-                  <div className={`speaker-badge speaker-${speakerNumber(line.speakerLabel)}`}>
-                    S{speakerNumber(line.speakerLabel)}
+                  <div className={`speaker-badge ${speakerBadgeClass(line.speakerLabel)}`}>
+                    {speakerBadgeLabel(line.speakerLabel)}
                   </div>
                   <div>
                     <span>{line.speakerLabel}</span>
@@ -293,10 +293,4 @@ function formatElapsed(totalSeconds: number): string {
   const seconds = totalSeconds % 60;
   if (minutes === 0) return `${seconds}s`;
   return `${minutes}m ${seconds.toString().padStart(2, "0")}s`;
-}
-
-function speakerNumber(label: string): number {
-  const canonicalLabel = normalizeSpeakerLabel(label);
-  const match = canonicalLabel?.match(/^Speaker ([1-9]\d*)$/);
-  return match ? Number(match[1]) : 1;
 }

@@ -30,7 +30,9 @@ import {
 import {
   createParticipationStatus,
   normalizeObservedSpeakerLabels,
-  normalizeSpeakerLabel
+  normalizeSpeakerLabel,
+  speakerBadgeClass,
+  speakerBadgeLabel
 } from "@/lib/speaker-tracker";
 import { LocalTranscriptionClient } from "@/lib/local-transcription-client";
 import { TranscriptStore } from "@/lib/transcript-store";
@@ -2549,8 +2551,8 @@ export default function RoomPulseApp() {
             ) : (
               transcript.map((line) => (
                 <article className="transcript-line" key={line.id}>
-                  <div className={`speaker-badge speaker-${speakerNumber(line.speakerLabel)}`}>
-                    S{speakerNumber(line.speakerLabel)}
+                  <div className={`speaker-badge ${speakerBadgeClass(line.speakerLabel)}`}>
+                    {speakerBadgeLabel(line.speakerLabel)}
                   </div>
                   <div>
                     <span>{line.speakerLabel}</span>
@@ -3999,12 +4001,6 @@ function formatElapsed(totalSeconds: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
-}
-
-function speakerNumber(label: string): number {
-  const normalizedLabel = normalizeSpeakerLabel(label);
-  const match = normalizedLabel?.match(/^Speaker (\d+)$/);
-  return match ? Number(match[1]) : 1;
 }
 
 function latestNormalizedSpeakerLabel(labels: string[]): string | null {

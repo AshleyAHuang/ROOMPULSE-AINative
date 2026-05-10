@@ -153,6 +153,27 @@ describe("MeetingReviewClient", () => {
     expect(screen.getByText("S1")).toBeVisible();
   });
 
+  it("keeps oversized canonical speaker numbers from overflowing review badges", () => {
+    const hugeSpeakerSnapshot: MeetingLogSnapshot = {
+      ...snapshot,
+      transcript: [
+        {
+          ...snapshot.transcript[0],
+          id: "line-huge-speaker",
+          speakerId: "speaker-1000000",
+          speakerLabel: "Speaker 1000000",
+          text: "The full label stays visible, but the badge must stay compact."
+        }
+      ]
+    };
+
+    render(<MeetingReviewClient snapshot={hugeSpeakerSnapshot} />);
+
+    expect(screen.getByText("Speaker 1000000")).toBeVisible();
+    expect(screen.queryByText("S1000000")).not.toBeInTheDocument();
+    expect(screen.getByText("S99+")).toBeVisible();
+  });
+
   it("treats epoch endedAt as a real meeting end in transcript export text", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
