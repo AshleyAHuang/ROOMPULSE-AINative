@@ -532,6 +532,45 @@ describe("/api/meetings", () => {
       error: "Invalid meeting payload"
     });
   });
+
+  it("rejects out-of-range meeting and event timestamps before persistence", async () => {
+    const invalidCreate = await POST(
+      jsonRequest({
+        meeting: validMeeting,
+        startedAt: 1e100
+      })
+    );
+    expect(invalidCreate.status).toBe(400);
+    await expect(invalidCreate.json()).resolves.toEqual({
+      error: "Invalid meeting timestamp"
+    });
+
+    const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
+    const created = await createResponse.json();
+    const invalidEvent = await POST_EVENT(
+      jsonRequest({
+        type: "meeting_started",
+        timestamp: 1e100,
+        payload: { meeting: validMeeting }
+      }),
+      routeContext(created.id)
+    );
+    expect(invalidEvent.status).toBe(400);
+    await expect(invalidEvent.json()).resolves.toEqual({
+      error: "Invalid log event payload"
+    });
+
+    const invalidPatch = await PATCH(
+      jsonRequest({
+        updatedAt: 1e100
+      }),
+      routeContext(created.id)
+    );
+    expect(invalidPatch.status).toBe(400);
+    await expect(invalidPatch.json()).resolves.toEqual({
+      error: "Invalid meeting timestamp"
+    });
+  });
 });
 
 function jsonRequest(payload: unknown): Request {

@@ -28,9 +28,18 @@ export async function POST(request: Request) {
 
   try {
     const startedAt =
-      typeof payload.startedAt === "number" && Number.isFinite(payload.startedAt)
+      typeof payload.startedAt === "number" && isValidTimestamp(payload.startedAt)
         ? payload.startedAt
         : Date.now();
+    if (
+      typeof payload.startedAt === "number" &&
+      !isValidTimestamp(payload.startedAt)
+    ) {
+      return NextResponse.json(
+        { error: "Invalid meeting timestamp" },
+        { status: 400 }
+      );
+    }
     const metadata = await createMeetingLog(payload.meeting, startedAt);
     return NextResponse.json(metadata, { status: 201 });
   } catch (error) {
@@ -89,4 +98,8 @@ function isIntegerAtLeast(value: unknown, min: number): value is number {
     Number.isFinite(value) &&
     value >= min
   );
+}
+
+function isValidTimestamp(value: number): boolean {
+  return Number.isSafeInteger(value) && !Number.isNaN(new Date(value).getTime());
 }

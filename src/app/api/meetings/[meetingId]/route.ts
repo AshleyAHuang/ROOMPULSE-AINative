@@ -47,15 +47,22 @@ export async function PATCH(request: Request, context: RouteContext) {
   const isPaused =
     typeof payload.isPaused === "boolean" ? payload.isPaused : undefined;
   const endedAt =
-    typeof payload.endedAt === "number" && Number.isFinite(payload.endedAt)
+    isValidTimestamp(payload.endedAt)
       ? payload.endedAt
       : undefined;
   const updatedAt =
-    typeof payload.updatedAt === "number" && Number.isFinite(payload.updatedAt)
+    isValidTimestamp(payload.updatedAt)
       ? payload.updatedAt
       : undefined;
   const state =
     isPersistedMeetingState(payload.state) ? payload.state : undefined;
+
+  if (
+    (typeof payload.endedAt === "number" && endedAt === undefined) ||
+    (typeof payload.updatedAt === "number" && updatedAt === undefined)
+  ) {
+    return NextResponse.json({ error: "Invalid meeting timestamp" }, { status: 400 });
+  }
 
   if (
     status === undefined &&
@@ -104,17 +111,17 @@ function isPersistedMeetingState(value: unknown): value is PersistedMeetingState
     typeof value.currentReviewVersionId === "string" &&
     Array.isArray(value.timeline) &&
     value.timeline.every(isTimelineEntry) &&
-    isFiniteNumber(value.lastHeartbeatAt) &&
-    isFiniteNumber(value.nextHeartbeatAt) &&
-    isFiniteNumber(value.meetingStartedAt) &&
+    isValidTimestamp(value.lastHeartbeatAt) &&
+    isValidTimestamp(value.nextHeartbeatAt) &&
+    isValidTimestamp(value.meetingStartedAt) &&
     isFiniteNumber(value.heartbeatCount) &&
     typeof value.isPaused === "boolean" &&
     (value.activeAgendaItemId === null ||
       typeof value.activeAgendaItemId === "string") &&
-    isFiniteNumber(value.updatedAt) &&
+    isValidTimestamp(value.updatedAt) &&
     (value.endedAt === undefined ||
       value.endedAt === null ||
-      isFiniteNumber(value.endedAt))
+      isValidTimestamp(value.endedAt))
   );
 }
 
@@ -158,7 +165,7 @@ function isTranscriptLine(value: unknown): boolean {
     isNonEmptyString(value.speakerId) &&
     isNonEmptyString(value.speakerLabel) &&
     typeof value.text === "string" &&
-    isFiniteNumber(value.timestamp) &&
+    isValidTimestamp(value.timestamp) &&
     isTranscriptSource(value.source) &&
     isConfidence(value.confidence)
   );
@@ -172,7 +179,7 @@ function isReviewVersion(value: unknown): boolean {
   return (
     isRecord(value) &&
     typeof value.id === "string" &&
-    isFiniteNumber(value.timestamp) &&
+    isValidTimestamp(value.timestamp) &&
     isReviewSource(value.source) &&
     typeof value.markdown === "string" &&
     typeof value.summary === "string"
@@ -193,7 +200,7 @@ function isTimelineEntry(value: unknown): boolean {
   return (
     isRecord(value) &&
     typeof value.id === "string" &&
-    isFiniteNumber(value.timestamp) &&
+    isValidTimestamp(value.timestamp) &&
     isReviewSource(value.source) &&
     Array.isArray(value.cards) &&
     value.cards.every(isFacilitatorCard) &&
@@ -221,6 +228,14 @@ function isFacilitatorCard(value: unknown): boolean {
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
+}
+
+function isValidTimestamp(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    !Number.isNaN(new Date(value).getTime())
+  );
 }
 
 function isIntegerAtLeast(value: unknown, min: number): value is number {

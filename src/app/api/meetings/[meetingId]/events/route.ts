@@ -48,8 +48,7 @@ function isLogEventPayload(value: unknown): value is {
     isRecord(value) &&
     typeof value.type === "string" &&
     value.type.length > 0 &&
-    typeof value.timestamp === "number" &&
-    Number.isFinite(value.timestamp) &&
+    isValidTimestamp(value.timestamp) &&
     "payload" in value &&
     isValidEventPayload(value.type, value.payload)
   );
@@ -96,7 +95,7 @@ function isTranscriptLine(value: unknown): boolean {
     isNonEmptyString(value.speakerId) &&
     isNonEmptyString(value.speakerLabel) &&
     typeof value.text === "string" &&
-    isFiniteNumber(value.timestamp) &&
+    isValidTimestamp(value.timestamp) &&
     (value.source === "speech" ||
       value.source === "simulated" ||
       value.source === "manual") &&
@@ -108,7 +107,7 @@ function isReviewVersion(value: unknown): boolean {
   return (
     isRecord(value) &&
     isNonEmptyString(value.id) &&
-    isFiniteNumber(value.timestamp) &&
+    isValidTimestamp(value.timestamp) &&
     typeof value.markdown === "string" &&
     typeof value.summary === "string" &&
     (value.source === "pi" ||
@@ -121,6 +120,14 @@ function isReviewVersion(value: unknown): boolean {
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
+}
+
+function isValidTimestamp(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    !Number.isNaN(new Date(value).getTime())
+  );
 }
 
 function isConfidence(value: unknown): value is number {
