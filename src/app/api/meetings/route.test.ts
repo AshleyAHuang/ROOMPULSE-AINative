@@ -721,7 +721,15 @@ describe("/api/meetings", () => {
       jsonRequest({
         meeting: {
           ...validMeeting,
-          expectedParticipants: 10_000
+          expectedParticipants: 10_000,
+          agenda: Array.from({ length: 31 }, (_, index) => ({
+            id: `a${index}`,
+            title: `Item ${index}`,
+            done: false
+          })),
+          participants: Array.from({ length: 25 }, (_, index) => ({
+            name: `Person ${index}`
+          }))
         }
       })
     );

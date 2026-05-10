@@ -17,6 +17,9 @@ speaker = [
   "speechbrain>=1.0.0",
   "webrtcvad>=2.0.10",
 ]
+speaker-nemo = [
+  "nemo_toolkit[asr]>=2.0.0",
+]
 
 [tool.uv]
 package = false

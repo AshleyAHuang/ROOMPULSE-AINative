@@ -24,8 +24,8 @@ on stable speaker examples as well as the live centroid instead of letting one
 mixed or noisy segment drag every future voice into `Speaker 1`.
 
 For better voice categorization, install the optional speaker stack and use a
-neural speaker encoder from the pyannote.audio, SpeechBrain, or Resemblyzer
-projects:
+neural speaker encoder from the pyannote.audio, SpeechBrain, Resemblyzer, or
+NVIDIA NeMo/TitaNet projects:
 
 ```bash
 uv sync --extra speaker
@@ -35,16 +35,21 @@ ROOMPULSE_SPEAKER_EMBEDDING_BACKEND=pyannote \
 
 ROOMPULSE_SPEAKER_EMBEDDING_BACKEND=speechbrain \
   uv run uvicorn server:app --host 127.0.0.1 --port 8765
+
+uv sync --extra speaker-nemo
+ROOMPULSE_SPEAKER_EMBEDDING_BACKEND=nemo \
+  uv run uvicorn server:app --host 127.0.0.1 --port 8765
 ```
 
 `ROOMPULSE_SPEAKER_EMBEDDING_BACKEND=auto` attempts pyannote first when a
 Hugging Face token is configured, then SpeechBrain, then Resemblyzer, then the
-built-in DSP embedder. Explicit neural selections accept common aliases such as
-`pyannote-embedding` and `speechbrain-ecapa`, and fall back to DSP per segment
-if the selected neural encoder cannot produce a valid embedding. Explicit
-neural backends circuit-break to DSP after repeated failures so a missing gated
-model or broken local Torch install does not stall every transcript window. Use
-`dsp` for the fastest dependency-free local path.
+built-in DSP embedder. Set `ROOMPULSE_NEMO_AUTO=1` to also try NeMo during
+automatic resolution. Explicit neural selections accept common aliases such as
+`pyannote-embedding`, `speechbrain-ecapa`, and `titanet`, and fall back to DSP
+per segment if the selected neural encoder cannot produce a valid embedding.
+Explicit neural backends circuit-break to DSP after repeated failures so a
+missing gated model or broken local Torch install does not stall every transcript
+window. Use `dsp` for the fastest dependency-free local path.
 
 Repeated one-phrase Whisper hallucinations such as room-hum "I'm sorry" loops
 are filtered after transcription before they reach the live transcript.
@@ -72,6 +77,7 @@ Useful environment variables:
   creating a throwaway speaker or corrupting a centroid.
 - `ROOMPULSE_SPEAKER_MAX_CLUSTERS`: default `12`; caps live `Speaker N`
   creation so noise or backend churn cannot create unbounded speaker labels.
+  Values are hard-capped at `24`.
 - `ROOMPULSE_SPEAKER_BACKEND_FAILURE_LIMIT`: default `1`; number of failed
   explicit neural speaker-encoder calls before the session uses DSP directly.
 - `ROOMPULSE_WEBRTC_VAD`: default `1`; set `0` to disable optional WebRTC voice
@@ -84,6 +90,9 @@ Useful environment variables:
 - `ROOMPULSE_SPEECHBRAIN_MODEL`: default `speechbrain/spkrec-ecapa-voxceleb`
 - `ROOMPULSE_SPEECHBRAIN_DEVICE`: optional Torch device override
 - `ROOMPULSE_SPEECHBRAIN_SAVEDIR`: optional local SpeechBrain model cache
+- `ROOMPULSE_NEMO_MODEL`: default `nvidia/speakerverification_en_titanet_large`
+- `ROOMPULSE_NEMO_DEVICE`: optional Torch device override
+- `ROOMPULSE_NEMO_AUTO`: default `0`; set `1` to let auto mode try NeMo
 
 Health check:
 

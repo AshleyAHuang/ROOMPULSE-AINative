@@ -10,7 +10,9 @@ import {
 } from "react";
 import MarkdownDocument from "./MarkdownDocument";
 import {
+  MAX_AGENDA_ITEMS,
   MAX_EXPECTED_PARTICIPANTS,
+  MAX_PARTICIPANT_ENTRIES,
   createHeartbeatInput,
   createInitialReviewMarkdown,
   getAgendaProgress,
@@ -212,6 +214,7 @@ export default function RoomPulseApp() {
   const endingSessionRef = useRef(false);
   const meetingStartAttemptRef = useRef(0);
   const agendaItemSequenceRef = useRef(0);
+  const agendaCountRef = useRef(defaultMeeting.agenda.length);
   const reviewRestoreSequenceRef = useRef(0);
   const reviewLastUpdatedAtRef = useRef(Date.now());
 
@@ -302,6 +305,10 @@ export default function RoomPulseApp() {
       transcript
     ]
   );
+
+  useEffect(() => {
+    agendaCountRef.current = meeting.agenda.length;
+  }, [meeting.agenda.length]);
 
   useEffect(() => {
     if (
@@ -1406,17 +1413,28 @@ export default function RoomPulseApp() {
   function addAgendaItem(title: string, reason: string) {
     const trimmed = title.trim();
     if (!trimmed) return;
+    if (agendaCountRef.current >= MAX_AGENDA_ITEMS) {
+      setLogStatus(`Agenda limit reached (${MAX_AGENDA_ITEMS} items).`);
+      return;
+    }
     agendaItemSequenceRef.current += 1;
+    agendaCountRef.current += 1;
 
     const item: AgendaItem = {
       id: `agenda-${Date.now()}-${agendaItemSequenceRef.current}`,
       title: trimmed,
       done: false
     };
-    setMeeting((current) => ({
-      ...current,
-      agenda: [...current.agenda, item]
-    }));
+    setMeeting((current) => {
+      if (current.agenda.length >= MAX_AGENDA_ITEMS) {
+        agendaCountRef.current = current.agenda.length;
+        return current;
+      }
+      return {
+        ...current,
+        agenda: [...current.agenda, item]
+      };
+    });
     setActiveAgendaItemId((current) => current ?? item.id);
     logMeetingEvent("agenda_item_added", { item, reason });
   }
@@ -1426,6 +1444,7 @@ export default function RoomPulseApp() {
       const deleted = current.agenda.find((item) => item.id === id);
       if (!deleted) return current;
       const agenda = current.agenda.filter((item) => item.id !== id);
+      agendaCountRef.current = agenda.length;
       logMeetingEvent("agenda_item_deleted", { item: deleted, reason });
       return { ...current, agenda };
     });
@@ -2999,7 +3018,8 @@ function parseAgenda(value: string): AgendaItem[] {
   const items = value
     .split("\n")
     .map((line) => line.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .slice(0, MAX_AGENDA_ITEMS);
 
   return (items.length > 0 ? items : ["Open discussion"]).map((title, index) => ({
     id: `agenda-${index + 1}`,
@@ -3013,6 +3033,7 @@ function parseParticipants(value: string) {
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
+    .slice(0, MAX_PARTICIPANT_ENTRIES)
     .map((line) => {
       const [name, role] = line.split(/\s+-\s+/, 2);
       return {

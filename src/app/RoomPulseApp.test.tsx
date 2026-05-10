@@ -184,6 +184,79 @@ describe("RoomPulseApp", () => {
     expect(screen.getByText(/1 of 3 heard/i)).toBeVisible();
   });
 
+  it("caps pasted setup agenda and participant lists before initialization", async () => {
+    let initialReviewBody: Record<string, unknown> | null = null;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url === "/api/meetings" && method === "GET") {
+        return Response.json({ meetings: [] });
+      }
+      if (url.includes("/api/review-document/init")) {
+        initialReviewBody = JSON.parse(String(init?.body ?? "{}"));
+        return Response.json({
+          source: "pi",
+          markdown: "# Capped setup",
+          summary: "Initialized."
+        });
+      }
+      if (url === "/api/meetings" && method === "POST") {
+        return Response.json(
+          {
+            id: "capped-session",
+            title: "Capped setup",
+            goal: "Keep setup bounded.",
+            startedAt: Date.now(),
+            updatedAt: Date.now(),
+            endedAt: null,
+            status: "active",
+            isPaused: false,
+            eventCount: 0,
+            meeting: {},
+            state: null,
+            latestReviewMarkdown: "",
+            latestReviewVersionId: null
+          },
+          { status: 201 }
+        );
+      }
+      if (url.includes("/events")) {
+        return Response.json({ id: "event-1" }, { status: 201 });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    fireEvent.change(screen.getByLabelText(/agenda/i), {
+      target: {
+        value: Array.from({ length: 40 }, (_, index) => `Item ${index}`).join("\n")
+      }
+    });
+    fireEvent.change(screen.getByLabelText(/optional names and roles/i), {
+      target: {
+        value: Array.from(
+          { length: 30 },
+          (_, index) => `Person ${index} - Role`
+        ).join("\n")
+      }
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+
+    await waitFor(() => {
+      const meeting = initialReviewBody?.meeting as {
+        agenda: unknown[];
+        participants: unknown[];
+      };
+      expect(meeting.agenda).toHaveLength(30);
+      expect(meeting.participants).toHaveLength(24);
+    });
+  });
+
   it("records browser fallback heartbeat pulses as review document versions", async () => {
     const fetchMock = vi.fn().mockRejectedValue(new Error("network down"));
     vi.stubGlobal("fetch", fetchMock);

@@ -4,7 +4,9 @@ import {
   listMeetingLogs
 } from "@/lib/meeting-log-store";
 import {
+  MAX_AGENDA_ITEMS,
   MAX_EXPECTED_PARTICIPANTS,
+  MAX_PARTICIPANT_ENTRIES,
   type MeetingConfig
 } from "@/lib/facilitator";
 
@@ -60,9 +62,11 @@ function isMeeting(value: unknown): value is MeetingConfig {
     isNonEmptyString(value.goal) &&
     typeof value.context === "string" &&
     Array.isArray(value.agenda) &&
+    value.agenda.length <= MAX_AGENDA_ITEMS &&
     value.agenda.every(isAgendaItem) &&
     isIntegerInRange(value.expectedParticipants, 1, MAX_EXPECTED_PARTICIPANTS) &&
     Array.isArray(value.participants) &&
+    value.participants.length <= MAX_PARTICIPANT_ENTRIES &&
     value.participants.every(isParticipant) &&
     isIntegerAtLeast(value.heartbeatIntervalSeconds, 15)
   );

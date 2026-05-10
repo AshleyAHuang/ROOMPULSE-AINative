@@ -38,10 +38,12 @@ DEFAULT_NEURAL_SPEAKER_DISTANCE_THRESHOLDS = {
     "pyannote-embedding": 0.32,
     "speechbrain-ecapa": 0.28,
     "resemblyzer": 0.30,
+    "nemo-titanet": 0.30,
 }
 DEFAULT_NEURAL_SPEAKER_DISTANCE_THRESHOLD = 0.30
 DEFAULT_SPEAKER_MIN_QUALITY = 0.18
 DEFAULT_SPEAKER_MAX_CLUSTERS = 12
+DEFAULT_SPEAKER_HARD_CLUSTER_LIMIT = 24
 DEFAULT_SPEAKER_BACKEND_FAILURE_LIMIT = 1
 DEFAULT_SPEAKER_EMBEDDING_BACKEND = "auto"
 DEFAULT_CLUSTER_EXEMPLAR_LIMIT = 6
@@ -51,6 +53,7 @@ DEFAULT_NO_SPEECH_THRESHOLD = 0.55
 DEFAULT_VAD_MODE = 2
 SPEECHBRAIN_MODEL = "speechbrain/spkrec-ecapa-voxceleb"
 PYANNOTE_MODEL = "pyannote/embedding"
+NEMO_MODEL = "nvidia/speakerverification_en_titanet_large"
 REPEATED_NOISE_PHRASES = {
     "i am sorry",
     "i'm sorry",
@@ -235,7 +238,11 @@ class SpeechBrainVoiceEmbedder:
             with torch.no_grad():
                 embedding = classifier.encode_batch(signal)
             vector = embedding_to_numpy(embedding)
-        return VoiceEmbedding(self.name, normalize_vector(vector), voice_embedding_quality(audio))
+        return VoiceEmbedding(
+            self.name,
+            normalize_vector(vector),
+            voice_embedding_quality(audio),
+        )
 
     def _load(self):
         if self._classifier is not None and self._torch is not None:
@@ -348,6 +355,47 @@ class ResemblyzerVoiceEmbedder:
         return self._encoder, self._preprocess_wav
 
 
+class NemoVoiceEmbedder:
+    name = "nemo-titanet"
+
+    def __init__(self) -> None:
+        self._model = None
+        self._torch = None
+        self._lock = threading.Lock()
+
+    def embed(self, audio: np.ndarray) -> VoiceEmbedding:
+        with self._lock:
+            model, torch = self._load()
+            path = write_temp_wav(audio)
+            try:
+                with torch.no_grad():
+                    embedding = model.get_embedding(path)
+            finally:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+            vector = embedding_to_numpy(embedding)
+        return VoiceEmbedding(self.name, normalize_vector(vector), voice_embedding_quality(audio))
+
+    def _load(self):
+        if self._model is not None and self._torch is not None:
+            return self._model, self._torch
+
+        from nemo.collections.asr.models import EncDecSpeakerLabelModel
+        import torch
+
+        model_name = os.getenv("ROOMPULSE_NEMO_MODEL", NEMO_MODEL)
+        self._model = EncDecSpeakerLabelModel.from_pretrained(model_name)
+        device = os.getenv("ROOMPULSE_NEMO_DEVICE")
+        if device and hasattr(self._model, "to"):
+            self._model = self._model.to(torch.device(device))
+        if hasattr(self._model, "eval"):
+            self._model.eval()
+        self._torch = torch
+        return self._model, self._torch
+
+
 class FallbackVoiceEmbedder:
     def __init__(
         self,
@@ -394,7 +442,10 @@ class AutoVoiceEmbedder:
                 candidates: list[VoiceEmbedder] = []
                 if has_pyannote_token():
                     candidates.append(PyannoteVoiceEmbedder())
-                candidates.extend([SpeechBrainVoiceEmbedder(), ResemblyzerVoiceEmbedder()])
+                candidates.append(SpeechBrainVoiceEmbedder())
+                if os.getenv("ROOMPULSE_NEMO_AUTO", "0") == "1":
+                    candidates.append(NemoVoiceEmbedder())
+                candidates.append(ResemblyzerVoiceEmbedder())
                 for candidate in candidates:
                     try:
                         embedding = sanitize_voice_embedding(candidate.embed(audio))
@@ -439,6 +490,8 @@ def get_voice_embedder() -> VoiceEmbedder:
             voice_embedder = FallbackVoiceEmbedder(SpeechBrainVoiceEmbedder())
         elif backend == "resemblyzer":
             voice_embedder = FallbackVoiceEmbedder(ResemblyzerVoiceEmbedder())
+        elif backend == "nemo":
+            voice_embedder = FallbackVoiceEmbedder(NemoVoiceEmbedder())
         elif backend == "dsp":
             voice_embedder = DspVoiceEmbedder()
         else:
@@ -467,6 +520,9 @@ def normalize_speaker_backend(raw: str | None) -> str:
         "ecapa-tdnn": "speechbrain",
         "voiceencoder": "resemblyzer",
         "voice-encoder": "resemblyzer",
+        "nemo-titanet": "nemo",
+        "titanet": "nemo",
+        "nvidia-titanet": "nemo",
         "local": "dsp",
         "features": "dsp",
     }
@@ -490,7 +546,10 @@ class SpeakerClusterer:
     ) -> None:
         self.threshold = threshold
         self.embedder = embedder or get_voice_embedder()
-        self.max_clusters = max(1, max_clusters or speaker_max_clusters())
+        self.max_clusters = parse_speaker_cluster_cap(
+            max_clusters,
+            speaker_max_clusters(),
+        )
         self.clusters: list[SpeakerCluster] = []
 
     async def assign(self, audio: np.ndarray) -> SpeakerCluster:
@@ -619,7 +678,7 @@ class TranscriptionSession:
         if message.get("type") == "reset":
             async with self.buffer_lock:
                 self.buffer.clear()
-            max_clusters = parse_positive_int_value(
+            max_clusters = parse_speaker_cluster_cap(
                 message.get("maxSpeakerClusters"),
                 speaker_max_clusters(),
             )
@@ -627,7 +686,7 @@ class TranscriptionSession:
             self.sequence = 0
             await self.send_status("reset", "Transcription session reset")
         elif message.get("type") == "configure":
-            self.clusterer.max_clusters = parse_positive_int_value(
+            self.clusterer.max_clusters = parse_speaker_cluster_cap(
                 message.get("maxSpeakerClusters"),
                 self.clusterer.max_clusters,
             )
@@ -1101,9 +1160,19 @@ def speaker_min_quality() -> float:
 
 
 def speaker_max_clusters() -> int:
-    return parse_positive_int(
-        os.getenv("ROOMPULSE_SPEAKER_MAX_CLUSTERS"),
-        DEFAULT_SPEAKER_MAX_CLUSTERS,
+    return min(
+        parse_positive_int(
+            os.getenv("ROOMPULSE_SPEAKER_MAX_CLUSTERS"),
+            DEFAULT_SPEAKER_MAX_CLUSTERS,
+        ),
+        DEFAULT_SPEAKER_HARD_CLUSTER_LIMIT,
+    )
+
+
+def parse_speaker_cluster_cap(raw: object, default: int) -> int:
+    return min(
+        parse_positive_int_value(raw, default),
+        DEFAULT_SPEAKER_HARD_CLUSTER_LIMIT,
     )
 
 
@@ -1212,16 +1281,26 @@ def zero_crossing_rate(audio: np.ndarray) -> float:
 
 
 def estimate_pitch(audio: np.ndarray) -> float:
-    clipped = audio[: min(audio.size, SAMPLE_RATE)]
+    clipped = audio[: min(audio.size, int(SAMPLE_RATE * 0.75))]
     if clipped.size < 512:
         return 0.0
     clipped = clipped - float(np.mean(clipped))
-    corr = np.correlate(clipped, clipped, mode="full")[clipped.size - 1 :]
     min_lag = int(SAMPLE_RATE / 320)
     max_lag = int(SAMPLE_RATE / 70)
-    if corr.size <= max_lag:
+    if clipped.size <= max_lag:
         return 0.0
-    lag = int(np.argmax(corr[min_lag:max_lag]) + min_lag)
+
+    windowed = clipped * np.hanning(clipped.size)
+    fft_size = 1 << (windowed.size * 2 - 1).bit_length()
+    spectrum = np.fft.rfft(windowed, n=fft_size)
+    corr = np.fft.irfft(spectrum * np.conj(spectrum), n=fft_size)[: windowed.size]
+    if corr.size <= max_lag or not math.isfinite(float(corr[0])) or corr[0] <= 0:
+        return 0.0
+
+    lag_window = corr[min_lag:max_lag]
+    if lag_window.size == 0:
+        return 0.0
+    lag = int(np.argmax(lag_window) + min_lag)
     if lag <= 0 or math.isclose(float(corr[lag]), 0.0):
         return 0.0
     return float(SAMPLE_RATE / lag)

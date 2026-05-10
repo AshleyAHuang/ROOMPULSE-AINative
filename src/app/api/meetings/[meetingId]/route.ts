@@ -5,7 +5,11 @@ import {
   type MeetingStatus,
   type PersistedMeetingState
 } from "@/lib/meeting-log-store";
-import { MAX_EXPECTED_PARTICIPANTS } from "@/lib/facilitator";
+import {
+  MAX_AGENDA_ITEMS,
+  MAX_EXPECTED_PARTICIPANTS,
+  MAX_PARTICIPANT_ENTRIES
+} from "@/lib/facilitator";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -144,9 +148,11 @@ function isMeeting(value: unknown): boolean {
     isNonEmptyString(value.goal) &&
     typeof value.context === "string" &&
     Array.isArray(value.agenda) &&
+    value.agenda.length <= MAX_AGENDA_ITEMS &&
     value.agenda.every(isAgendaItem) &&
     isIntegerInRange(value.expectedParticipants, 1, MAX_EXPECTED_PARTICIPANTS) &&
     Array.isArray(value.participants) &&
+    value.participants.length <= MAX_PARTICIPANT_ENTRIES &&
     value.participants.every(isParticipant) &&
     isIntegerAtLeast(value.heartbeatIntervalSeconds, 15)
   );

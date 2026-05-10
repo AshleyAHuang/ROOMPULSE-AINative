@@ -2,7 +2,9 @@ import { createParticipationStatus, type ParticipationStatus } from "./speaker-t
 
 export type TranscriptSource = "speech" | "simulated" | "manual";
 
+export const MAX_AGENDA_ITEMS = 30;
 export const MAX_EXPECTED_PARTICIPANTS = 24;
+export const MAX_PARTICIPANT_ENTRIES = MAX_EXPECTED_PARTICIPANTS;
 
 export interface MeetingParticipant {
   name: string;

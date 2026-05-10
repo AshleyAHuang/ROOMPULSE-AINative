@@ -11,9 +11,11 @@ from server import (
     DEFAULT_BEAM_SIZE,
     DEFAULT_BEST_OF,
     DEFAULT_NO_SPEECH_THRESHOLD,
+    DEFAULT_SPEAKER_HARD_CLUSTER_LIMIT,
     SAMPLE_RATE,
     DspVoiceEmbedder,
     FallbackVoiceEmbedder,
+    NemoVoiceEmbedder,
     PyannoteVoiceEmbedder,
     SpeakerClusterer,
     TranscriptionSession,
@@ -22,6 +24,7 @@ from server import (
     clean_transcript_text,
     cluster_voice_distance,
     embedding_to_numpy,
+    estimate_pitch,
     frame_rms,
     get_voice_embedder,
     pre_emphasis_filter,
@@ -237,6 +240,19 @@ class SpeakerClustererTest(unittest.TestCase):
         self.assertIsInstance(embedder, FallbackVoiceEmbedder)
         self.assertEqual(embedder.primary.name, "speechbrain-ecapa")
 
+    def test_explicit_nemo_backend_can_be_selected_without_loading_model(self) -> None:
+        previous_backend = os.environ.get("ROOMPULSE_SPEAKER_EMBEDDING_BACKEND")
+        server.voice_embedder = None
+        os.environ["ROOMPULSE_SPEAKER_EMBEDDING_BACKEND"] = "titanet"
+        try:
+            embedder = get_voice_embedder()
+        finally:
+            server.voice_embedder = None
+            restore_env("ROOMPULSE_SPEAKER_EMBEDDING_BACKEND", previous_backend)
+
+        self.assertIsInstance(embedder, FallbackVoiceEmbedder)
+        self.assertIsInstance(embedder.primary, NemoVoiceEmbedder)
+
     def test_fallback_voice_embedder_keeps_clustering_when_neural_backend_fails(self) -> None:
         embedder = FallbackVoiceEmbedder(FailingVoiceEmbedder(), DspVoiceEmbedder())
         clusterer = SpeakerClusterer(
@@ -365,6 +381,27 @@ class SpeakerClustererTest(unittest.TestCase):
         finally:
             restore_env("ROOMPULSE_SPEAKER_MAX_CLUSTERS", previous_max)
 
+    def test_speaker_cluster_cap_is_hard_limited(self) -> None:
+        previous_max = os.environ.get("ROOMPULSE_SPEAKER_MAX_CLUSTERS")
+        os.environ["ROOMPULSE_SPEAKER_MAX_CLUSTERS"] = "10000"
+        try:
+            self.assertEqual(
+                server.speaker_max_clusters(),
+                DEFAULT_SPEAKER_HARD_CLUSTER_LIMIT,
+            )
+            self.assertEqual(
+                server.parse_speaker_cluster_cap(10000, 12),
+                DEFAULT_SPEAKER_HARD_CLUSTER_LIMIT,
+            )
+        finally:
+            restore_env("ROOMPULSE_SPEAKER_MAX_CLUSTERS", previous_max)
+
+    def test_fft_pitch_estimator_tracks_synthetic_voice(self) -> None:
+        pitch = estimate_pitch(synthetic_voice(155, seconds=1.0))
+
+        self.assertGreater(pitch, 145)
+        self.assertLess(pitch, 165)
+
     def test_embedding_to_numpy_accepts_pyannote_like_data_containers(self) -> None:
         vector = embedding_to_numpy(FakePyannoteEmbedding([[0.1, 0.2, 0.3]]))
 
@@ -400,13 +437,13 @@ class SpeakerClustererTest(unittest.TestCase):
             websocket = FakeWebSocket()
             session = TranscriptionSession(websocket)
             await session.handle_control(
-                '{"type":"reset","maxSpeakerClusters":3}'
+                '{"type":"reset","maxSpeakerClusters":10000}'
             )
             return session.clusterer.max_clusters, websocket.messages
 
         max_clusters, messages = asyncio.run(run())
 
-        self.assertEqual(max_clusters, 3)
+        self.assertEqual(max_clusters, DEFAULT_SPEAKER_HARD_CLUSTER_LIMIT)
         self.assertEqual(messages[-1]["status"], "reset")
 
     def test_configure_control_updates_existing_session_speaker_cap(self) -> None:
