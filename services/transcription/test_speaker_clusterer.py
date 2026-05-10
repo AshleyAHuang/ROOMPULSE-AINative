@@ -691,6 +691,60 @@ class SpeakerClustererTest(unittest.TestCase):
             ["Speaker 1", "Speaker 1"],
         )
 
+    def test_reset_waits_for_in_flight_flush_before_resetting_session(self) -> None:
+        async def run() -> list[dict]:
+            websocket = FakeWebSocket()
+            session = TranscriptionSession(websocket)
+            session.min_seconds = 0.1
+            session.max_seconds = 2.0
+            await session.append_audio(float32_to_pcm16(synthetic_voice(150, seconds=0.5)))
+
+            previous_model = server.ensure_model_loaded
+            previous_transcribe = server.transcribe_audio
+            transcribe_started = asyncio.Event()
+            release_transcribe = asyncio.Event()
+
+            async def fake_model():
+                return object()
+
+            async def fake_transcribe(_model, _audio, _language):
+                transcribe_started.set()
+                await release_transcribe.wait()
+                return "old audio before reset"
+
+            server.ensure_model_loaded = fake_model
+            server.transcribe_audio = fake_transcribe
+            try:
+                flush_task = asyncio.create_task(session.flush(force=True))
+                await transcribe_started.wait()
+                reset_task = asyncio.create_task(
+                    session.handle_control('{"type":"reset","maxSpeakerClusters":3}')
+                )
+                await asyncio.sleep(0)
+                self.assertFalse(reset_task.done())
+                release_transcribe.set()
+                await asyncio.gather(flush_task, reset_task)
+            finally:
+                server.ensure_model_loaded = previous_model
+                server.transcribe_audio = previous_transcribe
+
+            return websocket.messages
+
+        messages = asyncio.run(run())
+        reset_index = next(
+            index
+            for index, message in enumerate(messages)
+            if message.get("status") == "reset"
+        )
+        transcript_index = next(
+            index
+            for index, message in enumerate(messages)
+            if message.get("type") == "final_transcript"
+        )
+
+        self.assertLess(transcript_index, reset_index)
+        self.assertEqual(messages[reset_index]["observedSpeakerLabels"], [])
+
 
 class FixedEmbeddingVoiceEmbedder:
     name = "test-neural"

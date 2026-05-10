@@ -741,20 +741,22 @@ class TranscriptionSession:
             return
 
         if message.get("type") == "reset":
-            async with self.buffer_lock:
-                self.buffer.clear()
-            max_clusters = parse_speaker_cluster_cap(
-                message.get("maxSpeakerClusters"),
-                speaker_max_clusters(),
-            )
-            self.clusterer = SpeakerClusterer(max_clusters=max_clusters)
-            self.sequence = 0
+            async with self.flush_lock:
+                async with self.buffer_lock:
+                    self.buffer.clear()
+                max_clusters = parse_speaker_cluster_cap(
+                    message.get("maxSpeakerClusters"),
+                    speaker_max_clusters(),
+                )
+                self.clusterer = SpeakerClusterer(max_clusters=max_clusters)
+                self.sequence = 0
             await self.send_status("reset", "Transcription session reset")
         elif message.get("type") == "configure":
-            self.clusterer.max_clusters = parse_speaker_cluster_cap(
-                message.get("maxSpeakerClusters"),
-                self.clusterer.max_clusters,
-            )
+            async with self.flush_lock:
+                self.clusterer.max_clusters = parse_speaker_cluster_cap(
+                    message.get("maxSpeakerClusters"),
+                    self.clusterer.max_clusters,
+                )
             await self.send_status("configured", "Transcription session configured")
         elif message.get("type") == "flush":
             await self.flush(force=True)
