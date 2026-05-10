@@ -1679,7 +1679,8 @@ export default function RoomPulseApp() {
       }
       setIsMicRunning(true);
     } catch (error) {
-      micStopRequestedRef.current = true;
+      const shouldRetry = isRetryableMicStartError(error);
+      micStopRequestedRef.current = !shouldRetry;
       if (transcriptionClientRef.current === client) {
         void cleanupMicResources();
       } else {
@@ -1688,6 +1689,9 @@ export default function RoomPulseApp() {
       if (micStartTokenRef.current === startToken) {
         setIsMicRunning(false);
         setMicStatus(error instanceof Error ? error.message : String(error));
+        if (shouldRetry) {
+          scheduleMicReconnect(expectedParticipants);
+        }
       }
     }
   }
@@ -3966,6 +3970,16 @@ function getClientPiTimeoutMs(): number {
   }
 
   return DEFAULT_CLIENT_PI_TIMEOUT_MS;
+}
+
+function isRetryableMicStartError(error: unknown): boolean {
+  const message = (error instanceof Error ? error.message : String(error))
+    .toLowerCase();
+  return (
+    message.includes("could not connect to") ||
+    message.includes("websocket") ||
+    message.includes("local transcription")
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -390,6 +390,40 @@ describe("RoomPulseApp mic lifecycle", () => {
     );
   });
 
+  it("retries mic capture when the initial transcription socket connection fails", async () => {
+    startHandlers.push(
+      () => Promise.reject(new Error("Could not connect to ws://127.0.0.1:8765/ws")),
+      () => {
+        clients[1].options.onStatus({
+          status: "streaming",
+          message: "Microphone active; streaming audio to local transcription"
+        });
+        return Promise.resolve();
+      }
+    );
+
+    render(<RoomPulseApp />);
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: /new meeting/i })[0]);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    expect(
+      await screen.findByRole("button", { name: /run heartbeat now/i })
+    ).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(clients).toHaveLength(2);
+    });
+    expect(clients[0].stop).toHaveBeenCalledOnce();
+    expect(clients[1].start).toHaveBeenCalledOnce();
+    expect(screen.getByText(/browser mic:/i)).toHaveTextContent(
+      /microphone active; streaming audio to local transcription/i
+    );
+  });
+
   it("restarts mic capture when browser audio devices change", async () => {
     const listeners = new Map<string, EventListener>();
     const addEventListener = vi.fn((type: string, listener: EventListener) => {
