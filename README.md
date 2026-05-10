@@ -198,6 +198,20 @@ split voices more aggressively; higher values merge more aggressively:
 ROOMPULSE_SPEAKER_DISTANCE_THRESHOLD=0.14 npm run transcription
 ```
 
+For stronger local voice categorization, the transcription service supports
+optional neural speaker embeddings. Install the optional Python speaker stack
+and select SpeechBrain's ECAPA speaker encoder:
+
+```bash
+cd services/transcription
+uv sync --extra speaker
+ROOMPULSE_SPEAKER_EMBEDDING_BACKEND=speechbrain uv run uvicorn server:app --host 127.0.0.1 --port 8765
+```
+
+`ROOMPULSE_SPEAKER_EMBEDDING_BACKEND=auto` tries SpeechBrain, then Resemblyzer,
+then the built-in DSP embedder. The neural path gives better recurring-voice
+separation, while the DSP path is fastest and dependency-free.
+
 The service also applies local background-noise cleanup before transcription:
 high-pass filtering, low-energy noise suppression, silence trimming, Whisper VAD,
 and RMS normalization. You can trade speed for accuracy with
@@ -207,12 +221,13 @@ and RMS normalization. You can trade speed for accuracy with
 ## Speaker Recognition Limitations
 
 The MVP diarization is approximate and not biometric identity. The local service
-uses speech-window audio features, log-frequency-band energy, RMS,
+can use SpeechBrain ECAPA or Resemblyzer speaker embeddings when installed, and
+otherwise uses speech-window audio features, log-frequency-band energy, RMS,
 zero-crossing rate, spectral shape, and pitch estimate to cluster recurring
 voice patterns into `Speaker 1`, `Speaker 2`, etc. Room noise, overlapping
 speech, microphone placement, and similar voices can produce incorrect labels.
-It does not identify named people unless a later calibration flow maps a
-cluster to a participant name.
+It does not identify named people unless a later calibration flow maps a cluster
+to a participant name.
 
 Participation reminders intentionally compare only expected participant count against observed speaker clusters. RoomPulse does not claim to know that a specific named person has spoken.
 

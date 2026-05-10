@@ -20,8 +20,10 @@ describe("RoomPulseApp", () => {
     });
   });
 
-  function openSetupScreen() {
-    fireEvent.click(screen.getAllByRole("button", { name: /new meeting/i })[0]);
+  async function openSetupScreen() {
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: /new meeting/i })[0]);
+    });
     expect(
       screen.getByRole("heading", { name: /roompulse setup/i })
     ).toBeInTheDocument();
@@ -92,7 +94,11 @@ describe("RoomPulseApp", () => {
     ).toBeInTheDocument();
     expect(await screen.findByText(/past launch review/i)).toBeVisible();
 
-    fireEvent.click(screen.getAllByRole("button", { name: /past launch review/i })[0]);
+    await act(async () => {
+      fireEvent.click(
+        screen.getAllByRole("button", { name: /past launch review/i })[0]
+      );
+    });
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith("/api/meetings/past-1");
     });
@@ -110,7 +116,9 @@ describe("RoomPulseApp", () => {
     fireEvent.change(screen.getByLabelText(/expected participants/i), {
       target: { value: "3" }
     });
-    fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
 
     expect(
       await screen.findByRole("button", { name: /run heartbeat/i })
@@ -120,11 +128,15 @@ describe("RoomPulseApp", () => {
     expect(screen.getByText(/live review document/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^mic$/i })).toHaveClass("active");
 
-    fireEvent.click(screen.getByRole("button", { name: /^demo$/i }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^demo$/i }));
+    });
     fireEvent.change(screen.getByLabelText(/demo line/i), {
       target: { value: "We have not made a decision yet." }
     });
-    fireEvent.click(screen.getByRole("button", { name: /add line/i }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /add line/i }));
+    });
 
     expect(screen.getByText(/we have not made a decision yet/i)).toBeVisible();
     expect(screen.getByText(/1 of 3 heard/i)).toBeVisible();
@@ -137,10 +149,12 @@ describe("RoomPulseApp", () => {
     render(<RoomPulseApp />);
 
     await openSetupScreen();
-    fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
-    fireEvent.click(
-      await screen.findByRole("button", { name: /run heartbeat/i })
-    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /run heartbeat/i }));
+    });
 
     expect(await screen.findByText(/network down/i)).toBeVisible();
     expect((await screen.findAllByText(/heartbeat check/i)).length).toBeGreaterThan(0);
@@ -187,7 +201,9 @@ describe("RoomPulseApp", () => {
     render(<RoomPulseApp />);
 
     await openSetupScreen();
-    fireEvent.click(screen.getByRole("button", { name: /launch live demo/i }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /launch live demo/i }));
+    });
 
     expect(
       await screen.findByRole("button", { name: /run heartbeat/i })
@@ -240,7 +256,9 @@ describe("RoomPulseApp", () => {
     render(<RoomPulseApp />);
 
     await openSetupScreen();
-    fireEvent.click(screen.getByRole("button", { name: /launch live demo/i }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /launch live demo/i }));
+    });
 
     expect(
       await screen.findByRole("button", { name: /run heartbeat/i })
@@ -295,7 +313,7 @@ describe("RoomPulseApp", () => {
 
     render(<RoomPulseApp />);
 
-    openSetupScreen();
+    await openSetupScreen();
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /launch live demo/i }));
     });
@@ -304,7 +322,9 @@ describe("RoomPulseApp", () => {
     act(() => {
       vi.advanceTimersByTime(150);
     });
-    fireEvent.click(screen.getByRole("button", { name: /run heartbeat/i }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /run heartbeat/i }));
+    });
     expect(
       screen.getByRole("button", { name: /run heartbeat now/i })
     ).toBeDisabled();
@@ -345,7 +365,9 @@ describe("RoomPulseApp", () => {
     fireEvent.change(screen.getByLabelText(/heartbeat interval/i), {
       target: { value: "not-a-number" }
     });
-    fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
 
     expect(await screen.findByText(/0 of 1 heard/i)).toBeVisible();
     expect(screen.queryByText(/nan/i)).not.toBeInTheDocument();
@@ -355,7 +377,9 @@ describe("RoomPulseApp", () => {
     render(<RoomPulseApp />);
 
     await openSetupScreen();
-    fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
 
     expect(
       await screen.findByRole("button", { name: /run heartbeat/i })
@@ -369,7 +393,9 @@ describe("RoomPulseApp", () => {
     render(<RoomPulseApp />);
 
     await openSetupScreen();
-    fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
     expect(
       await screen.findByRole("button", { name: /run heartbeat now/i })
     ).toBeInTheDocument();
@@ -379,12 +405,18 @@ describe("RoomPulseApp", () => {
     ) as HTMLInputElement;
     expect(agendaCheckbox.checked).toBe(false);
 
-    fireEvent.click(screen.getByRole("button", { name: /^demo$/i }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^demo$/i }));
+    });
     fireEvent.change(screen.getByLabelText(/demo line/i), {
       target: { value: "That covers confirming the meeting goal." }
     });
-    fireEvent.click(screen.getByRole("button", { name: /add line/i }));
-    fireEvent.click(screen.getByRole("button", { name: /run heartbeat/i }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /add line/i }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /run heartbeat/i }));
+    });
 
     await waitFor(() => expect(agendaCheckbox.checked).toBe(true));
   });

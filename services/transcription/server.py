@@ -4,8 +4,10 @@ import asyncio
 import json
 import math
 import os
+import threading
 import time
 from dataclasses import dataclass, field
+from typing import Protocol
 
 import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -27,10 +29,13 @@ DEFAULT_MODEL = "small.en"
 DEFAULT_DEVICE = "cpu"
 DEFAULT_COMPUTE_TYPE = "int8"
 DEFAULT_LANGUAGE = "en"
-DEFAULT_SPEAKER_DISTANCE_THRESHOLD = 0.14
+DEFAULT_DSP_SPEAKER_DISTANCE_THRESHOLD = 0.14
+DEFAULT_NEURAL_SPEAKER_DISTANCE_THRESHOLD = 0.42
+DEFAULT_SPEAKER_EMBEDDING_BACKEND = "auto"
 DEFAULT_BEAM_SIZE = 5
 DEFAULT_BEST_OF = 5
 DEFAULT_NO_SPEECH_THRESHOLD = 0.55
+SPEECHBRAIN_MODEL = "speechbrain/spkrec-ecapa-voxceleb"
 
 
 app = FastAPI(title="RoomPulse Local Transcription")
@@ -59,6 +64,11 @@ async def health() -> JSONResponse:
                 "ROOMPULSE_WHISPER_COMPUTE_TYPE", DEFAULT_COMPUTE_TYPE
             ),
             "sampleRate": SAMPLE_RATE,
+            "speakerEmbeddingBackend": os.getenv(
+                "ROOMPULSE_SPEAKER_EMBEDDING_BACKEND",
+                DEFAULT_SPEAKER_EMBEDDING_BACKEND,
+            ),
+            "speakerEmbeddingActiveBackend": active_voice_embedder_name(),
             "importError": str(WHISPER_IMPORT_ERROR) if WHISPER_IMPORT_ERROR else None,
             "modelError": model_error,
         }
@@ -86,7 +96,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             if message.get("type") == "websocket.disconnect":
                 break
             if "bytes" in message and message["bytes"] is not None:
-                session.append_audio(message["bytes"])
+                await session.append_audio(message["bytes"])
             elif "text" in message and message["text"] is not None:
                 await session.handle_control(message["text"])
     except WebSocketDisconnect:
@@ -141,41 +151,201 @@ async def ensure_model_loaded() -> WhisperModel:
 class SpeakerCluster:
     id: str
     label: str
+    backend: str
     centroid: np.ndarray
     samples: int = 1
     last_seen_at: float = field(default_factory=time.time)
 
 
+@dataclass(frozen=True)
+class VoiceEmbedding:
+    backend: str
+    vector: np.ndarray
+
+
+class VoiceEmbedder(Protocol):
+    name: str
+
+    def embed(self, audio: np.ndarray) -> VoiceEmbedding:
+        ...
+
+
+class DspVoiceEmbedder:
+    name = "dsp"
+
+    def embed(self, audio: np.ndarray) -> VoiceEmbedding:
+        return VoiceEmbedding(self.name, build_dsp_voice_embedding(audio))
+
+
+class SpeechBrainVoiceEmbedder:
+    name = "speechbrain-ecapa"
+
+    def __init__(self) -> None:
+        self._classifier = None
+        self._torch = None
+        self._lock = threading.Lock()
+
+    def embed(self, audio: np.ndarray) -> VoiceEmbedding:
+        with self._lock:
+            classifier, torch = self._load()
+            signal = torch.from_numpy(audio.astype(np.float32)).unsqueeze(0)
+            with torch.no_grad():
+                embedding = classifier.encode_batch(signal)
+            vector = embedding.squeeze().detach().cpu().numpy().astype(np.float32)
+        return VoiceEmbedding(self.name, normalize_vector(vector))
+
+    def _load(self):
+        if self._classifier is not None and self._torch is not None:
+            return self._classifier, self._torch
+
+        try:
+            from speechbrain.inference.speaker import EncoderClassifier
+        except ImportError:
+            from speechbrain.pretrained import EncoderClassifier  # type: ignore
+
+        import torch
+
+        model_name = os.getenv("ROOMPULSE_SPEECHBRAIN_MODEL", SPEECHBRAIN_MODEL)
+        savedir = os.getenv(
+            "ROOMPULSE_SPEECHBRAIN_SAVEDIR",
+            os.path.join(
+                os.path.expanduser("~"),
+                ".cache",
+                "roompulse",
+                "speechbrain-ecapa",
+            ),
+        )
+        run_opts: dict[str, str] = {}
+        if os.getenv("ROOMPULSE_SPEECHBRAIN_DEVICE"):
+            run_opts["device"] = os.environ["ROOMPULSE_SPEECHBRAIN_DEVICE"]
+        self._classifier = EncoderClassifier.from_hparams(
+            source=model_name,
+            savedir=savedir,
+            run_opts=run_opts,
+        )
+        self._torch = torch
+        return self._classifier, self._torch
+
+
+class ResemblyzerVoiceEmbedder:
+    name = "resemblyzer"
+
+    def __init__(self) -> None:
+        self._encoder = None
+        self._preprocess_wav = None
+        self._lock = threading.Lock()
+
+    def embed(self, audio: np.ndarray) -> VoiceEmbedding:
+        with self._lock:
+            encoder, preprocess_wav = self._load()
+            wav = preprocess_wav(audio.astype(np.float32), source_sr=SAMPLE_RATE)
+            vector = encoder.embed_utterance(wav).astype(np.float32)
+        return VoiceEmbedding(self.name, normalize_vector(vector))
+
+    def _load(self):
+        if self._encoder is not None and self._preprocess_wav is not None:
+            return self._encoder, self._preprocess_wav
+
+        from resemblyzer import VoiceEncoder, preprocess_wav
+
+        self._encoder = VoiceEncoder()
+        self._preprocess_wav = preprocess_wav
+        return self._encoder, self._preprocess_wav
+
+
+class AutoVoiceEmbedder:
+    name = "auto"
+
+    def __init__(self) -> None:
+        self._resolved: VoiceEmbedder | None = None
+        self._lock = threading.Lock()
+
+    def embed(self, audio: np.ndarray) -> VoiceEmbedding:
+        with self._lock:
+            if self._resolved is not None:
+                embedder = self._resolved
+            else:
+                for candidate in (SpeechBrainVoiceEmbedder(), ResemblyzerVoiceEmbedder()):
+                    try:
+                        embedding = candidate.embed(audio)
+                        self._resolved = candidate
+                        return embedding
+                    except Exception:
+                        continue
+
+                self._resolved = DspVoiceEmbedder()
+                return self._resolved.embed(audio)
+
+        return embedder.embed(audio)
+
+
+voice_embedder_lock = threading.Lock()
+voice_embedder: VoiceEmbedder | None = None
+
+
+def get_voice_embedder() -> VoiceEmbedder:
+    global voice_embedder
+    if voice_embedder is not None:
+        return voice_embedder
+
+    with voice_embedder_lock:
+        if voice_embedder is not None:
+            return voice_embedder
+
+        backend = os.getenv(
+            "ROOMPULSE_SPEAKER_EMBEDDING_BACKEND",
+            DEFAULT_SPEAKER_EMBEDDING_BACKEND,
+        ).lower()
+        if backend == "speechbrain":
+            voice_embedder = SpeechBrainVoiceEmbedder()
+        elif backend == "resemblyzer":
+            voice_embedder = ResemblyzerVoiceEmbedder()
+        elif backend == "dsp":
+            voice_embedder = DspVoiceEmbedder()
+        else:
+            voice_embedder = AutoVoiceEmbedder()
+        return voice_embedder
+
+
+def active_voice_embedder_name() -> str:
+    embedder = voice_embedder
+    if isinstance(embedder, AutoVoiceEmbedder) and embedder._resolved is not None:
+        return embedder._resolved.name
+    return embedder.name if embedder is not None else "not-loaded"
+
+
 class SpeakerClusterer:
-    def __init__(self, threshold: float | None = None) -> None:
-        if threshold is None:
-            threshold = float(
-                os.getenv(
-                    "ROOMPULSE_SPEAKER_DISTANCE_THRESHOLD",
-                    str(DEFAULT_SPEAKER_DISTANCE_THRESHOLD),
-                )
-            )
+    def __init__(
+        self,
+        threshold: float | None = None,
+        embedder: VoiceEmbedder | None = None,
+    ) -> None:
         self.threshold = threshold
+        self.embedder = embedder or get_voice_embedder()
         self.clusters: list[SpeakerCluster] = []
 
-    def assign(self, audio: np.ndarray) -> SpeakerCluster:
-        embedding = build_voice_embedding(trim_silence(audio))
+    async def assign(self, audio: np.ndarray) -> SpeakerCluster:
+        embedding = await asyncio.to_thread(self.embedder.embed, trim_silence(audio))
+        threshold = self.distance_threshold(embedding.backend)
         best: tuple[float, SpeakerCluster] | None = None
         second_best_distance: float | None = None
 
         for cluster in self.clusters:
-            distance = voice_distance(cluster.centroid, embedding)
+            if cluster.backend != embedding.backend:
+                continue
+            distance = voice_distance(cluster.centroid, embedding.vector)
             if best is None or distance < best[0]:
                 second_best_distance = best[0] if best is not None else None
                 best = (distance, cluster)
             elif second_best_distance is None or distance < second_best_distance:
                 second_best_distance = distance
 
-        if best is None or best[0] > self.threshold:
+        if best is None or best[0] > threshold:
             cluster = SpeakerCluster(
                 id=f"speaker-{len(self.clusters) + 1}",
                 label=f"Speaker {len(self.clusters) + 1}",
-                centroid=embedding,
+                backend=embedding.backend,
+                centroid=embedding.vector,
             )
             self.clusters.append(cluster)
             return cluster
@@ -183,21 +353,34 @@ class SpeakerClusterer:
         cluster = best[1]
         is_ambiguous = (
             second_best_distance is not None
-            and abs(second_best_distance - best[0]) < self.threshold * 0.18
+            and abs(second_best_distance - best[0]) < threshold * 0.18
         )
         # Adapt only on confident matches. Updating centroids on borderline or
         # mixed-room audio is what makes future voices collapse into Speaker 1.
-        if best[0] < self.threshold * 0.72 and not is_ambiguous:
+        if best[0] < threshold * 0.72 and not is_ambiguous:
             update_weight = min(0.18, 1.0 / float(cluster.samples + 2))
             cluster.centroid = (
-                cluster.centroid * (1.0 - update_weight) + embedding * update_weight
+                cluster.centroid * (1.0 - update_weight)
+                + embedding.vector * update_weight
             )
+            if embedding.backend != "dsp":
+                cluster.centroid = normalize_vector(cluster.centroid)
         cluster.samples += 1
         cluster.last_seen_at = time.time()
         return cluster
 
     def labels(self) -> list[str]:
         return [cluster.label for cluster in self.clusters]
+
+    def distance_threshold(self, backend: str) -> float:
+        if self.threshold is not None:
+            return self.threshold
+        default = (
+            DEFAULT_DSP_SPEAKER_DISTANCE_THRESHOLD
+            if backend == "dsp"
+            else DEFAULT_NEURAL_SPEAKER_DISTANCE_THRESHOLD
+        )
+        return float(os.getenv("ROOMPULSE_SPEAKER_DISTANCE_THRESHOLD", str(default)))
 
 
 class TranscriptionSession:
@@ -232,8 +415,9 @@ class TranscriptionSession:
         elif message.get("type") == "flush":
             await self.flush(force=True)
 
-    def append_audio(self, chunk: bytes) -> None:
-        self.buffer.extend(chunk)
+    async def append_audio(self, chunk: bytes) -> None:
+        async with self.buffer_lock:
+            self.buffer.extend(chunk)
 
     async def process_loop(self) -> None:
         while not self.closed:
@@ -266,7 +450,7 @@ class TranscriptionSession:
             return
 
         self.sequence += 1
-        speaker = self.clusterer.assign(audio)
+        speaker = await self.clusterer.assign(audio)
         duration_ms = round((len(audio) / SAMPLE_RATE) * 1000)
         await self.websocket.send_json(
             {
@@ -379,17 +563,10 @@ def suppress_low_energy_noise(audio: np.ndarray) -> np.ndarray:
 
     frame_size = int(SAMPLE_RATE * 0.025)
     hop = int(SAMPLE_RATE * 0.01)
-    starts = list(range(0, max(1, audio.size - frame_size + 1), hop))
-    if not starts:
+    starts, rms = frame_rms(audio, frame_size, hop)
+    if starts.size == 0:
         return audio
 
-    rms = np.array(
-        [
-            float(np.sqrt(np.mean(np.square(audio[start : start + frame_size]))))
-            for start in starts
-        ],
-        dtype=np.float32,
-    )
     noise_floor = float(np.percentile(rms, 25))
     speech_peak = float(np.max(rms))
     gate = max(0.009, noise_floor * 2.4, speech_peak * 0.10)
@@ -403,7 +580,7 @@ def suppress_low_energy_noise(audio: np.ndarray) -> np.ndarray:
 
     gain = np.ones(audio.size, dtype=np.float32)
     weight = np.zeros(audio.size, dtype=np.float32)
-    for start, value in zip(starts, frame_gain):
+    for start, value in zip(starts.tolist(), frame_gain.tolist()):
         end = min(audio.size, start + frame_size)
         gain[start:end] += value
         weight[start:end] += 1.0
@@ -421,7 +598,7 @@ def normalize_audio(audio: np.ndarray) -> np.ndarray:
     return np.clip(audio * gain, -1.0, 1.0).astype(np.float32)
 
 
-def build_voice_embedding(audio: np.ndarray) -> np.ndarray:
+def build_dsp_voice_embedding(audio: np.ndarray) -> np.ndarray:
     if audio.size < 256:
         return np.zeros(20, dtype=np.float32)
 
@@ -481,18 +658,10 @@ def trim_silence(audio: np.ndarray) -> np.ndarray:
 
     frame_size = int(SAMPLE_RATE * 0.03)
     hop = int(SAMPLE_RATE * 0.01)
-    rms_values: list[float] = []
-    starts: list[int] = []
-
-    for start in range(0, max(1, audio.size - frame_size + 1), hop):
-        frame = audio[start : start + frame_size]
-        rms_values.append(float(np.sqrt(np.mean(np.square(frame)))))
-        starts.append(start)
-
-    if not rms_values:
+    starts, rms = frame_rms(audio, frame_size, hop)
+    if starts.size == 0:
         return audio
 
-    rms = np.array(rms_values, dtype=np.float32)
     threshold = max(
         0.012,
         float(np.percentile(rms, 35)) * 2.2,
@@ -503,9 +672,31 @@ def trim_silence(audio: np.ndarray) -> np.ndarray:
         return audio
 
     padding = int(SAMPLE_RATE * 0.08)
-    first = max(0, starts[int(voiced[0])] - padding)
-    last = min(audio.size, starts[int(voiced[-1])] + frame_size + padding)
+    first = max(0, int(starts[int(voiced[0])]) - padding)
+    last = min(audio.size, int(starts[int(voiced[-1])]) + frame_size + padding)
     return audio[first:last]
+
+
+def frame_rms(
+    audio: np.ndarray,
+    frame_size: int,
+    hop: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    if audio.size < frame_size or frame_size <= 0 or hop <= 0:
+        return np.array([], dtype=np.int64), np.array([], dtype=np.float32)
+
+    starts = np.arange(0, audio.size - frame_size + 1, hop, dtype=np.int64)
+    if starts.size == 0:
+        return starts, np.array([], dtype=np.float32)
+    stride = audio.strides[0]
+    frames = np.lib.stride_tricks.as_strided(
+        audio,
+        shape=(starts.size, frame_size),
+        strides=(hop * stride, stride),
+        writeable=False,
+    )
+    rms = np.sqrt(np.mean(np.square(frames, dtype=np.float32), axis=1))
+    return starts, rms.astype(np.float32)
 
 
 def zero_crossing_rate(audio: np.ndarray) -> float:
@@ -541,8 +732,21 @@ def voice_distance(left: np.ndarray, right: np.ndarray) -> float:
     if left.size != right.size or left.size == 0:
         return 1.0
 
+    if left.size != VOICE_DISTANCE_WEIGHTS.size:
+        left_norm = normalize_vector(left)
+        right_norm = normalize_vector(right)
+        cosine_similarity = float(np.dot(left_norm, right_norm))
+        return clamp01((1.0 - cosine_similarity) / 2.0)
+
     delta = np.abs(left - right) * VOICE_DISTANCE_WEIGHTS
     return float(np.sqrt(np.mean(np.square(delta))))
+
+
+def normalize_vector(vector: np.ndarray) -> np.ndarray:
+    norm = float(np.linalg.norm(vector))
+    if norm == 0.0 or not math.isfinite(norm):
+        return np.zeros_like(vector, dtype=np.float32)
+    return (vector / norm).astype(np.float32)
 
 
 def clamp01(value: float) -> float:

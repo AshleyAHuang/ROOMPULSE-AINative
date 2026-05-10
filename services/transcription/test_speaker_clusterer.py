@@ -1,8 +1,16 @@
+import asyncio
 import unittest
 
 import numpy as np
 
-from server import SAMPLE_RATE, SpeakerClusterer, trim_silence
+from server import (
+    SAMPLE_RATE,
+    DspVoiceEmbedder,
+    SpeakerClusterer,
+    VoiceEmbedding,
+    frame_rms,
+    trim_silence,
+)
 
 
 def synthetic_voice(
@@ -33,20 +41,20 @@ def synthetic_voice(
 
 class SpeakerClustererTest(unittest.TestCase):
     def test_keeps_nearby_voice_windows_in_same_cluster(self) -> None:
-        clusterer = SpeakerClusterer(threshold=0.18)
+        clusterer = SpeakerClusterer(threshold=0.18, embedder=DspVoiceEmbedder())
 
-        first = clusterer.assign(synthetic_voice(110))
-        second = clusterer.assign(synthetic_voice(115))
+        first = asyncio.run(clusterer.assign(synthetic_voice(110)))
+        second = asyncio.run(clusterer.assign(synthetic_voice(115)))
 
         self.assertEqual(first.label, "Speaker 1")
         self.assertEqual(second.label, "Speaker 1")
         self.assertEqual(clusterer.labels(), ["Speaker 1"])
 
     def test_splits_distinct_voice_windows(self) -> None:
-        clusterer = SpeakerClusterer(threshold=0.18)
+        clusterer = SpeakerClusterer(threshold=0.18, embedder=DspVoiceEmbedder())
 
-        clusterer.assign(synthetic_voice(110))
-        second = clusterer.assign(synthetic_voice(190))
+        asyncio.run(clusterer.assign(synthetic_voice(110)))
+        second = asyncio.run(clusterer.assign(synthetic_voice(190)))
 
         self.assertEqual(second.label, "Speaker 2")
         self.assertEqual(clusterer.labels(), ["Speaker 1", "Speaker 2"])
@@ -58,6 +66,48 @@ class SpeakerClustererTest(unittest.TestCase):
 
         self.assertLess(trimmed.size, audio.size)
         self.assertGreater(trimmed.size, SAMPLE_RATE)
+
+    def test_uses_cosine_distance_for_neural_embeddings(self) -> None:
+        clusterer = SpeakerClusterer(
+            threshold=0.2,
+            embedder=FixedEmbeddingVoiceEmbedder(
+                [
+                    np.array([1.0, 0.0, 0.0], dtype=np.float32),
+                    np.array([0.99, 0.01, 0.0], dtype=np.float32),
+                    np.array([0.0, 1.0, 0.0], dtype=np.float32),
+                ]
+            ),
+        )
+
+        first = asyncio.run(clusterer.assign(synthetic_voice(110)))
+        second = asyncio.run(clusterer.assign(synthetic_voice(120)))
+        third = asyncio.run(clusterer.assign(synthetic_voice(130)))
+
+        self.assertEqual(first.label, "Speaker 1")
+        self.assertEqual(second.label, "Speaker 1")
+        self.assertEqual(third.label, "Speaker 2")
+
+    def test_frame_rms_vectorizes_window_energy(self) -> None:
+        audio = synthetic_voice(160, seconds=0.5)
+
+        starts, rms = frame_rms(audio, frame_size=400, hop=160)
+
+        self.assertEqual(starts[0], 0)
+        self.assertEqual(starts.size, rms.size)
+        self.assertGreater(float(np.max(rms)), float(np.min(rms)))
+
+
+class FixedEmbeddingVoiceEmbedder:
+    name = "test-neural"
+
+    def __init__(self, vectors: list[np.ndarray]) -> None:
+        self.vectors = vectors
+        self.index = 0
+
+    def embed(self, _audio: np.ndarray) -> VoiceEmbedding:
+        vector = self.vectors[min(self.index, len(self.vectors) - 1)]
+        self.index += 1
+        return VoiceEmbedding(self.name, vector)
 
 
 if __name__ == "__main__":
