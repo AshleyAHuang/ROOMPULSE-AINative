@@ -965,25 +965,16 @@ function parsePiOutput(text: string): FacilitatorOutput {
   const summary = typeof parsed.summary === "string" ? parsed.summary : "";
   const nextHeartbeatHint =
     typeof parsed.nextHeartbeatHint === "string" ? parsed.nextHeartbeatHint : "";
-  const reviewMarkdown =
-    typeof parsed.reviewMarkdown === "string"
-      ? parsed.reviewMarkdown
-      : createInitialReviewMarkdown({
-          title: "RoomPulse",
-          goal: summary,
-          context: "",
-          agenda: [],
-          expectedParticipants: 0,
-          participants: [],
-          heartbeatIntervalSeconds: 60
-        });
+  if (typeof parsed.reviewMarkdown !== "string" || !parsed.reviewMarkdown.trim()) {
+    throw new Error("Pi response did not include reviewMarkdown");
+  }
 
   return {
     source: "pi",
     cards,
     summary,
     nextHeartbeatHint,
-    reviewMarkdown,
+    reviewMarkdown: parsed.reviewMarkdown,
     agendaActions: parseAgendaActions(parsed.agendaActions),
     uiActions: parseUiActions(parsed.uiActions),
     ephemeralReminder:

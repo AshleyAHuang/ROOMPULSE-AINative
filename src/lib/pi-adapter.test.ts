@@ -312,6 +312,48 @@ describe("Pi adapter", () => {
       .toBe(true);
   });
 
+  it("falls back when Pi JSON omits the required review markdown", async () => {
+    writeFileSync(
+      process.env.ROOMPULSE_CODEX_AUTH_PATH!,
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: {
+          access_token: jwtWithExpiration(1_900_000_000),
+          refresh_token: "refresh-token",
+          account_id: "acct_123"
+        }
+      })
+    );
+    session.subscribe.mockImplementation((listener: (event: unknown) => void) => {
+      listener({
+        type: "message_update",
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta: JSON.stringify({
+            cards: [
+              {
+                kind: "heartbeat",
+                title: "Review missing",
+                body: "This response forgot the markdown document.",
+                priority: "medium"
+              }
+            ],
+            summary: "Malformed Pi review.",
+            nextHeartbeatHint: "Retry."
+          })
+        }
+      });
+    });
+
+    const output = await runPiHeartbeat(heartbeatInput);
+
+    expect(output.source).toBe("local-fallback");
+    expect(output.adapterNotice).toContain(
+      "Pi response did not include reviewMarkdown"
+    );
+    expect(output.reviewMarkdown).toContain("RoomPulse revises the full document");
+  });
+
   it("ignores malformed Pi agenda actions instead of defaulting them complete", async () => {
     writeFileSync(
       process.env.ROOMPULSE_CODEX_AUTH_PATH!,
