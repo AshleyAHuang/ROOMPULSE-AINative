@@ -43,7 +43,7 @@ describe("POST /api/review-document/init", () => {
         meeting: {
           ...validMeeting,
           title: "",
-          expectedParticipants: 0,
+          expectedParticipants: 10_000,
           heartbeatIntervalSeconds: 0
         }
       })

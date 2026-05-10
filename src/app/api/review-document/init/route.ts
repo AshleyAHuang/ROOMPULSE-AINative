@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
-import type { MeetingConfig } from "@/lib/facilitator";
+import {
+  MAX_EXPECTED_PARTICIPANTS,
+  type MeetingConfig
+} from "@/lib/facilitator";
 import { runPiInitialReviewDocument } from "@/lib/pi-adapter";
 
 export const runtime = "nodejs";
@@ -46,7 +49,7 @@ function isMeeting(value: unknown): value is MeetingConfig {
     typeof value.context === "string" &&
     Array.isArray(value.agenda) &&
     value.agenda.every(isAgendaItem) &&
-    isIntegerAtLeast(value.expectedParticipants, 1) &&
+    isIntegerInRange(value.expectedParticipants, 1, MAX_EXPECTED_PARTICIPANTS) &&
     Array.isArray(value.participants) &&
     value.participants.every(isParticipant) &&
     isIntegerAtLeast(value.heartbeatIntervalSeconds, 15)
@@ -81,6 +84,14 @@ function isIntegerAtLeast(value: unknown, min: number): value is number {
     Number.isFinite(value) &&
     value >= min
   );
+}
+
+function isIntegerInRange(
+  value: unknown,
+  min: number,
+  max: number
+): value is number {
+  return isIntegerAtLeast(value, min) && value <= max;
 }
 
 function isNonEmptyString(value: unknown): value is string {
