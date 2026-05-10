@@ -63,9 +63,8 @@ function isValidEventPayload(type: string, payload: unknown): boolean {
     return (
       isRecord(payload) &&
       (payload.reviewVersionId === undefined ||
-        typeof payload.reviewVersionId === "string") &&
-      isRecord(payload.output) &&
-      typeof payload.output.reviewMarkdown === "string"
+        isNonEmptyString(payload.reviewVersionId)) &&
+      isHeartbeatOutput(payload.output)
     );
   }
 
@@ -115,6 +114,46 @@ function isReviewVersion(value: unknown): boolean {
       value.source === "local-fallback" ||
       value.source === "initial" ||
       value.source === "restored")
+  );
+}
+
+function isHeartbeatOutput(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    (value.source === "pi" ||
+      value.source === "openrouter" ||
+      value.source === "local-fallback") &&
+    (value.cards === undefined ||
+      (Array.isArray(value.cards) && value.cards.every(isFacilitatorCard))) &&
+    typeof value.summary === "string" &&
+    (value.nextHeartbeatHint === undefined ||
+      typeof value.nextHeartbeatHint === "string") &&
+    typeof value.reviewMarkdown === "string" &&
+    (value.agendaActions === undefined || Array.isArray(value.agendaActions)) &&
+    (value.uiActions === undefined || Array.isArray(value.uiActions)) &&
+    (value.ephemeralReminder === undefined ||
+      value.ephemeralReminder === null ||
+      typeof value.ephemeralReminder === "string")
+  );
+}
+
+function isFacilitatorCard(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.id) &&
+    (value.kind === "heartbeat" ||
+      value.kind === "participation" ||
+      value.kind === "risk" ||
+      value.kind === "agenda" ||
+      value.kind === "decision" ||
+      value.kind === "action" ||
+      value.kind === "drift" ||
+      value.kind === "reminder") &&
+    isNonEmptyString(value.title) &&
+    typeof value.body === "string" &&
+    (value.priority === "low" ||
+      value.priority === "medium" ||
+      value.priority === "high")
   );
 }
 

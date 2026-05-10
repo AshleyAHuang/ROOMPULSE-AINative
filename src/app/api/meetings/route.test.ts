@@ -206,6 +206,37 @@ describe("/api/meetings", () => {
     });
   });
 
+  it("rejects malformed heartbeat output events before storage", async () => {
+    const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
+    const created = await createResponse.json();
+
+    const response = await POST_EVENT(
+      jsonRequest({
+        type: "heartbeat_output",
+        timestamp: Date.now(),
+        payload: {
+          reviewVersionId: "",
+          output: {
+            source: "unknown",
+            cards: [{ id: "card-1", kind: "unknown" }],
+            summary: "Malformed heartbeat.",
+            nextHeartbeatHint: "Continue.",
+            reviewMarkdown: "# Review",
+            agendaActions: [],
+            uiActions: [],
+            ephemeralReminder: null
+          }
+        }
+      }),
+      routeContext(created.id)
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid log event payload"
+    });
+  });
+
   it("keeps ended meetings terminal and rejects later materialized events", async () => {
     const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
     const created = await createResponse.json();
