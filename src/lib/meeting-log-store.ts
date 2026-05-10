@@ -456,6 +456,15 @@ function materializeEvent(
     return;
   }
 
+  if (event.type === "review_initialized") {
+    const version = reviewVersionFromInitializedPayload(event.payload);
+    if (version) {
+      upsertReviewVersion(db, meetingId, version);
+      updateLatestReview(db, meetingId, version);
+    }
+    return;
+  }
+
   if (event.type === "review_restored") {
     const version = reviewVersionFromRestorePayload(event.payload);
     if (version) {
@@ -664,6 +673,30 @@ function reviewVersionFromRestorePayload(payload: unknown): ReviewVersion | null
     id: version.id,
     timestamp: version.timestamp,
     source: version.source as ReviewVersion["source"],
+    markdown: version.markdown,
+    summary: version.summary
+  };
+}
+
+function reviewVersionFromInitializedPayload(
+  payload: unknown
+): ReviewVersion | null {
+  if (!isRecord(payload) || !isRecord(payload.reviewVersion)) return null;
+  const version = payload.reviewVersion;
+  if (
+    typeof version.id !== "string" ||
+    typeof version.timestamp !== "number" ||
+    typeof version.source !== "string" ||
+    typeof version.markdown !== "string" ||
+    typeof version.summary !== "string"
+  ) {
+    return null;
+  }
+
+  return {
+    id: version.id,
+    timestamp: version.timestamp,
+    source: normalizeReviewSource(version.source),
     markdown: version.markdown,
     summary: version.summary
   };

@@ -9,7 +9,6 @@ import {
   type ReactNode
 } from "react";
 import {
-  applyAgendaCoverage,
   createHeartbeatInput,
   createInitialReviewMarkdown,
   getAgendaProgress,
@@ -86,6 +85,13 @@ interface PersistedMeetingState {
   endedAt?: number | null;
 }
 
+interface InitialReviewDocument {
+  source: FacilitatorOutput["source"];
+  markdown: string;
+  summary: string;
+  adapterNotice?: string;
+}
+
 interface PendingMeetingLogEvent {
   type: string;
   timestamp: number;
@@ -134,6 +140,17 @@ export default function RoomPulseApp() {
       )
       .join("\n")
   );
+  const [setupReviewMarkdown, setSetupReviewMarkdown] = useState(
+    createInitialReviewMarkdown(defaultMeeting)
+  );
+  const [setupReviewSummary, setSetupReviewSummary] = useState(
+    "Template initialized locally."
+  );
+  const [setupReviewSource, setSetupReviewSource] =
+    useState<InitialReviewDocument["source"]>("local-fallback");
+  const [setupReviewMeetingKey, setSetupReviewMeetingKey] = useState("");
+  const [setupReviewError, setSetupReviewError] = useState<string | null>(null);
+  const [isInitializingReview, setIsInitializingReview] = useState(false);
   const [meeting, setMeeting] = useState(defaultMeeting);
   const [transcript, setTranscript] = useState<TranscriptLine[]>([]);
   const [transcriptMode, setTranscriptMode] = useState<TranscriptMode>("mic");
@@ -229,6 +246,17 @@ export default function RoomPulseApp() {
     agendaProgress.active ??
     meeting.agenda[0] ??
     null;
+
+  const configuredDraftMeeting = useMemo(
+    () =>
+      normalizeMeetingDraft(meetingDraft, agendaText, participantsText),
+    [agendaText, meetingDraft, participantsText]
+  );
+  const configuredDraftKey = useMemo(
+    () => meetingConfigKey(configuredDraftMeeting),
+    [configuredDraftMeeting]
+  );
+  const setupReviewIsCurrent = setupReviewMeetingKey === configuredDraftKey;
 
   const buildPersistedMeetingState = useCallback(
     (overrides: Partial<PersistedMeetingState> = {}): PersistedMeetingState => {
@@ -561,6 +589,80 @@ export default function RoomPulseApp() {
     heartbeatCount
   ]);
 
+  async function initializeSetupReviewDocument(): Promise<InitialReviewDocument> {
+    return initializeReviewDocument(configuredDraftMeeting, {
+      persistToSetup: true
+    });
+  }
+
+  async function initializeReviewDocument(
+    configuredMeeting: MeetingConfig,
+    options: { persistToSetup: boolean }
+  ): Promise<InitialReviewDocument> {
+    const key = meetingConfigKey(configuredMeeting);
+
+    if (options.persistToSetup) {
+      setIsInitializingReview(true);
+      setSetupReviewError(null);
+    }
+
+    try {
+      const response = await fetch("/api/review-document/init", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ meeting: configuredMeeting })
+      });
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        throw new Error(
+          payload?.error ?? `Review initialization returned ${response.status}`
+        );
+      }
+
+      const document = normalizeInitialReviewDocument(
+        await response.json(),
+        configuredMeeting
+      );
+
+      if (options.persistToSetup) {
+        setSetupReviewMarkdown(document.markdown);
+        setSetupReviewSummary(document.summary);
+        setSetupReviewSource(document.source);
+        setSetupReviewMeetingKey(key);
+        setSetupReviewError(document.adapterNotice ?? null);
+      }
+
+      return document;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const fallback: InitialReviewDocument = {
+        source: "local-fallback",
+        markdown: createInitialReviewMarkdown(configuredMeeting),
+        summary: "Local fallback initialized the meeting review document.",
+        adapterNotice: message
+      };
+
+      if (options.persistToSetup) {
+        setSetupReviewMarkdown(fallback.markdown);
+        setSetupReviewSummary(fallback.summary);
+        setSetupReviewSource(fallback.source);
+        setSetupReviewMeetingKey(key);
+        setSetupReviewError(message);
+      }
+
+      return fallback;
+    } finally {
+      if (options.persistToSetup) {
+        setIsInitializingReview(false);
+      }
+    }
+  }
+
   const stopScriptedDemo = useCallback(() => {
     for (const timer of demoTimeoutsRef.current) {
       clearTimeout(timer);
@@ -777,7 +879,7 @@ export default function RoomPulseApp() {
     stopScriptedDemo
   ]);
 
-  const launchLiveDemo = useCallback(() => {
+  const launchLiveDemo = useCallback(async () => {
     endingSessionRef.current = false;
     const demoMeeting: MeetingConfig = {
       title: "Launch readiness review",
@@ -794,13 +896,16 @@ export default function RoomPulseApp() {
       heartbeatIntervalSeconds: DEMO_HEARTBEAT_INTERVAL_SECONDS
     };
     const startedAt = Date.now();
-    const initialReview = createInitialReviewMarkdown(demoMeeting);
+    const initialDocument = await initializeReviewDocument(demoMeeting, {
+      persistToSetup: false
+    });
+    const initialReview = initialDocument.markdown;
     const initialVersion: ReviewVersion = {
       id: `${startedAt}-initial-review`,
       timestamp: startedAt,
-      source: "initial",
+      source: initialDocument.source,
       markdown: initialReview,
-      summary: "Initial meeting review document."
+      summary: initialDocument.summary
     };
 
     setMeeting(demoMeeting);
@@ -818,18 +923,18 @@ export default function RoomPulseApp() {
     setCurrentReviewVersionId(initialVersion.id);
     setEphemeralReminder(null);
     setCurrentOutput({
-      source: "local-fallback",
+      source: initialDocument.source,
       cards: [
         {
           id: "demo-armed",
           kind: "heartbeat",
-          title: "Demo armed",
+          title: "Transcript armed",
           body:
-            "Scripted transcript starts in moments. Watch heartbeat reviews and agenda checks update live.",
+            "Scripted transcript starts in moments; heartbeat facilitation will run through Pi.",
           priority: "medium"
         }
       ],
-      summary: "Scripted demo armed.",
+      summary: initialDocument.summary,
       nextHeartbeatHint: "First pulse will arrive at 15 seconds.",
       reviewMarkdown: initialReview,
       agendaActions: [],
@@ -846,6 +951,11 @@ export default function RoomPulseApp() {
         type: "meeting_started",
         timestamp: startedAt,
         payload: { meeting: demoMeeting, mode: "scripted-demo" }
+      },
+      {
+        type: "review_initialized",
+        timestamp: startedAt,
+        payload: { reviewVersion: initialVersion }
       }
     ]);
     setTimeout(() => startScriptedDemo(), 120);
@@ -926,19 +1036,6 @@ export default function RoomPulseApp() {
   }, [transcript.length]);
 
   useEffect(() => {
-    if (phase !== "meeting") return;
-    setMeeting((current) => {
-      const updated = applyAgendaCoverage(current.agenda, transcript);
-      if (updated === current.agenda) return current;
-      logMeetingEvent("agenda_auto_checked", {
-        previousAgenda: current.agenda,
-        nextAgenda: updated
-      });
-      return { ...current, agenda: updated };
-    });
-  }, [logMeetingEvent, phase, transcript]);
-
-  useEffect(() => {
     if (phase === "setup") {
       void refreshPastMeetings();
     }
@@ -975,28 +1072,19 @@ export default function RoomPulseApp() {
     };
   }, [buildPersistedMeetingState, meetingLogId, phase]);
 
-  function startMeeting() {
+  async function startMeeting() {
     endingSessionRef.current = false;
-    const expectedParticipants = clampFiniteNumber(
-      meetingDraft.expectedParticipants,
-      1,
-      1
-    );
-    const heartbeatIntervalSeconds = clampFiniteNumber(
-      meetingDraft.heartbeatIntervalSeconds,
-      15,
-      15
-    );
-    const configuredMeeting: MeetingConfig = {
-      ...meetingDraft,
-      title: meetingDraft.title.trim() || defaultMeeting.title,
-      goal: meetingDraft.goal.trim() || defaultMeeting.goal,
-      context: meetingDraft.context.trim(),
-      expectedParticipants,
-      heartbeatIntervalSeconds,
-      agenda: parseAgenda(agendaText),
-      participants: parseParticipants(participantsText)
-    };
+    const configuredMeeting = configuredDraftMeeting;
+    const initialDocument =
+      setupReviewIsCurrent && setupReviewMarkdown.trim()
+        ? {
+            source: setupReviewSource,
+            markdown: setupReviewMarkdown,
+            summary: setupReviewSummary
+          }
+        : await initializeReviewDocument(configuredMeeting, {
+            persistToSetup: true
+          });
 
     setMeeting(configuredMeeting);
     setActiveAgendaItemId(
@@ -1006,13 +1094,13 @@ export default function RoomPulseApp() {
     );
     setPhase("meeting");
     const startedAt = Date.now();
-    const initialReview = createInitialReviewMarkdown(configuredMeeting);
+    const initialReview = initialDocument.markdown;
     const initialVersion: ReviewVersion = {
       id: `${startedAt}-initial-review`,
       timestamp: startedAt,
-      source: "initial",
+      source: initialDocument.source,
       markdown: initialReview,
-      summary: "Initial meeting review document."
+      summary: initialDocument.summary
     };
     setMeetingStartedAt(startedAt);
     setHeartbeatCount(0);
@@ -1022,18 +1110,18 @@ export default function RoomPulseApp() {
     setCurrentReviewVersionId(initialVersion.id);
     setEphemeralReminder(null);
     setCurrentOutput({
-      source: "local-fallback",
+      source: initialDocument.source,
       cards: [
         {
           id: "initial-heartbeat",
           kind: "heartbeat",
-          title: "Meeting display armed",
+          title: "Document ready",
           body:
-            "Start the discussion. RoomPulse will pulse the facilitator on the configured heartbeat.",
+            "The initialized review document is ready; the next heartbeat will revise it from the full file.",
           priority: "medium"
         }
       ],
-      summary: "Waiting for the first heartbeat.",
+      summary: initialDocument.summary,
       nextHeartbeatHint: "Use Run heartbeat now for a live check.",
       reviewMarkdown: initialReview,
       agendaActions: [],
@@ -1051,6 +1139,11 @@ export default function RoomPulseApp() {
         type: "meeting_started",
         timestamp: startedAt,
         payload: { meeting: configuredMeeting, mode: "manual" }
+      },
+      {
+        type: "review_initialized",
+        timestamp: startedAt,
+        payload: { reviewVersion: initialVersion }
       }
     ]);
   }
@@ -1315,7 +1408,7 @@ export default function RoomPulseApp() {
             noValidate
             onSubmit={(event) => {
               event.preventDefault();
-              startMeeting();
+              void startMeeting();
             }}
           >
             <div className="section-kicker">Context feeder</div>
@@ -1403,8 +1496,40 @@ export default function RoomPulseApp() {
                 onChange={(event) => setParticipantsText(event.target.value)}
               />
             </label>
-            <button className="primary-action" type="submit">
-              Start meeting
+            <section className="setup-init-card" aria-label="Pre-meeting document">
+              <div>
+                <div className="section-kicker">Pre-meeting markdown</div>
+                <strong>
+                  {setupReviewIsCurrent
+                    ? "Initialized from current setup"
+                    : "Needs initialization"}
+                </strong>
+                <p>
+                  Pi prepares the first live review document from the agenda and
+                  context before transcript capture begins.
+                </p>
+                {setupReviewError ? (
+                  <span className="setup-init-warning">
+                    Local fallback used: {setupReviewError}
+                  </span>
+                ) : null}
+              </div>
+              <button
+                className="btn outlined"
+                disabled={isInitializingReview}
+                type="button"
+                onClick={() => void initializeSetupReviewDocument()}
+              >
+                <MaterialIcon name="auto_awesome" />
+                {isInitializingReview ? "Initializing..." : "Initialize document"}
+              </button>
+            </section>
+            <button
+              className="primary-action"
+              disabled={isInitializingReview}
+              type="submit"
+            >
+              {isInitializingReview ? "Initializing..." : "Start meeting"}
             </button>
           </form>
 
@@ -1415,14 +1540,14 @@ export default function RoomPulseApp() {
                 <strong>One-click demo</strong>
               </div>
               <p>
-                Jump straight to a 75-second launch-readiness meeting with
-                transcript, reviews, participation, and agenda checks already
-                choreographed for judging.
+                Jump straight to a launch-readiness meeting with a hard-coded
+                transcript stream. Heartbeat reviews, reminders, and agenda
+                changes still run through Pi.
               </p>
               <button
                 type="button"
                 className="demo-launch-button"
-                onClick={launchLiveDemo}
+                onClick={() => void launchLiveDemo()}
               >
                 Launch live demo
               </button>
@@ -1448,6 +1573,18 @@ export default function RoomPulseApp() {
                 surfaces missing Pi auth; normal mode keeps a deterministic
                 local fallback.
               </p>
+            </section>
+            <section className="setup-card setup-review-preview">
+              <div className="setup-card-title">
+                <strong>Initialized markdown</strong>
+                <span>{setupReviewSource === "pi" ? "Pi" : "Local"}</span>
+              </div>
+              <p>{setupReviewSummary}</p>
+              <div className="setup-markdown-preview">
+                <div className="markdown-document">
+                  <MarkdownDocument markdown={setupReviewMarkdown} />
+                </div>
+              </div>
             </section>
             <section className="setup-card">
               <div className="setup-card-title">
@@ -2278,6 +2415,67 @@ function renderInlineMarkdown(text: string): ReactNode[] {
   });
 }
 
+function normalizeMeetingDraft(
+  draft: MeetingConfig,
+  agendaText: string,
+  participantsText: string
+): MeetingConfig {
+  return {
+    ...draft,
+    title: draft.title.trim() || defaultMeeting.title,
+    goal: draft.goal.trim() || defaultMeeting.goal,
+    context: draft.context.trim(),
+    expectedParticipants: clampFiniteNumber(draft.expectedParticipants, 1, 1),
+    heartbeatIntervalSeconds: clampFiniteNumber(
+      draft.heartbeatIntervalSeconds,
+      15,
+      15
+    ),
+    agenda: parseAgenda(agendaText),
+    participants: parseParticipants(participantsText)
+  };
+}
+
+function meetingConfigKey(meeting: MeetingConfig): string {
+  return JSON.stringify({
+    title: meeting.title,
+    goal: meeting.goal,
+    context: meeting.context,
+    agenda: meeting.agenda.map((item) => item.title),
+    expectedParticipants: meeting.expectedParticipants,
+    participants: meeting.participants,
+    heartbeatIntervalSeconds: meeting.heartbeatIntervalSeconds
+  });
+}
+
+function normalizeInitialReviewDocument(
+  value: unknown,
+  meeting: MeetingConfig
+): InitialReviewDocument {
+  if (!isRecord(value)) {
+    return {
+      source: "local-fallback",
+      markdown: createInitialReviewMarkdown(meeting),
+      summary: "Local fallback initialized the meeting review document."
+    };
+  }
+
+  const source = value.source === "pi" ? "pi" : "local-fallback";
+  return {
+    source,
+    markdown:
+      typeof value.markdown === "string" && value.markdown.trim()
+        ? value.markdown
+        : createInitialReviewMarkdown(meeting),
+    summary:
+      typeof value.summary === "string" && value.summary.trim()
+        ? value.summary
+        : "Initialized the meeting review document.",
+    adapterNotice:
+      typeof value.adapterNotice === "string" ? value.adapterNotice : undefined
+  };
+}
+
 function parseAgenda(value: string): AgendaItem[] {
   const items = value
     .split("\n")
@@ -2316,6 +2514,10 @@ function stringParam(value: unknown): string | null {
 
 function booleanParam(value: unknown): boolean | null {
   return typeof value === "boolean" ? value : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function formatClock(timestamp: number): string {

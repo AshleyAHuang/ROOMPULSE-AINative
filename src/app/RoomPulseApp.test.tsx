@@ -112,6 +112,7 @@ describe("RoomPulseApp", () => {
       target: { value: "That covers confirming the meeting goal." }
     });
     fireEvent.click(screen.getByRole("button", { name: /add line/i }));
+    fireEvent.click(screen.getByRole("button", { name: /run heartbeat/i }));
 
     await waitFor(() => expect(agendaCheckbox.checked).toBe(true));
   });

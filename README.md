@@ -20,24 +20,26 @@ Open `http://localhost:3000`.
 ### Hackathon demo
 
 The fastest path is the **Launch live demo** button on the setup screen. It
-loads a pre-baked launch-readiness meeting, jumps straight to the room display,
-and runs a 75-second scripted scenario that exercises transcript, review,
-participation, reminder, and agenda-progress behavior without mic setup.
+loads a launch-readiness meeting and runs a 75-second hard-coded transcript
+stream. The transcript is scripted; heartbeat reviews, agenda changes, and
+reminders still go through the Pi heartbeat path each time, with local fallback
+only when Pi is unavailable.
 
 Local run flow:
 
 1. Fill the setup/context feeder with title, goal, context, agenda, expected participant count, optional names/roles, and heartbeat interval.
-2. Start the meeting.
-3. Click `Mic` and allow browser microphone access for local real-time transcription, or use demo transcript mode to add lines from `Speaker 1`, `Speaker 2`, etc.
-4. Click `Run heartbeat` to trigger the server-side facilitator adapter.
-5. Watch the three-panel room display update:
+2. Click **Initialize document** if you want Pi to prepare the initial markdown review before the room display opens. Start Meeting also does this automatically if the current setup has not been initialized yet.
+3. Start the meeting.
+4. Click `Mic` and allow browser microphone access for local real-time transcription, or use demo transcript mode to add lines from `Speaker 1`, `Speaker 2`, etc.
+5. Click `Run heartbeat` to trigger the server-side facilitator adapter.
+6. Watch the three-panel room display update:
    - left: live raw transcript
    - center: a versioned AI review markdown document
    - right: agenda, participation, and a quiet one-heartbeat reminder
 
-Agenda checkboxes remain manually editable, and RoomPulse also auto-checks
-items when the transcript clearly indicates they were covered, such as “that
-covers launch risks” or “done with owners.”
+Agenda checkboxes remain manually editable. Agent-driven agenda changes happen
+through the Pi tool contract during heartbeats; the deterministic local
+facilitator proposes agenda changes only as a fallback when Pi is unavailable.
 
 ## Local Meeting Logs
 
@@ -84,6 +86,11 @@ interventions, current review markdown, review version history, participation
 state, and agenda state. The facilitator returns a complete next markdown
 document, optional agenda actions, concise card metadata, and a one-heartbeat
 room reminder.
+
+Before a meeting starts, `/api/review-document/init` asks Pi to initialize the
+first markdown review document from the setup context and agenda. The first
+heartbeat receives that entire document and every later heartbeat is instructed
+to revise the whole file in place, not append a heartbeat log.
 
 By default, RoomPulse uses Pi's OpenAI Codex subscription provider:
 
@@ -199,6 +206,7 @@ npm run dev:strict
 
 - `src/app/RoomPulseApp.tsx`: setup feeder, room display, heartbeat loop, demo transcript, and mic controls.
 - `src/app/api/heartbeat/route.ts`: server heartbeat endpoint.
+- `src/app/api/review-document/init/route.ts`: pre-meeting Pi markdown initialization endpoint.
 - `src/app/api/meetings/route.ts`: SQLite session list/create endpoint.
 - `src/app/api/meetings/[meetingId]/route.ts`: SQLite session read/update endpoint.
 - `src/app/api/meetings/[meetingId]/events/route.ts`: append-only meeting event endpoint.

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runPiHeartbeat } from "./pi-adapter";
+import { runPiHeartbeat, runPiInitialReviewDocument } from "./pi-adapter";
 import {
   createInitialReviewMarkdown,
   createUiToolDefinitions,
@@ -203,6 +203,49 @@ describe("Pi adapter", () => {
         "set_heartbeat_interval",
         "set_expected_participants"
       ])
+    );
+  });
+
+  it("initializes the pre-meeting markdown document through Pi", async () => {
+    writeFileSync(
+      process.env.ROOMPULSE_CODEX_AUTH_PATH!,
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: {
+          access_token: jwtWithExpiration(1_900_000_000),
+          refresh_token: "refresh-token",
+          account_id: "acct_123"
+        }
+      })
+    );
+    session.subscribe.mockImplementation((listener: (event: unknown) => void) => {
+      listener({
+        type: "message_update",
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta: JSON.stringify({
+            summary: "Initialized agenda review.",
+            markdown: "# Launch check\n\n## Agenda\n- [ ] Risks"
+          })
+        }
+      });
+    });
+
+    const output = await runPiInitialReviewDocument(meeting);
+
+    expect(output).toMatchObject({
+      source: "pi",
+      summary: "Initialized agenda review.",
+      markdown: expect.stringContaining("## Agenda")
+    });
+    expect(createAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        noTools: "all",
+        tools: []
+      })
+    );
+    expect(session.prompt.mock.calls[0]?.[0]).toContain(
+      "before the meeting starts"
     );
   });
 
