@@ -5,6 +5,8 @@ export type TranscriptSource = "speech" | "simulated" | "manual";
 export const MAX_AGENDA_ITEMS = 30;
 export const MAX_EXPECTED_PARTICIPANTS = 24;
 export const MAX_PARTICIPANT_ENTRIES = MAX_EXPECTED_PARTICIPANTS;
+export const MIN_HEARTBEAT_INTERVAL_SECONDS = 15;
+export const MAX_HEARTBEAT_INTERVAL_SECONDS = 3_600;
 
 export interface MeetingParticipant {
   name: string;

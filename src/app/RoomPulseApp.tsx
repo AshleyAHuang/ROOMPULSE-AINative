@@ -12,7 +12,9 @@ import MarkdownDocument from "./MarkdownDocument";
 import {
   MAX_AGENDA_ITEMS,
   MAX_EXPECTED_PARTICIPANTS,
+  MAX_HEARTBEAT_INTERVAL_SECONDS,
   MAX_PARTICIPANT_ENTRIES,
+  MIN_HEARTBEAT_INTERVAL_SECONDS,
   createHeartbeatInput,
   createInitialReviewMarkdown,
   getAgendaProgress,
@@ -1466,7 +1468,8 @@ export default function RoomPulseApp() {
     const seconds = clampFiniteNumber(
       value,
       meeting.heartbeatIntervalSeconds,
-      15
+      MIN_HEARTBEAT_INTERVAL_SECONDS,
+      MAX_HEARTBEAT_INTERVAL_SECONDS
     );
     const nowMs = Date.now();
 
@@ -1880,7 +1883,8 @@ export default function RoomPulseApp() {
                 <span>Heartbeat interval</span>
                 <input
                   type="number"
-                  min={15}
+                  min={MIN_HEARTBEAT_INTERVAL_SECONDS}
+                  max={MAX_HEARTBEAT_INTERVAL_SECONDS}
                   step={5}
                   value={meetingDraft.heartbeatIntervalSeconds}
                   onChange={(event) =>
@@ -2031,7 +2035,8 @@ export default function RoomPulseApp() {
               <span>Heartbeat interval</span>
               <div className="settings-num">
                 <input
-                  min={15}
+                  min={MIN_HEARTBEAT_INTERVAL_SECONDS}
+                  max={MAX_HEARTBEAT_INTERVAL_SECONDS}
                   step={5}
                   type="number"
                   value={meeting.heartbeatIntervalSeconds}
@@ -2942,8 +2947,9 @@ function normalizeMeetingDraft(
     ),
     heartbeatIntervalSeconds: clampFiniteNumber(
       draft.heartbeatIntervalSeconds,
-      15,
-      15
+      MIN_HEARTBEAT_INTERVAL_SECONDS,
+      MIN_HEARTBEAT_INTERVAL_SECONDS,
+      MAX_HEARTBEAT_INTERVAL_SECONDS
     ),
     agenda: parseAgenda(agendaText),
     participants: parseParticipants(participantsText)

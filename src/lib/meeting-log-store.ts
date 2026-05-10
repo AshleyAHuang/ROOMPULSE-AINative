@@ -5,7 +5,9 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   MAX_AGENDA_ITEMS,
   MAX_EXPECTED_PARTICIPANTS,
+  MAX_HEARTBEAT_INTERVAL_SECONDS,
   MAX_PARTICIPANT_ENTRIES,
+  MIN_HEARTBEAT_INTERVAL_SECONDS,
   type MeetingConfig,
   type ReviewVersion,
   type TimelineEntry,
@@ -1100,7 +1102,11 @@ function isMeetingConfig(value: unknown): value is MeetingConfig {
     Array.isArray(value.participants) &&
     value.participants.length <= MAX_PARTICIPANT_ENTRIES &&
     value.participants.every(isParticipant) &&
-    isIntegerAtLeast(value.heartbeatIntervalSeconds, 15)
+    isIntegerInRange(
+      value.heartbeatIntervalSeconds,
+      MIN_HEARTBEAT_INTERVAL_SECONDS,
+      MAX_HEARTBEAT_INTERVAL_SECONDS
+    )
   );
 }
 

@@ -2,7 +2,9 @@ import { NextResponse } from "next/server";
 import {
   MAX_AGENDA_ITEMS,
   MAX_EXPECTED_PARTICIPANTS,
+  MAX_HEARTBEAT_INTERVAL_SECONDS,
   MAX_PARTICIPANT_ENTRIES,
+  MIN_HEARTBEAT_INTERVAL_SECONDS,
   type MeetingConfig
 } from "@/lib/facilitator";
 import { runPiInitialReviewDocument } from "@/lib/pi-adapter";
@@ -56,7 +58,11 @@ function isMeeting(value: unknown): value is MeetingConfig {
     Array.isArray(value.participants) &&
     value.participants.length <= MAX_PARTICIPANT_ENTRIES &&
     value.participants.every(isParticipant) &&
-    isIntegerAtLeast(value.heartbeatIntervalSeconds, 15)
+    isIntegerInRange(
+      value.heartbeatIntervalSeconds,
+      MIN_HEARTBEAT_INTERVAL_SECONDS,
+      MAX_HEARTBEAT_INTERVAL_SECONDS
+    )
   );
 }
 

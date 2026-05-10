@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { GET, POST } from "./route";
 import { GET as GET_MEETING, PATCH } from "./[meetingId]/route";
 import { POST as POST_EVENT } from "./[meetingId]/events/route";
+import { MAX_HEARTBEAT_INTERVAL_SECONDS } from "@/lib/facilitator";
 
 let logDir = "";
 
@@ -706,6 +707,22 @@ describe("/api/meetings", () => {
           expectedParticipants: -3,
           heartbeatIntervalSeconds: 0,
           agenda: [{ id: "", title: " ", done: false }]
+        }
+      })
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid meeting payload"
+    });
+  });
+
+  it("rejects heartbeat intervals that can overflow browser timers", async () => {
+    const response = await POST(
+      jsonRequest({
+        meeting: {
+          ...validMeeting,
+          heartbeatIntervalSeconds: MAX_HEARTBEAT_INTERVAL_SECONDS + 1
         }
       })
     );

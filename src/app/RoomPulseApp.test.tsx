@@ -8,6 +8,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import RoomPulseApp, { previousReviewVersion } from "./RoomPulseApp";
+import { MAX_HEARTBEAT_INTERVAL_SECONDS } from "@/lib/facilitator";
 
 describe("RoomPulseApp", () => {
   afterEach(() => {
@@ -1356,6 +1357,22 @@ describe("RoomPulseApp", () => {
 
     expect(await screen.findByText(/0 of 1 heard/i)).toBeVisible();
     expect(screen.queryByText(/nan/i)).not.toBeInTheDocument();
+  });
+
+  it("caps excessive setup heartbeat intervals before scheduling timers", async () => {
+    render(<RoomPulseApp />);
+
+    await openSetupScreen();
+    fireEvent.change(screen.getByLabelText(/heartbeat interval/i), {
+      target: { value: String(MAX_HEARTBEAT_INTERVAL_SECONDS + 60) }
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+
+    expect(
+      await screen.findByText(`${MAX_HEARTBEAT_INTERVAL_SECONDS}s`)
+    ).toBeVisible();
   });
 
   it("hides the stop mic control until mic mode is active", async () => {

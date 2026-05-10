@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { POST } from "./route";
 import { runPiInitialReviewDocument } from "@/lib/pi-adapter";
+import { MAX_HEARTBEAT_INTERVAL_SECONDS } from "@/lib/facilitator";
 
 vi.mock("@/lib/pi-adapter", () => ({
   runPiInitialReviewDocument: vi.fn()
@@ -53,6 +54,25 @@ describe("POST /api/review-document/init", () => {
             name: `Person ${index}`
           })),
           heartbeatIntervalSeconds: 0
+        }
+      })
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid meeting payload"
+    });
+    expect(runPiInitialReviewDocument).not.toHaveBeenCalled();
+  });
+
+  it("rejects heartbeat intervals above the timer-safe cap before calling the agent", async () => {
+    vi.mocked(runPiInitialReviewDocument).mockReset();
+
+    const response = await POST(
+      jsonRequest({
+        meeting: {
+          ...validMeeting,
+          heartbeatIntervalSeconds: MAX_HEARTBEAT_INTERVAL_SECONDS + 1
         }
       })
     );

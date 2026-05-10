@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST } from "./route";
 import { runPiHeartbeat } from "@/lib/pi-adapter";
-import type { FacilitatorOutput } from "@/lib/facilitator";
+import {
+  MAX_HEARTBEAT_INTERVAL_SECONDS,
+  type FacilitatorOutput
+} from "@/lib/facilitator";
 
 vi.mock("@/lib/pi-adapter", () => ({
   runPiHeartbeat: vi.fn()
@@ -108,6 +111,24 @@ describe("POST /api/heartbeat", () => {
             confidence: -0.2
           }
         ]
+      })
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid heartbeat payload"
+    });
+    expect(runPiHeartbeat).not.toHaveBeenCalled();
+  });
+
+  it("rejects heartbeat intervals above the timer-safe cap", async () => {
+    const response = await POST(
+      jsonRequest({
+        ...validPayload,
+        meeting: {
+          ...validPayload.meeting,
+          heartbeatIntervalSeconds: MAX_HEARTBEAT_INTERVAL_SECONDS + 1
+        }
       })
     );
 
