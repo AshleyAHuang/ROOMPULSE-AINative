@@ -206,7 +206,7 @@ function formatTranscript(snapshot: MeetingLogSnapshot): string {
     snapshot.metadata.title,
     snapshot.metadata.goal,
     `Started: ${formatDateTime(snapshot.metadata.startedAt)}`,
-    snapshot.metadata.endedAt
+    snapshot.metadata.endedAt !== null
       ? `Ended: ${formatDateTime(snapshot.metadata.endedAt)}`
       : `Updated: ${formatDateTime(snapshot.metadata.updatedAt)}`,
     ""

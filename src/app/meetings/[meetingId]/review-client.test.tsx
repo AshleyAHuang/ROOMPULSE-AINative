@@ -94,6 +94,31 @@ describe("MeetingReviewClient", () => {
     });
   });
 
+  it("treats epoch endedAt as a real meeting end in transcript export text", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const epochSnapshot: MeetingLogSnapshot = {
+      ...snapshot,
+      metadata: {
+        ...snapshot.metadata,
+        startedAt: 0,
+        updatedAt: 60_000,
+        endedAt: 0
+      },
+      transcript: []
+    };
+
+    render(<MeetingReviewClient snapshot={epochSnapshot} />);
+    fireEvent.click(screen.getByRole("button", { name: /copy transcript/i }));
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(
+        expect.stringContaining("Ended:")
+      );
+    });
+    expect(writeText.mock.calls[0]?.[0]).not.toContain("Updated:");
+  });
+
   it("shows a clear copy failure message", async () => {
     vi.stubGlobal("navigator", {});
     Object.defineProperty(document, "execCommand", {
