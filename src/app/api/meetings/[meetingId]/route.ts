@@ -256,6 +256,7 @@ function isFiniteNumber(value: unknown): value is number {
 function isValidTimestamp(value: unknown): value is number {
   return (
     typeof value === "number" &&
+    value >= 0 &&
     Number.isSafeInteger(value) &&
     !Number.isNaN(new Date(value).getTime())
   );

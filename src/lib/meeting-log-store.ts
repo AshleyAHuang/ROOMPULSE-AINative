@@ -938,6 +938,7 @@ function endedAtFromPayload(payload: unknown): number | null {
 function isValidTimestamp(value: unknown): value is number {
   return (
     typeof value === "number" &&
+    value >= 0 &&
     Number.isSafeInteger(value) &&
     !Number.isNaN(new Date(value).getTime())
   );

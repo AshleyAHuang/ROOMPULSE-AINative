@@ -678,6 +678,17 @@ describe("/api/meetings", () => {
       error: "Invalid meeting timestamp"
     });
 
+    const negativeCreate = await POST(
+      jsonRequest({
+        meeting: validMeeting,
+        startedAt: -1
+      })
+    );
+    expect(negativeCreate.status).toBe(400);
+    await expect(negativeCreate.json()).resolves.toEqual({
+      error: "Invalid meeting timestamp"
+    });
+
     const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
     const created = await createResponse.json();
     const invalidEvent = await POST_EVENT(
@@ -690,6 +701,19 @@ describe("/api/meetings", () => {
     );
     expect(invalidEvent.status).toBe(400);
     await expect(invalidEvent.json()).resolves.toEqual({
+      error: "Invalid log event payload"
+    });
+
+    const negativeEvent = await POST_EVENT(
+      jsonRequest({
+        type: "meeting_started",
+        timestamp: -1,
+        payload: { meeting: validMeeting }
+      }),
+      routeContext(created.id)
+    );
+    expect(negativeEvent.status).toBe(400);
+    await expect(negativeEvent.json()).resolves.toEqual({
       error: "Invalid log event payload"
     });
 
@@ -714,6 +738,17 @@ describe("/api/meetings", () => {
     );
     expect(invalidPatch.status).toBe(400);
     await expect(invalidPatch.json()).resolves.toEqual({
+      error: "Invalid meeting timestamp"
+    });
+
+    const negativePatch = await PATCH(
+      jsonRequest({
+        updatedAt: -1
+      }),
+      routeContext(created.id)
+    );
+    expect(negativePatch.status).toBe(400);
+    await expect(negativePatch.json()).resolves.toEqual({
       error: "Invalid meeting timestamp"
     });
   });

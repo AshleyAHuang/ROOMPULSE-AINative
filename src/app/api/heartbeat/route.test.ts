@@ -161,10 +161,13 @@ describe("POST /api/heartbeat", () => {
     };
     const invalidPayloads = [
       { ...validPayload, now: 1e100 },
+      { ...validPayload, now: -1 },
       { ...validPayload, lastHeartbeatAt: 2_000, now: 1_000 },
       { ...validPayload, meetingStartedAt: 1e100 },
+      { ...validPayload, meetingStartedAt: -1 },
       { ...validPayload, heartbeatCount: -1 },
       { ...validPayload, transcript: [{ ...validLine, timestamp: 1e100 }] },
+      { ...validPayload, transcript: [{ ...validLine, timestamp: -1 }] },
       {
         ...validPayload,
         priorInterventions: [{ ...validIntervention, timestamp: 1e100 }]

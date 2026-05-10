@@ -100,5 +100,9 @@ function isIntegerAtLeast(value: unknown, min: number): value is number {
 }
 
 function isValidTimestamp(value: number): boolean {
-  return Number.isSafeInteger(value) && !Number.isNaN(new Date(value).getTime());
+  return (
+    value >= 0 &&
+    Number.isSafeInteger(value) &&
+    !Number.isNaN(new Date(value).getTime())
+  );
 }
