@@ -1,0 +1,83 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">RoomPulse room display</title>
+  <desc id="desc">A stylized RoomPulse shared meeting display with agenda, heartbeat review, and transcript panels.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="630" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F7F3EA"/>
+      <stop offset="0.55" stop-color="#EFE5D4"/>
+      <stop offset="1" stop-color="#F9F5EC"/>
+    </linearGradient>
+    <linearGradient id="dark" x1="195" y1="162" x2="1032" y2="532" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#25211B"/>
+      <stop offset="1" stop-color="#14130F"/>
+    </linearGradient>
+    <linearGradient id="green" x1="95" y1="192" x2="335" y2="322" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1F7A68"/>
+      <stop offset="1" stop-color="#143931"/>
+    </linearGradient>
+    <filter id="shadow" x="20" y="24" width="1160" height="578" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="22" stdDeviation="28" flood-color="#5A4522" flood-opacity="0.20"/>
+    </filter>
+  </defs>
+  <rect width="1200" height="630" rx="42" fill="url(#bg)"/>
+  <circle cx="1042" cy="86" r="170" fill="#E1A547" opacity="0.13"/>
+  <circle cx="132" cy="44" r="190" fill="#1F7A68" opacity="0.12"/>
+  <g filter="url(#shadow)">
+    <rect x="52" y="44" width="1096" height="68" rx="34" fill="#FFFDF8" fill-opacity="0.86"/>
+    <rect x="72" y="58" width="40" height="40" rx="16" fill="#F2EBDD"/>
+    <rect x="85" y="72" width="3" height="12" rx="1.5" fill="#1F7A68"/>
+    <rect x="92" y="65" width="3" height="26" rx="1.5" fill="#E1A547"/>
+    <rect x="99" y="70" width="3" height="16" rx="1.5" fill="#1F7A68"/>
+    <text x="128" y="85" fill="#171512" font-family="Space Grotesk, Arial, sans-serif" font-size="27" font-weight="700">RoomPulse</text>
+    <rect x="938" y="61" width="96" height="34" rx="17" fill="#FFFFFF" stroke="#DED5C7"/>
+    <text x="966" y="83" fill="#171512" font-family="DM Sans, Arial, sans-serif" font-size="14" font-weight="700">Refresh</text>
+    <rect x="1046" y="61" width="78" height="34" rx="17" fill="#1F7A68"/>
+    <text x="1067" y="83" fill="#FFFDF8" font-family="DM Sans, Arial, sans-serif" font-size="14" font-weight="700">Start</text>
+  </g>
+  <text x="72" y="164" fill="#6F6658" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="600" letter-spacing="4">MEETING LIVE</text>
+  <text x="72" y="210" fill="#171512" font-family="Space Grotesk, Arial, sans-serif" font-size="44" font-weight="700">Product readiness review</text>
+  <text x="72" y="238" fill="#5B5349" font-family="DM Sans, Arial, sans-serif" font-size="18">Heartbeat-driven facilitation, visible to everyone in the room.</text>
+  <g>
+    <circle cx="742" cy="190" r="50" fill="#D7F3EA"/>
+    <circle cx="742" cy="190" r="38" stroke="#1F7A68" stroke-width="8" stroke-linecap="round" stroke-dasharray="170 68"/>
+    <text x="724" y="197" fill="#171512" font-family="Space Grotesk, Arial, sans-serif" font-size="30" font-weight="700">28</text>
+    <text x="710" y="217" fill="#6F6658" font-family="IBM Plex Mono, monospace" font-size="9" font-weight="600" letter-spacing="2">S PULSE</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="72" y="280" width="262" height="250" rx="28" fill="url(#dark)" stroke="#423C33"/>
+    <rect x="92" y="300" width="222" height="98" rx="24" fill="url(#green)" stroke="#5D776C"/>
+    <text x="112" y="324" fill="#A6CAC0" font-family="IBM Plex Mono, monospace" font-size="9" font-weight="600" letter-spacing="3">NOW DISCUSSING</text>
+    <text x="112" y="352" fill="#FFF8EA" font-family="Space Grotesk, Arial, sans-serif" font-size="24" font-weight="700">Confirm launch bar</text>
+    <line x1="112" y1="374" x2="294" y2="374" stroke="#FFFFFF" stroke-opacity="0.22"/>
+    <text x="112" y="392" fill="#D6D0C3" font-family="DM Sans, Arial, sans-serif" font-size="14">Voices heard</text>
+    <text x="284" y="392" fill="#FFF8EA" font-family="DM Sans, Arial, sans-serif" font-size="14" font-weight="700" text-anchor="end">3 / 5</text>
+    <text x="96" y="438" fill="#FFF8EA" font-family="Space Grotesk, Arial, sans-serif" font-size="20" font-weight="700">Agenda</text>
+    <rect x="96" y="456" width="210" height="7" rx="3.5" fill="#FFFFFF" fill-opacity="0.12"/>
+    <rect x="96" y="456" width="118" height="7" rx="3.5" fill="#1FBD94"/>
+    <text x="96" y="491" fill="#D6D0C3" font-family="DM Sans, Arial, sans-serif" font-size="15">Resolve open risks</text>
+    <text x="96" y="519" fill="#D6D0C3" font-family="DM Sans, Arial, sans-serif" font-size="15">Assign owners</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="360" y="280" width="470" height="250" rx="28" fill="url(#dark)" stroke="#423C33"/>
+    <text x="388" y="318" fill="#AFA799" font-family="IBM Plex Mono, monospace" font-size="10" font-weight="600" letter-spacing="3">AI REVIEWS</text>
+    <text x="388" y="344" fill="#FFF8EA" font-family="Space Grotesk, Arial, sans-serif" font-size="23" font-weight="700">Live review document</text>
+    <rect x="388" y="374" width="394" height="70" rx="20" fill="#44331A" stroke="#7A5B22"/>
+    <text x="408" y="403" fill="#FFF8EA" font-family="DM Sans, Arial, sans-serif" font-size="17" font-weight="700">Invite quiet voices</text>
+    <text x="408" y="426" fill="#D6D0C3" font-family="DM Sans, Arial, sans-serif" font-size="14">One expected participant has not spoken yet.</text>
+    <text x="408" y="484" fill="#FFF8EA" font-family="Space Grotesk, Arial, sans-serif" font-size="30" font-weight="700">Launch risks</text>
+    <text x="408" y="512" fill="#D6D0C3" font-family="DM Sans, Arial, sans-serif" font-size="16">Decision, concern, and action items update on every heartbeat.</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="856" y="280" width="272" height="250" rx="28" fill="url(#dark)" stroke="#423C33"/>
+    <text x="884" y="318" fill="#AFA799" font-family="IBM Plex Mono, monospace" font-size="10" font-weight="600" letter-spacing="3">LIVE RAW TRANSCRIPT</text>
+    <text x="884" y="344" fill="#FFF8EA" font-family="Space Grotesk, Arial, sans-serif" font-size="23" font-weight="700">Transcript</text>
+    <rect x="884" y="376" width="216" height="44" rx="16" fill="#FFFFFF" fill-opacity="0.06"/>
+    <circle cx="906" cy="398" r="13" fill="#1F7A68"/>
+    <text x="930" y="394" fill="#FFF8EA" font-family="DM Sans, Arial, sans-serif" font-size="13" font-weight="700">Speaker 1</text>
+    <text x="930" y="412" fill="#D6D0C3" font-family="DM Sans, Arial, sans-serif" font-size="12">We still need an owner...</text>
+    <rect x="884" y="436" width="216" height="44" rx="16" fill="#FFFFFF" fill-opacity="0.06"/>
+    <circle cx="906" cy="458" r="13" fill="#E1A547"/>
+    <text x="930" y="454" fill="#FFF8EA" font-family="DM Sans, Arial, sans-serif" font-size="13" font-weight="700">Speaker 2</text>
+    <text x="930" y="472" fill="#D6D0C3" font-family="DM Sans, Arial, sans-serif" font-size="12">Can we pause on support?</text>
+  </g>
+</svg>

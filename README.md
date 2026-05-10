@@ -1,314 +1,167 @@
 # RoomPulse
 
-RoomPulse is a local-first, room-visible AI meeting facilitator. It is not a private notetaker: the core primitive is a configurable heartbeat that wakes a facilitator adapter and surfaces concise room-facing nudges on a shared display.
+RoomPulse is a local-first, room-visible AI meeting facilitator. It is built for
+a shared display in the room: live transcript on one side, heartbeat-driven
+facilitation in the center, and agenda/participation nudges that everyone can
+see.
 
-## Quick Start
+![RoomPulse shared display](docs/assets/roompulse-hero.svg)
 
-Requires Node.js 24 or newer. RoomPulse uses the built-in `node:sqlite`
-module for local meeting sessions.
+## Fast Demo
+
+No Pi auth, microphone, or transcription service is required for the fastest
+demo.
 
 ```bash
 npm install
-npm run transcription
+npm run demo
 ```
 
-In another terminal:
+Open `http://localhost:3000`, click **Launch live demo**, then use
+**Run heartbeat** whenever you want the facilitator to review the latest room
+state. `npm run demo` forces deterministic local fallback so the demo works even
+on a machine with no Pi credentials.
+
+## What RoomPulse Shows
+
+| Area | What the room sees |
+| --- | --- |
+| Heartbeat | Countdown, manual trigger, current facilitator source, and the latest room-facing reminder. |
+| Review document | A versioned markdown review that the facilitator revises every heartbeat. |
+| Transcript | Raw live transcript lines from mic mode or deterministic `Speaker N` demo mode. |
+| Participation | Expected participant count compared with observed `Speaker N` clusters. |
+| Agenda | Current item, progress, and agent/manual agenda updates. |
+| End review | A saved meeting review/export page backed by local SQLite logs. |
+
+![Heartbeat loop](docs/assets/heartbeat-loop.svg)
+
+## Install Paths
+
+### Local fallback demo
+
+Use this when you only want to see the product:
 
 ```bash
+npm install
+npm run demo
+```
+
+### Normal development
+
+Use this when you want Pi/OpenRouter integration if configured, with local
+fallback otherwise:
+
+```bash
+npm install
 npm run dev
 ```
 
-Open `http://localhost:3000`.
+### Mic transcription
 
-### Hackathon demo
-
-The fastest path is the **Launch live demo** button on the setup screen. It
-loads a launch-readiness meeting and runs a roughly 20-minute hard-coded transcript
-stream. The transcript is scripted; heartbeat reviews, agenda changes, and
-reminders still go through the Pi heartbeat path each time, with local fallback
-only when Pi is unavailable.
-
-Local run flow:
-
-1. Fill the setup/context feeder with title, goal, context, agenda, expected participant count, optional names/roles, and heartbeat interval.
-2. Start the meeting. RoomPulse makes one initialization API call to generate the first markdown review document from the final setup input.
-3. Click `Mic` and allow browser microphone access for local real-time transcription, or use demo transcript mode to add lines from `Speaker 1`, `Speaker 2`, etc.
-4. Click `Run heartbeat` to trigger the server-side facilitator adapter.
-5. Watch the three-panel room display update:
-   - left: live raw transcript
-   - center: a versioned AI review markdown document
-   - right: agenda, participation, and a quiet one-heartbeat reminder
-6. Click `End & review` when the meeting is over. RoomPulse marks the session ended and opens `/meetings/{meetingId}` with copy/export controls.
-
-Agenda checkboxes remain manually editable. Agent-driven agenda changes happen
-through the Pi tool contract during heartbeats; the deterministic local
-facilitator proposes agenda changes only as a fallback when Pi is unavailable.
-
-## Local Meeting Logs
-
-RoomPulse stores session history locally on the Next.js server in SQLite at
-`.roompulse/roompulse.sqlite`. The `.roompulse/` directory is git-ignored.
-The database stores:
-
-- `meeting_sessions`: title, goal, status, pause state, latest review document,
-  setup context, and the resumable live UI state.
-- `meeting_events`: append-only event stream for meeting start, transcript lines,
-  heartbeat outputs, agenda changes, review restores, pause toggles, and end
-  events.
-- `transcript_lines`: queryable raw transcript rows.
-- `review_versions`: every markdown document version produced by the
-  facilitator or restored by the user.
-
-The setup screen and sidebar list persisted sessions. Active or paused sessions
-can be resumed after a page reload; ended sessions open a review page with
-copy/export controls for the transcript and latest markdown review.
-
-Backend endpoints:
-
-```text
-GET  /api/meetings
-POST /api/meetings
-GET  /api/meetings/{meetingId}
-PATCH /api/meetings/{meetingId}
-POST /api/meetings/{meetingId}/events
-```
-
-## Pi Integration
-
-The explicit integration boundary is:
-
-```ts
-runPiHeartbeat(input): Promise<FacilitatorOutput>
-```
-
-It lives in `src/lib/pi-adapter.ts`, and the Next.js route at `src/app/api/heartbeat/route.ts` calls it on every heartbeat. The adapter imports `@earendil-works/pi-coding-agent` server-side and creates an in-memory Pi agent session with tools disabled for a concise JSON-only facilitation response.
-
-Each heartbeat sends bounded facilitator context: meeting setup, elapsed time,
-pause state, the latest bounded transcript delta, recent transcript context,
-recent prior interventions/reminders, participation state, agenda state, and a
-compacted current review document. This keeps long meetings from sending the
-full raw transcript and full review history on every pulse. The facilitator
-returns a complete next markdown document, optional agenda actions, concise
-card metadata, and a one-heartbeat room reminder.
-
-Before a meeting starts, `/api/review-document/init` asks Pi to initialize the
-first markdown review document from the setup context and agenda. The first
-heartbeat receives that entire document and every later heartbeat is instructed
-to revise the whole file in place, not append a heartbeat log.
-
-By default, RoomPulse uses Pi's OpenAI Codex subscription provider:
-
-```bash
-ROOMPULSE_PI_PROVIDER=openai-codex
-ROOMPULSE_PI_MODEL=gpt-5.5
-ROOMPULSE_PI_THINKING_LEVEL=off
-```
-
-RoomPulse can also use OpenRouter models directly through OpenRouter's
-OpenAI-compatible chat completions endpoint. In that mode the same heartbeat
-contract still applies: the model receives the RoomPulse UI tools and should
-call `update_review_document` first, then optional agenda/reminder tools.
-
-```bash
-ROOMPULSE_PI_PROVIDER=openrouter
-ROOMPULSE_PI_MODEL=openai/gpt-4o-mini
-OPENROUTER_API_KEY=sk-or-...
-npm run dev
-```
-
-Optional OpenRouter overrides:
-
-```bash
-ROOMPULSE_OPENROUTER_API_KEY=sk-or-...
-ROOMPULSE_OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-ROOMPULSE_OPENROUTER_REFERER=http://localhost:3000
-ROOMPULSE_OPENROUTER_TITLE=RoomPulse
-```
-
-OpenRouter responses are shown as `OpenRouter` in the meeting UI and are stored
-as `openrouter` review versions in local SQLite.
-
-If Pi does not already have `openai-codex` auth, RoomPulse reads the local Codex CLI ChatGPT login from `~/.codex/auth.json` into the in-memory Pi auth store for the heartbeat session. Run `codex login` first on the machine hosting the Next.js server. You can disable that bridge with:
-
-```bash
-ROOMPULSE_IMPORT_CODEX_CLI_AUTH=0 npm run dev
-```
-
-Useful adapter overrides:
-
-```bash
-ROOMPULSE_PI_PROVIDER=openai-codex
-ROOMPULSE_PI_MODEL=gpt-5.5
-ROOMPULSE_PI_THINKING_LEVEL=off
-ROOMPULSE_PI_TIMEOUT_MS=20000
-NEXT_PUBLIC_ROOMPULSE_PI_TIMEOUT_MS=25000
-ROOMPULSE_CODEX_AUTH_PATH=/path/to/codex/auth.json
-```
-
-For a real strict smoke test against the running local API, start
-`npm run dev:strict` and run:
-
-```bash
-npm run smoke:heartbeat
-```
-
-That command posts a heartbeat to `/api/heartbeat` and fails unless the response
-comes from Pi, not the local fallback.
-
-If Pi auth, model configuration, or runtime access is missing, the adapter catches the failure and returns deterministic local fallback facilitation. For a guaranteed local-only demo:
-
-```bash
-ROOMPULSE_PI_MODE=local npm run dev
-```
-
-For a real run where Pi/OpenAI Codex auth must be present, use strict mode. In
-strict mode RoomPulse surfaces the heartbeat error instead of silently using the
-browser fallback:
-
-```bash
-npm run dev:strict
-```
-
-## Mic and Transcript Support
-
-RoomPulse supports two transcript paths:
-
-- Mic mode: browser microphone capture streams 16 kHz mono PCM to a local WebSocket transcription service at `ws://127.0.0.1:8765/ws`. The service runs local `faster-whisper` transcription and assigns each finalized speech segment to an online `Speaker N` cluster.
-- Demo mode: deterministic simulated transcript lines from selectable `Speaker N` labels. This is useful for tests and UI checks.
-
-Start the local transcription service before using mic mode:
+Mic mode needs the local Python transcription service in a second terminal:
 
 ```bash
 npm run transcription
 ```
 
-The first run downloads the configured Whisper model into the local Hugging Face
-cache. The default model is `small.en` for better meeting accuracy; for lower
-latency on CPU, use:
+Then start the web app:
+
+```bash
+npm run dev
+```
+
+The first transcription run can download the default Whisper model. For a faster
+CPU smoke test, use:
 
 ```bash
 ROOMPULSE_WHISPER_MODEL=tiny.en npm run transcription
 ```
 
-The browser must run on `localhost` or another secure context for microphone
-permissions. The local transcription service must be reachable from the browser
-at `NEXT_PUBLIC_ROOMPULSE_TRANSCRIPTION_WS` or the default
-`ws://127.0.0.1:8765/ws`.
+## Pi And Strict Mode
 
-Speaker clustering sensitivity can be tuned without code changes. Lower values
-split voices more aggressively; higher values merge more aggressively:
+Every heartbeat calls the server-side facilitator adapter at
+`src/lib/pi-adapter.ts` through `/api/heartbeat`. If Pi is unavailable, RoomPulse
+falls back to deterministic local facilitation unless strict mode is enabled.
 
 ```bash
-ROOMPULSE_SPEAKER_DISTANCE_THRESHOLD=0.14 npm run transcription
+npm run dev:strict
+npm run smoke:heartbeat
 ```
 
-The defaults are backend-specific: `0.14` for DSP, `0.32` for pyannote,
-`0.28` for SpeechBrain ECAPA, `0.30` for Resemblyzer, `0.30` for NeMo/TitaNet,
-and `0.28` for WeSpeaker. The service also quality-gates speaker embeddings so
-short/noisy chunks do not create throwaway speakers or pull an existing speaker
-centroid toward background noise. Tune that with `ROOMPULSE_SPEAKER_MIN_QUALITY`
-when needed. Repeated quiet but distinct voiceprints are held as pending
-speaker candidates and promoted after repeated evidence, which reduces the
-common failure mode where a quiet participant keeps being folded into
-`Speaker 1`. Tune the promotion count with
-`ROOMPULSE_PENDING_SPEAKER_PROMOTION_SAMPLES`.
+Strict mode fails loudly when Pi/OpenRouter is not configured. For Codex
+subscription auth, run `codex login` on the server machine first; RoomPulse can
+import the local Codex CLI OAuth token from `~/.codex/auth.json` into the Pi
+session.
 
-For stronger local voice categorization, the transcription service supports
-optional neural speaker embeddings from pyannote.audio, SpeechBrain,
-Resemblyzer, NVIDIA NeMo/TitaNet, and WeSpeaker. Install the optional Python
-speaker stack and select the backend:
+Common overrides:
 
 ```bash
-cd services/transcription
-uv sync --extra speaker
-ROOMPULSE_SPEAKER_EMBEDDING_BACKEND=pyannote ROOMPULSE_PYANNOTE_AUTH_TOKEN=hf_... uv run uvicorn server:app --host 127.0.0.1 --port 8765
-ROOMPULSE_SPEAKER_EMBEDDING_BACKEND=speechbrain uv run uvicorn server:app --host 127.0.0.1 --port 8765
-uv sync --extra speaker-nemo
-ROOMPULSE_SPEAKER_EMBEDDING_BACKEND=nemo uv run uvicorn server:app --host 127.0.0.1 --port 8765
-uv pip install "git+https://github.com/wenet-e2e/wespeaker.git"
-ROOMPULSE_SPEAKER_EMBEDDING_BACKEND=wespeaker uv run uvicorn server:app --host 127.0.0.1 --port 8765
+ROOMPULSE_PI_MODE=local npm run dev
+ROOMPULSE_PI_PROVIDER=openai-codex ROOMPULSE_PI_MODEL=gpt-5.5 npm run dev
+ROOMPULSE_PI_PROVIDER=openrouter ROOMPULSE_PI_MODEL=openai/gpt-4o-mini OPENROUTER_API_KEY=sk-or-... npm run dev
 ```
 
-`ROOMPULSE_SPEAKER_EMBEDDING_BACKEND=auto` tries pyannote first when a Hugging
-Face token is configured, then SpeechBrain, then Resemblyzer, then the built-in
-DSP embedder. Set `ROOMPULSE_NEMO_AUTO=1` or `ROOMPULSE_WESPEAKER_AUTO=1` to
-include those heavier backends in auto mode. The neural path gives better
-recurring-voice separation, while the DSP path is fastest and dependency-free.
-Explicit neural selections are wrapped with the DSP embedder as a per-segment
-fallback and circuit-break to DSP after repeated failures, so a missing gated
-model or broken Torch install does not stall every transcript window.
-`ROOMPULSE_SPEAKER_MAX_CLUSTERS`
-defaults to `12` to prevent noise or backend churn from creating unbounded
-`Speaker N` labels. When the optional speaker stack is installed, the service
-also uses WebRTC VAD before Whisper to reject background noise before it becomes
-repeated transcript junk.
+![RoomPulse architecture](docs/assets/architecture.svg)
 
-The service also applies local background-noise cleanup before transcription:
-high-pass filtering, low-energy noise suppression, silence trimming, Whisper VAD,
-and RMS normalization. You can trade speed for accuracy with
-`ROOMPULSE_WHISPER_MODEL`, `ROOMPULSE_WHISPER_BEAM_SIZE`, and
-`ROOMPULSE_WHISPER_BEST_OF`.
-When the mic is stopped or a meeting ends, the browser waits up to 15 seconds
-for the local server's final flush acknowledgement before closing the socket.
-Tune this with `NEXT_PUBLIC_ROOMPULSE_TRANSCRIPTION_FLUSH_TIMEOUT_MS` if your
-local Whisper model needs more or less time.
-If the local transcription WebSocket closes unexpectedly while mic mode is still
-active, the room display retries mic capture with the existing expected speaker
-count and offsets fresh `Speaker N` labels past labels already seen.
-If browser audio input devices change during mic mode, RoomPulse restarts the
-local transcription client so the room display follows the current input device.
+## Documentation
 
-## Speaker Recognition Limitations
-
-The MVP diarization is approximate and not biometric identity. The local service
-can use pyannote.audio embeddings, SpeechBrain ECAPA, Resemblyzer,
-NeMo/TitaNet, or WeSpeaker speaker embeddings when installed, and otherwise
-uses speech-window audio features, MFCC-style cepstra, spectral contrast,
-voiced-frame spectral shape, RMS, zero-crossing rate, and pitch estimate to
-cluster recurring voice patterns into `Speaker 1`, `Speaker 2`, etc. Room
-noise, overlapping speech, microphone placement, and similar voices can
-produce incorrect labels. It does not
-identify named people unless a later calibration flow maps a cluster to a
-participant name. If microphone capture is restarted mid-meeting, RoomPulse
-offsets new local clusters so fresh `Speaker N` labels do not collide with
-earlier transcript labels.
-
-Participation reminders intentionally compare only expected participant count against observed speaker clusters. RoomPulse does not claim to know that a specific named person has spoken.
-
-## Room Display
-
-After setup, RoomPulse uses a shared-room operator layout:
-
-- Top bar: meeting pause/resume, manual heartbeat, title, mic status, countdown, and settings.
-- Left panel: live raw transcript.
-- Center panel: a single scrollable AI review markdown document. Every heartbeat creates a new version. The agent is instructed to revise non-destructively: superseded content should be struck through with replacement text added nearby rather than silently deleted.
-- Right rail: agenda controls, participation status, and a quiet floating reminder. The reminder is ephemeral and should only represent the latest heartbeat.
-
-The version controls can revert the review document to the previous version or a selected historical version.
+| Document | Use it for |
+| --- | --- |
+| [Quickstart](docs/quickstart.md) | Demo, normal dev, mic setup, and strict Pi smoke tests. |
+| [Architecture](docs/architecture.md) | How the browser, heartbeat route, Pi adapter, SQLite logs, and transcription service fit together. |
+| [Pi integration](docs/pi-integration.md) | Provider configuration, fallback behavior, strict mode, and the heartbeat contract. |
+| [Transcription and speaker tracking](docs/transcription.md) | Mic service setup, speaker clustering limits, and optional neural embeddings. |
 
 ## Commands
 
 ```bash
-npm run transcription
+npm run demo          # local-fallback demo on http://localhost:3000
+npm run dev           # normal Next.js dev server
+npm run transcription # local Whisper WebSocket service for mic mode
+npm run dev:strict    # require Pi/OpenRouter; no silent local fallback
+npm run smoke:heartbeat
 npm test
 npm run build
-npm run dev
-npm run dev:strict
+npm run check         # test + build
 ```
 
-## Project Structure
+## Requirements
 
-- `src/app/RoomPulseApp.tsx`: setup feeder, room display, heartbeat loop, demo transcript, and mic controls.
-- `src/app/api/heartbeat/route.ts`: server heartbeat endpoint.
-- `src/app/api/review-document/init/route.ts`: pre-meeting Pi markdown initialization endpoint.
-- `src/app/api/meetings/route.ts`: SQLite session list/create endpoint.
-- `src/app/api/meetings/[meetingId]/route.ts`: SQLite session read/update endpoint.
-- `src/app/api/meetings/[meetingId]/events/route.ts`: append-only meeting event endpoint.
-- `src/app/meetings/[meetingId]/page.tsx`: ended-session review page.
-- `src/lib/meeting-log-store.ts`: SQLite session, transcript, and review-version store.
-- `src/lib/local-transcription-client.ts`: browser mic capture, downsampling, PCM streaming, and transcript event handling.
-- `src/lib/pi-adapter.ts`: Pi SDK adapter with deterministic fallback.
-- `src/lib/facilitator.ts`: heartbeat input shaping and local facilitator output.
-- `src/lib/speaker-tracker.ts`: audio feature clustering and participation status.
-- `src/lib/transcript-store.ts`: typed transcript storage helper.
-- `services/transcription/server.py`: local `faster-whisper` WebSocket transcription service with online speaker clustering.
+- Node.js 24 or newer. RoomPulse uses the built-in `node:sqlite` module for
+  local meeting logs.
+- `uv` and Python 3.11 or newer only if you want local mic transcription.
+- Browser microphone access requires `localhost` or another secure context.
+- Pi/OpenRouter credentials are optional for demos and required for strict mode.
+
+## Local Data
+
+RoomPulse stores local meeting sessions in `.roompulse/roompulse.sqlite`. The
+directory is git-ignored. Saved sessions include setup context, transcript
+events, heartbeat outputs, agenda changes, review versions, pause/end state,
+and enough UI state to resume active meetings after a reload.
+
+## Project Map
+
+```text
+src/app/RoomPulseApp.tsx                    Shared room UI and heartbeat loop
+src/app/api/heartbeat/route.ts              Heartbeat API route
+src/app/api/review-document/init/route.ts   Pre-meeting review initializer
+src/app/api/meetings/*                      Local SQLite meeting logs
+src/app/meetings/[meetingId]                Ended-session review/export page
+src/lib/pi-adapter.ts                       Pi/OpenRouter adapter + fallback
+src/lib/facilitator.ts                      Heartbeat shaping and local output
+src/lib/local-transcription-client.ts       Browser audio WebSocket client
+src/lib/speaker-tracker.ts                  Speaker clusters and participation
+services/transcription/server.py            Local Whisper transcription server
+```
+
+## MVP Limits
+
+RoomPulse is Mode 2 only: a shared room display. It has no voice output and no
+private invisible assistant mode.
+
+Speaker labels are MVP-quality clusters, not biometric identity. They can be
+wrong when voices overlap, the microphone is poor, the room is noisy, or two
+voices are similar. Participation reminders compare expected participant count
+against observed `Speaker N` clusters; RoomPulse does not claim to know which
+named person has spoken.

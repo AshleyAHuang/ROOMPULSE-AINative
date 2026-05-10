@@ -1,0 +1,39 @@
+<svg width="960" height="360" viewBox="0 0 960 360" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">RoomPulse heartbeat loop</title>
+  <desc id="desc">The heartbeat loop gathers transcript and room state, calls the facilitator adapter, updates the room display, and saves the event.</desc>
+  <rect width="960" height="360" rx="34" fill="#F7F3EA"/>
+  <path d="M165 182C165 107 226 46 301 46H659C734 46 795 107 795 182C795 257 734 318 659 318H301C226 318 165 257 165 182Z" fill="#FFFDF8" stroke="#DED5C7"/>
+  <circle cx="480" cy="182" r="58" fill="#D7F3EA"/>
+  <circle cx="480" cy="182" r="42" stroke="#1F7A68" stroke-width="9" stroke-linecap="round" stroke-dasharray="188 76"/>
+  <text x="454" y="190" fill="#171512" font-family="Space Grotesk, Arial, sans-serif" font-size="33" font-weight="700">45</text>
+  <text x="443" y="214" fill="#6F6658" font-family="IBM Plex Mono, monospace" font-size="10" font-weight="600" letter-spacing="2">SECONDS</text>
+  <g font-family="DM Sans, Arial, sans-serif" font-size="16" font-weight="700" fill="#171512">
+    <rect x="68" y="136" width="180" height="92" rx="24" fill="#FFFFFF" stroke="#DED5C7"/>
+    <text x="102" y="171">Transcript delta</text>
+    <text x="102" y="197" fill="#6F6658" font-size="13" font-weight="500">latest raw lines</text>
+    <rect x="282" y="62" width="180" height="92" rx="24" fill="#FFFFFF" stroke="#DED5C7"/>
+    <text x="320" y="97">Room state</text>
+    <text x="320" y="123" fill="#6F6658" font-size="13" font-weight="500">agenda + voices</text>
+    <rect x="498" y="62" width="180" height="92" rx="24" fill="#FFFFFF" stroke="#DED5C7"/>
+    <text x="532" y="97">Pi adapter</text>
+    <text x="532" y="123" fill="#6F6658" font-size="13" font-weight="500">or local fallback</text>
+    <rect x="712" y="136" width="180" height="92" rx="24" fill="#171512"/>
+    <text x="748" y="171" fill="#FFF8EA">Visible nudge</text>
+    <text x="748" y="197" fill="#D6D0C3" font-size="13" font-weight="500">cards + reminder</text>
+    <rect x="390" y="236" width="180" height="72" rx="24" fill="#FFFFFF" stroke="#DED5C7"/>
+    <text x="431" y="267">Save event</text>
+    <text x="431" y="291" fill="#6F6658" font-size="13" font-weight="500">SQLite timeline</text>
+  </g>
+  <g stroke="#1F7A68" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M249 168C266 142 279 126 298 114"/>
+    <path d="M287 111H302V126"/>
+    <path d="M463 108H497"/>
+    <path d="M488 99L498 108L488 117"/>
+    <path d="M679 114C710 126 734 144 753 168"/>
+    <path d="M739 166H754V151"/>
+    <path d="M784 229C750 274 673 296 570 277"/>
+    <path d="M583 270L568 277L579 289"/>
+    <path d="M389 274C302 258 248 236 218 207"/>
+    <path d="M233 207H217V223"/>
+  </g>
+</svg>

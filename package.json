@@ -8,10 +8,12 @@
     "node": ">=24.0.0"
   },
   "scripts": {
+    "demo": "ROOMPULSE_PI_MODE=local next dev --hostname 127.0.0.1 --port 3000",
     "dev": "next dev",
     "dev:strict": "ROOMPULSE_REQUIRE_PI=1 NEXT_PUBLIC_ROOMPULSE_REQUIRE_PI=1 next dev",
     "transcription": "cd services/transcription && uv run uvicorn server:app --host 127.0.0.1 --port 8765",
     "build": "next build",
+    "check": "npm test && npm run build",
     "start": "next start",
     "smoke:heartbeat": "node scripts/smoke-heartbeat.mjs",
     "test": "vitest run",
