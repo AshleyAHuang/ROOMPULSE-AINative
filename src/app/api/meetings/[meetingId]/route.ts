@@ -5,6 +5,7 @@ import {
   type MeetingStatus,
   type PersistedMeetingState
 } from "@/lib/meeting-log-store";
+import { MAX_EXPECTED_PARTICIPANTS } from "@/lib/facilitator";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -144,7 +145,7 @@ function isMeeting(value: unknown): boolean {
     typeof value.context === "string" &&
     Array.isArray(value.agenda) &&
     value.agenda.every(isAgendaItem) &&
-    isIntegerAtLeast(value.expectedParticipants, 1) &&
+    isIntegerInRange(value.expectedParticipants, 1, MAX_EXPECTED_PARTICIPANTS) &&
     Array.isArray(value.participants) &&
     value.participants.every(isParticipant) &&
     isIntegerAtLeast(value.heartbeatIntervalSeconds, 15)
@@ -264,6 +265,14 @@ function isValidTimestamp(value: unknown): value is number {
 
 function isIntegerAtLeast(value: unknown, min: number): value is number {
   return isFiniteNumber(value) && Number.isInteger(value) && value >= min;
+}
+
+function isIntegerInRange(
+  value: unknown,
+  min: number,
+  max: number
+): value is number {
+  return isIntegerAtLeast(value, min) && value <= max;
 }
 
 function isConfidence(value: unknown): value is number {

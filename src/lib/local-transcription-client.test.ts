@@ -49,6 +49,10 @@ describe("local transcription audio utilities", () => {
       type: "configure"
     });
     expect(createResetControlMessage(0)).toEqual({ type: "reset" });
+    expect(createResetControlMessage(10_000)).toEqual({
+      type: "reset",
+      maxSpeakerClusters: 24
+    });
   });
 
   it("can reconfigure the live speaker cap on an open socket", () => {

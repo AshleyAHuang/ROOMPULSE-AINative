@@ -716,6 +716,45 @@ describe("/api/meetings", () => {
     });
   });
 
+  it("rejects excessive expected participant counts before UI replay can allocate them", async () => {
+    const createResponse = await POST(
+      jsonRequest({
+        meeting: {
+          ...validMeeting,
+          expectedParticipants: 10_000
+        }
+      })
+    );
+
+    expect(createResponse.status).toBe(400);
+    await expect(createResponse.json()).resolves.toEqual({
+      error: "Invalid meeting payload"
+    });
+
+    const validCreate = await POST(jsonRequest({ meeting: validMeeting }));
+    const created = await validCreate.json();
+    const timestamp = Date.now();
+    const state = persistedState(timestamp);
+    const patchResponse = await PATCH(
+      jsonRequest({
+        updatedAt: timestamp,
+        state: {
+          ...state,
+          meeting: {
+            ...state.meeting,
+            expectedParticipants: 10_000
+          }
+        }
+      }),
+      routeContext(created.id)
+    );
+
+    expect(patchResponse.status).toBe(400);
+    await expect(patchResponse.json()).resolves.toEqual({
+      error: "Invalid meeting state payload"
+    });
+  });
+
   it("rejects out-of-range meeting and event timestamps before persistence", async () => {
     const invalidCreate = await POST(
       jsonRequest({

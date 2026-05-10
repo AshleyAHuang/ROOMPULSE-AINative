@@ -1,3 +1,5 @@
+import { MAX_EXPECTED_PARTICIPANTS } from "./facilitator";
+
 export interface LocalTranscriptSegment {
   id: string;
   speakerId: string;
@@ -303,7 +305,9 @@ function normalizeSpeakerClusterCap(expectedParticipants: number | undefined): n
   }
 
   const maxSpeakerClusters = Math.floor(expectedParticipants);
-  return maxSpeakerClusters > 0 ? maxSpeakerClusters : null;
+  return maxSpeakerClusters > 0
+    ? Math.min(maxSpeakerClusters, MAX_EXPECTED_PARTICIPANTS)
+    : null;
 }
 
 function openSocket(url: string): Promise<WebSocket> {

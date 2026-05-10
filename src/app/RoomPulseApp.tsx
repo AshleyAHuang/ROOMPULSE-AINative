@@ -10,6 +10,7 @@ import {
 } from "react";
 import MarkdownDocument from "./MarkdownDocument";
 import {
+  MAX_EXPECTED_PARTICIPANTS,
   createHeartbeatInput,
   createInitialReviewMarkdown,
   getAgendaProgress,
@@ -1837,6 +1838,7 @@ export default function RoomPulseApp() {
                 <input
                   type="number"
                   min={1}
+                  max={MAX_EXPECTED_PARTICIPANTS}
                   value={meetingDraft.expectedParticipants}
                   onChange={(event) =>
                     setMeetingDraft((current) => ({
@@ -2017,6 +2019,7 @@ export default function RoomPulseApp() {
               <div className="settings-num">
                 <input
                   min={1}
+                  max={MAX_EXPECTED_PARTICIPANTS}
                   type="number"
                   value={meeting.expectedParticipants}
                   onChange={(event) =>
@@ -2025,7 +2028,8 @@ export default function RoomPulseApp() {
                       expectedParticipants: clampFiniteNumber(
                         Number(event.target.value),
                         current.expectedParticipants,
-                        1
+                        1,
+                        MAX_EXPECTED_PARTICIPANTS
                       )
                     }))
                   }
@@ -2157,7 +2161,15 @@ export default function RoomPulseApp() {
                   onChange={(event) => setDemoSpeaker(event.target.value)}
                 >
                   {Array.from(
-                    { length: Math.max(6, meeting.expectedParticipants) },
+                    {
+                      length: Math.max(
+                        6,
+                        Math.min(
+                          MAX_EXPECTED_PARTICIPANTS,
+                          meeting.expectedParticipants
+                        )
+                      )
+                    },
                     (_, index) => (
                       <option key={index + 1}>Speaker {index + 1}</option>
                     )
@@ -2887,7 +2899,12 @@ function normalizeMeetingDraft(
     title: draft.title.trim() || defaultMeeting.title,
     goal: draft.goal.trim() || defaultMeeting.goal,
     context: draft.context.trim(),
-    expectedParticipants: clampFiniteNumber(draft.expectedParticipants, 1, 1),
+    expectedParticipants: clampFiniteNumber(
+      draft.expectedParticipants,
+      1,
+      1,
+      MAX_EXPECTED_PARTICIPANTS
+    ),
     heartbeatIntervalSeconds: clampFiniteNumber(
       draft.heartbeatIntervalSeconds,
       15,
@@ -2998,9 +3015,15 @@ function parseParticipants(value: string) {
     });
 }
 
-function clampFiniteNumber(value: number, fallback: number, min: number): number {
+function clampFiniteNumber(
+  value: number,
+  fallback: number,
+  min: number,
+  max?: number
+): number {
   const finiteValue = Number.isFinite(value) ? value : fallback;
-  return Math.max(min, Math.floor(finiteValue));
+  const floored = Math.max(min, Math.floor(finiteValue));
+  return typeof max === "number" ? Math.min(max, floored) : floored;
 }
 
 function stringParam(value: unknown): string | null {
