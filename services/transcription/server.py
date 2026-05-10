@@ -548,9 +548,15 @@ class TranscriptionSession:
             return
 
         await self.send_status("transcribing", "Transcribing speech segment")
-        local_model = await ensure_model_loaded()
-        text = await transcribe_audio(local_model, audio, self.language)
+        try:
+            local_model = await ensure_model_loaded()
+            text = await transcribe_audio(local_model, audio, self.language)
+        except Exception as exc:
+            await self.send_error(f"Transcription failed: {exc}")
+            await self.send_status("listening", "Listening")
+            return
         if not text:
+            await self.send_status("listening", "Listening")
             return
 
         self.sequence += 1

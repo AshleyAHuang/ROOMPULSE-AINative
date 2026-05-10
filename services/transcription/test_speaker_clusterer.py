@@ -14,6 +14,7 @@ from server import (
     DspVoiceEmbedder,
     PyannoteVoiceEmbedder,
     SpeakerClusterer,
+    TranscriptionSession,
     VoiceEmbedding,
     build_dsp_voice_embedding,
     frame_rms,
@@ -260,6 +261,70 @@ class SpeakerClustererTest(unittest.TestCase):
             DEFAULT_NO_SPEECH_THRESHOLD,
         )
 
+    def test_flush_returns_to_listening_when_whisper_produces_no_text(self) -> None:
+        async def run() -> list[dict]:
+            websocket = FakeWebSocket()
+            session = TranscriptionSession(websocket)
+            session.min_seconds = 0.1
+            session.max_seconds = 2.0
+            await session.append_audio(float32_to_pcm16(synthetic_voice(150, seconds=0.5)))
+
+            previous_model = server.ensure_model_loaded
+            previous_transcribe = server.transcribe_audio
+
+            async def fake_model():
+                return object()
+
+            async def fake_transcribe(_model, _audio, _language):
+                return ""
+
+            server.ensure_model_loaded = fake_model
+            server.transcribe_audio = fake_transcribe
+            try:
+                await session.flush(force=True)
+            finally:
+                server.ensure_model_loaded = previous_model
+                server.transcribe_audio = previous_transcribe
+
+            return websocket.messages
+
+        messages = asyncio.run(run())
+
+        self.assertEqual(
+            [message.get("status") for message in messages if message.get("type") == "engine_status"],
+            ["transcribing", "listening"],
+        )
+        self.assertFalse(any(message.get("type") == "final_transcript" for message in messages))
+
+    def test_flush_reports_transcription_errors_without_killing_session(self) -> None:
+        async def run() -> list[dict]:
+            websocket = FakeWebSocket()
+            session = TranscriptionSession(websocket)
+            session.min_seconds = 0.1
+            session.max_seconds = 2.0
+            await session.append_audio(float32_to_pcm16(synthetic_voice(150, seconds=0.5)))
+
+            previous_model = server.ensure_model_loaded
+
+            async def fake_model():
+                raise RuntimeError("model dropped")
+
+            server.ensure_model_loaded = fake_model
+            try:
+                await session.flush(force=True)
+            finally:
+                server.ensure_model_loaded = previous_model
+
+            return websocket.messages
+
+        messages = asyncio.run(run())
+
+        self.assertIn(
+            {"type": "engine_error", "message": "Transcription failed: model dropped"},
+            messages,
+        )
+        self.assertEqual(messages[-1].get("status"), "listening")
+
 
 class FixedEmbeddingVoiceEmbedder:
     name = "test-neural"
@@ -299,6 +364,18 @@ class FakeWhisperModel:
     def transcribe(self, _audio: np.ndarray, **kwargs):
         self.kwargs = kwargs
         return [FakeSegment(" hello room ")], {}
+
+
+class FakeWebSocket:
+    def __init__(self) -> None:
+        self.messages: list[dict] = []
+
+    async def send_json(self, payload: dict) -> None:
+        self.messages.append(payload)
+
+
+def float32_to_pcm16(audio: np.ndarray) -> bytes:
+    return (np.clip(audio, -1.0, 1.0) * 32767.0).astype(np.int16).tobytes()
 
 
 def restore_env(name: str, value: str | None) -> None:
