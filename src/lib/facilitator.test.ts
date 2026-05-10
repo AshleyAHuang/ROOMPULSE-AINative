@@ -173,4 +173,33 @@ describe("heartbeat facilitation", () => {
       expect.objectContaining({ itemId: "a2", done: true })
     );
   });
+
+  it("does not complete short agenda titles without title evidence", async () => {
+    const shortTitleMeeting: MeetingConfig = {
+      ...meeting,
+      agenda: [{ id: "qa", title: "QA", done: false }]
+    };
+    const input = createHeartbeatInput({
+      meeting: shortTitleMeeting,
+      transcript: [
+        {
+          id: "t7",
+          speakerId: "speaker-1",
+          speakerLabel: "Speaker 1",
+          text: "That unrelated question is resolved.",
+          timestamp: 7_000,
+          source: "simulated",
+          confidence: 1
+        }
+      ],
+      observedSpeakerLabels: ["Speaker 1"],
+      lastHeartbeatAt: 6_000,
+      now: 8_000,
+      priorInterventions: []
+    });
+
+    const output = await runLocalFacilitation(input);
+
+    expect(output.agendaActions).toEqual([]);
+  });
 });

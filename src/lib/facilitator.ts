@@ -646,7 +646,7 @@ function inferAgendaActions(
   }
   const activeTitleTokens = tokenizeTitle(active.title);
   if (
-    activeTitleTokens.length > 0 &&
+    activeTitleTokens.length === 0 ||
     !isCoverageCueForItem(combinedText, activeTitleTokens)
   ) {
     return [];
