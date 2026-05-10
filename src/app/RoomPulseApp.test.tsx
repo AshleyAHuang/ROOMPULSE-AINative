@@ -805,6 +805,116 @@ describe("RoomPulseApp", () => {
     ).toBeVisible();
   });
 
+  it("resumes the materialized latest review instead of stale persisted markdown", async () => {
+    const now = Date.now();
+    const meeting = {
+      title: "Stale state session",
+      goal: "Prefer materialized review rows.",
+      context: "",
+      agenda: [{ id: "a1", title: "Open", done: false }],
+      expectedParticipants: 1,
+      participants: [],
+      heartbeatIntervalSeconds: 30
+    };
+    const staleState = {
+      status: "paused",
+      meeting,
+      transcript: [],
+      reviewMarkdown: "# Stale review\n\nOld body",
+      reviewVersions: [
+        {
+          id: "stale-review",
+          timestamp: now - 1_000,
+          source: "pi",
+          markdown: "# Stale review\n\nOld body",
+          summary: "Stale review."
+        }
+      ],
+      currentReviewVersionId: "stale-review",
+      timeline: [],
+      lastHeartbeatAt: now - 1_000,
+      nextHeartbeatAt: now + 30_000,
+      meetingStartedAt: now - 60_000,
+      heartbeatCount: 1,
+      isPaused: true,
+      currentOutput: null,
+      activeAgendaItemId: "a1",
+      updatedAt: now - 1_000
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/meetings") {
+        return Response.json({
+          meetings: [
+            {
+              id: "stale-session",
+              title: meeting.title,
+              goal: meeting.goal,
+              startedAt: now - 60_000,
+              updatedAt: now,
+              endedAt: null,
+              status: "paused",
+              isPaused: true,
+              eventCount: 2,
+              meeting,
+              state: staleState,
+              latestReviewMarkdown: "# New review\n\nNew materialized body",
+              latestReviewVersionId: "new-review"
+            }
+          ]
+        });
+      }
+      if (url === "/api/meetings/stale-session") {
+        return Response.json({
+          metadata: {
+            id: "stale-session",
+            title: meeting.title,
+            goal: meeting.goal,
+            startedAt: now - 60_000,
+            updatedAt: now,
+            endedAt: null,
+            status: "paused",
+            isPaused: true,
+            eventCount: 2,
+            meeting,
+            state: staleState,
+            latestReviewMarkdown: "# New review\n\nNew materialized body",
+            latestReviewVersionId: "new-review"
+          },
+          events: [],
+          transcript: [],
+          reviewVersions: [
+            {
+              id: "new-review",
+              timestamp: now,
+              source: "pi",
+              markdown: "# New review\n\nNew materialized body",
+              summary: "New review."
+            }
+          ]
+        });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: /refresh/i })[0]);
+    });
+    await act(async () => {
+      fireEvent.click(
+        await screen.findByRole("button", { name: /^resume$/i })
+      );
+    });
+
+    expect(await screen.findByText(/new materialized body/i)).toBeVisible();
+    expect(screen.queryByText(/old body/i)).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("combobox", { name: /review versions/i })
+    ).toHaveValue("new-review");
+  });
+
   it("retries queued meeting log events after a transient event write failure", async () => {
     let eventWrites = 0;
     const fetchMock = vi.fn(

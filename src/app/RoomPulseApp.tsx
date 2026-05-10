@@ -752,10 +752,11 @@ export default function RoomPulseApp() {
     );
     const restoredVersions =
       mergeReviewVersions(restoredState.reviewVersions, snapshot.reviewVersions);
+    const latestRestoredVersion = restoredVersions[0] ?? null;
     const restoredReviewMarkdown =
-      restoredState.reviewMarkdown ||
+      latestRestoredVersion?.markdown ||
       snapshot.metadata.latestReviewMarkdown ||
-      restoredVersions[0]?.markdown ||
+      restoredState.reviewMarkdown ||
       createInitialReviewMarkdown(restoredMeeting);
     const paused =
       snapshot.metadata.status === "paused" || restoredState.isPaused;
@@ -778,7 +779,7 @@ export default function RoomPulseApp() {
     }
 
     transcriptStoreRef.current.replace(restoredTranscript);
-    reviewLastUpdatedAtRef.current = restoredVersions[0]?.timestamp ?? nowMs;
+    reviewLastUpdatedAtRef.current = latestRestoredVersion?.timestamp ?? nowMs;
     meetingLogIdRef.current = snapshot.metadata.id;
     setMeetingLogId(snapshot.metadata.id);
     setMeeting(restoredMeeting);
@@ -817,8 +818,8 @@ export default function RoomPulseApp() {
           ]
     );
     setCurrentReviewVersionId(
-      restoredState.currentReviewVersionId ||
-        restoredVersions[0]?.id ||
+      latestRestoredVersion?.id ||
+        restoredState.currentReviewVersionId ||
         `${snapshot.metadata.startedAt}-initial-review`
     );
     setActiveAgendaItemId(
