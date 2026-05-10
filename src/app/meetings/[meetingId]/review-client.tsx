@@ -50,7 +50,7 @@ export default function MeetingReviewClient({
     <main className="app-shell review-route">
       <header className="app-bar">
         <div className="app-bar-left">
-          <a className="icon-button" href="/" aria-label="Back to RoomPulse">
+          <a className="icon-button" href="/" aria-label="Back to dashboard">
             <MaterialIcon name="arrow_back" />
           </a>
           <BrandMark paused />
@@ -74,6 +74,10 @@ export default function MeetingReviewClient({
           <p>{snapshot.metadata.goal}</p>
         </div>
         <div className="review-actions" aria-label="Review actions">
+          <a className="pill-btn" href="/">
+            <MaterialIcon name="dashboard" />
+            Dashboard
+          </a>
           <button
             className="pill-btn"
             type="button"

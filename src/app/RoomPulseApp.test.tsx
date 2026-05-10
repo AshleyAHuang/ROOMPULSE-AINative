@@ -20,12 +20,89 @@ describe("RoomPulseApp", () => {
     });
   });
 
-  it("moves from setup feeder to room display with mic-first transcript controls", async () => {
+  function openSetupScreen() {
+    fireEvent.click(screen.getAllByRole("button", { name: /new meeting/i })[0]);
+    expect(
+      screen.getByRole("heading", { name: /roompulse setup/i })
+    ).toBeInTheDocument();
+  }
+
+  it("starts on the dashboard and can browse local meeting logs", async () => {
+    const now = Date.now();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/meetings") {
+        return Response.json({
+          meetings: [
+            {
+              id: "past-1",
+              title: "Past launch review",
+              goal: "Review export flow.",
+              startedAt: now,
+              updatedAt: now,
+              endedAt: now,
+              status: "ended",
+              isPaused: true,
+              eventCount: 3,
+              meeting: {},
+              state: null,
+              latestReviewMarkdown: "# Past launch review",
+              latestReviewVersionId: "v1"
+            }
+          ]
+        });
+      }
+      if (url.includes("/api/meetings/past-1")) {
+        return Response.json({
+          metadata: {
+            id: "past-1",
+            title: "Past launch review",
+            goal: "Review export flow.",
+            startedAt: now,
+            updatedAt: now,
+            endedAt: now,
+            status: "ended",
+            isPaused: true,
+            eventCount: 3,
+            meeting: {},
+            state: null,
+            latestReviewMarkdown: "# Past launch review",
+            latestReviewVersionId: "v1"
+          },
+          events: [
+            {
+              id: "event-1",
+              type: "meeting_started",
+              timestamp: now,
+              payload: {}
+            }
+          ],
+          transcript: [],
+          reviewVersions: []
+        });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
     render(<RoomPulseApp />);
 
     expect(
-      screen.getByRole("heading", { name: /roompulse/i })
+      screen.getByRole("heading", { name: /roompulse sessions/i })
     ).toBeInTheDocument();
+    expect(await screen.findByText(/past launch review/i)).toBeVisible();
+
+    fireEvent.click(screen.getAllByRole("button", { name: /past launch review/i })[0]);
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/meetings/past-1");
+    });
+    expect(await screen.findByText(/1 logged events/i)).toBeVisible();
+  });
+
+  it("moves from setup feeder to room display with mic-first transcript controls", async () => {
+    render(<RoomPulseApp />);
+
+    await openSetupScreen();
 
     fireEvent.change(screen.getByLabelText(/meeting title/i), {
       target: { value: "Design review" }
@@ -59,6 +136,7 @@ describe("RoomPulseApp", () => {
 
     render(<RoomPulseApp />);
 
+    await openSetupScreen();
     fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
     fireEvent.click(
       await screen.findByRole("button", { name: /run heartbeat/i })
@@ -107,6 +185,7 @@ describe("RoomPulseApp", () => {
 
     render(<RoomPulseApp />);
 
+    await openSetupScreen();
     fireEvent.click(screen.getByRole("button", { name: /launch live demo/i }));
 
     expect(
@@ -159,6 +238,7 @@ describe("RoomPulseApp", () => {
 
     render(<RoomPulseApp />);
 
+    await openSetupScreen();
     fireEvent.click(screen.getByRole("button", { name: /launch live demo/i }));
 
     expect(
@@ -214,6 +294,7 @@ describe("RoomPulseApp", () => {
 
     render(<RoomPulseApp />);
 
+    openSetupScreen();
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /launch live demo/i }));
     });
@@ -256,6 +337,7 @@ describe("RoomPulseApp", () => {
   it("clamps invalid numeric setup values before starting the room display", async () => {
     render(<RoomPulseApp />);
 
+    await openSetupScreen();
     fireEvent.change(screen.getByLabelText(/expected participants/i), {
       target: { value: "not-a-number" }
     });
@@ -271,6 +353,7 @@ describe("RoomPulseApp", () => {
   it("hides the stop mic control until mic mode is active", async () => {
     render(<RoomPulseApp />);
 
+    await openSetupScreen();
     fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
 
     expect(
@@ -284,6 +367,7 @@ describe("RoomPulseApp", () => {
   it("checks an agenda item when the transcript says it was covered", async () => {
     render(<RoomPulseApp />);
 
+    await openSetupScreen();
     fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
     expect(
       await screen.findByRole("button", { name: /run heartbeat now/i })

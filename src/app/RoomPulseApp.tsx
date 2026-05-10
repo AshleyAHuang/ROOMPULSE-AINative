@@ -33,7 +33,7 @@ import {
   DEMO_SCRIPT
 } from "@/lib/demo-script";
 
-type Phase = "setup" | "meeting";
+type Phase = "dashboard" | "setup" | "meeting";
 type TranscriptMode = "demo" | "mic";
 type MeetingStatus = "active" | "paused" | "ended";
 
@@ -129,7 +129,7 @@ const demoSnippets = [
 const DEFAULT_CLIENT_PI_TIMEOUT_MS = 15_000;
 
 export default function RoomPulseApp() {
-  const [phase, setPhase] = useState<Phase>("setup");
+  const [phase, setPhase] = useState<Phase>("dashboard");
   const [meetingDraft, setMeetingDraft] = useState(defaultMeeting);
   const [agendaText, setAgendaText] = useState(
     defaultMeeting.agenda.map((item) => item.title).join("\n")
@@ -241,6 +241,14 @@ export default function RoomPulseApp() {
     agendaProgress.active ??
     meeting.agenda[0] ??
     null;
+  const dashboardStats = useMemo(
+    () => ({
+      total: pastMeetings.length,
+      live: pastMeetings.filter((item) => item.status !== "ended").length,
+      ended: pastMeetings.filter((item) => item.status === "ended").length
+    }),
+    [pastMeetings]
+  );
 
   const configuredDraftMeeting = useMemo(
     () =>
@@ -1081,7 +1089,7 @@ export default function RoomPulseApp() {
   }, [transcript.length]);
 
   useEffect(() => {
-    if (phase === "setup") {
+    if (phase === "dashboard" || phase === "setup") {
       void refreshPastMeetings();
     }
   }, [phase, refreshPastMeetings]);
@@ -1406,10 +1414,170 @@ export default function RoomPulseApp() {
     }
   }
 
+  function startNewMeetingSetup() {
+    endingSessionRef.current = false;
+    stopMic();
+    stopScriptedDemo();
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+    transcriptStoreRef.current.clear();
+    meetingLogIdRef.current = null;
+    pendingLogEventsRef.current = [];
+    setMeetingLogId(null);
+    setReviewHandoffUrl(null);
+    setHeartbeatError(null);
+    setEphemeralReminder(null);
+    setSelectedMeetingLog(null);
+    setIsPastMeetingsOpen(false);
+    setShowSettings(false);
+    setTranscript([]);
+    setTimeline([]);
+    setCurrentOutput(null);
+    setHeartbeatCount(0);
+    setLastHeartbeatAt(0);
+    setNextHeartbeatAt(0);
+    setMeetingStartedAt(0);
+    setIsPaused(false);
+    setMeeting(defaultMeeting);
+    setMeetingDraft(defaultMeeting);
+    setAgendaText(defaultMeeting.agenda.map((item) => item.title).join("\n"));
+    setParticipantsText(
+      defaultMeeting.participants
+        .map((participant) =>
+          participant.role
+            ? `${participant.name} - ${participant.role}`
+            : participant.name
+        )
+        .join("\n")
+    );
+    const initialReview = createInitialReviewMarkdown(defaultMeeting);
+    setReviewMarkdown(initialReview);
+    setReviewVersions([
+      {
+        id: "initial-review",
+        timestamp: Date.now(),
+        source: "initial",
+        markdown: initialReview,
+        summary: "Initial meeting review document."
+      }
+    ]);
+    setCurrentReviewVersionId("initial-review");
+    setActiveAgendaItemId(
+      defaultMeeting.agenda.find((item) => !item.done)?.id ??
+        defaultMeeting.agenda[0]?.id ??
+        null
+    );
+    setLogStatus("Preparing new meeting.");
+    setPhase("setup");
+  }
+
+  function returnToDashboard() {
+    stopMic();
+    stopScriptedDemo();
+    setShowSettings(false);
+    setIsPastMeetingsOpen(false);
+    setSelectedMeetingLog(null);
+    setReviewHandoffUrl(null);
+    setPhase("dashboard");
+    void refreshPastMeetings();
+  }
+
+  if (phase === "dashboard") {
+    return (
+      <main className="app-shell dashboard-shell">
+        <header className="app-topbar dashboard-topbar">
+          <BrandMark />
+          <div className="dashboard-topbar-actions">
+            <button
+              className="btn outlined"
+              type="button"
+              onClick={() => void refreshPastMeetings()}
+            >
+              <MaterialIcon name="refresh" />
+              Refresh
+            </button>
+            <button
+              className="btn primary"
+              type="button"
+              onClick={startNewMeetingSetup}
+            >
+              <MaterialIcon name="add" />
+              New meeting
+            </button>
+          </div>
+        </header>
+
+        <section className="dashboard-workspace" aria-labelledby="dashboard-title">
+          <section className="dashboard-main">
+            <div className="section-kicker">Dashboard</div>
+            <h1 id="dashboard-title">RoomPulse sessions</h1>
+            <p>
+              Start a room display, resume an active session, or open the final
+              review for an ended meeting.
+            </p>
+            <div className="dashboard-actions">
+              <button
+                className="primary-action dashboard-primary-action"
+                type="button"
+                onClick={startNewMeetingSetup}
+              >
+                <MaterialIcon name="add_circle" filled />
+                New meeting
+              </button>
+              <button
+                className="btn outlined dashboard-demo-action"
+                disabled={isInitializingReview}
+                type="button"
+                onClick={() => void launchLiveDemo()}
+              >
+                <MaterialIcon name="movie" />
+                {isInitializingReview ? "Starting demo..." : "Launch live demo"}
+              </button>
+            </div>
+            <div className="dashboard-stat-grid" aria-label="Meeting log summary">
+              <div>
+                <strong>{dashboardStats.total}</strong>
+                <span>sessions</span>
+              </div>
+              <div>
+                <strong>{dashboardStats.live}</strong>
+                <span>resumable</span>
+              </div>
+              <div>
+                <strong>{dashboardStats.ended}</strong>
+                <span>ended</span>
+              </div>
+            </div>
+          </section>
+
+          <PastMeetingPanel
+            meetings={pastMeetings}
+            selectedMeetingLog={selectedMeetingLog}
+            title="Past meetings"
+            emptyLabel="No local meeting logs yet."
+            onOpen={(id) => void openMeetingLog(id)}
+            onRefresh={() => void refreshPastMeetings()}
+            onSelect={(id) => void loadPastMeetingLog(id)}
+          />
+        </section>
+      </main>
+    );
+  }
+
   if (phase === "setup") {
     return (
       <main className="app-shell setup-shell">
         <header className="app-topbar setup-topbar">
+          <button
+            aria-label="Back to dashboard"
+            className="icon-button"
+            type="button"
+            onClick={returnToDashboard}
+          >
+            <MaterialIcon name="arrow_back" />
+          </button>
           <BrandMark />
           <div className="topbar-title">
             <span>Prepare the shared display</span>
@@ -1621,47 +1789,16 @@ export default function RoomPulseApp() {
                   ))}
               </ol>
             </section>
-            <section className="setup-card past-meetings">
-              <div className="setup-card-title">
-                <strong>Past meetings</strong>
-                <button type="button" onClick={() => void refreshPastMeetings()}>
-                  Refresh
-                </button>
-              </div>
-              {pastMeetings.length === 0 ? (
-                <p>No local meeting logs yet.</p>
-              ) : (
-                <div className="past-meeting-list">
-                  {pastMeetings.slice(0, 5).map((pastMeeting) => (
-                    <button
-                      key={pastMeeting.id}
-                      type="button"
-                      onClick={() => void openMeetingLog(pastMeeting.id)}
-                    >
-                      <strong>{pastMeeting.title}</strong>
-                      <span>
-                        {pastMeeting.status} - {pastMeeting.eventCount} events -{" "}
-                        {formatClock(pastMeeting.startedAt)}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
-              {selectedMeetingLog ? (
-                <div className="meeting-log-preview">
-                  <div>
-                    <strong>{selectedMeetingLog.metadata.title}</strong>
-                    <span>{selectedMeetingLog.events.length} logged events</span>
-                  </div>
-                  {selectedMeetingLog.events.slice(-6).map((event) => (
-                    <p key={event.id}>
-                      <span>{formatClock(event.timestamp)}</span>
-                      {event.type.replaceAll("_", " ")}
-                    </p>
-                  ))}
-                </div>
-              ) : null}
-            </section>
+            <PastMeetingPanel
+              meetings={pastMeetings}
+              selectedMeetingLog={selectedMeetingLog}
+              title="Past meetings"
+              emptyLabel="No local meeting logs yet."
+              limit={5}
+              onOpen={(id) => void openMeetingLog(id)}
+              onRefresh={() => void refreshPastMeetings()}
+              onSelect={(id) => void loadPastMeetingLog(id)}
+            />
           </aside>
         </section>
       </main>
@@ -1750,10 +1887,7 @@ export default function RoomPulseApp() {
           onSelect={(id) => void loadPastMeetingLog(id)}
           onOpen={(id) => void openMeetingLog(id)}
           onNewMeeting={() => {
-            setIsPastMeetingsOpen(false);
-            stopMic();
-            stopScriptedDemo();
-            setPhase("setup");
+            startNewMeetingSetup();
           }}
         />
       ) : null}
@@ -2174,6 +2308,101 @@ function HeartbeatRing({
         <span>{running ? "reviewing" : "s pulse"}</span>
       </div>
     </div>
+  );
+}
+
+function PastMeetingPanel({
+  meetings,
+  selectedMeetingLog,
+  title,
+  emptyLabel,
+  limit,
+  onRefresh,
+  onSelect,
+  onOpen
+}: {
+  meetings: ClientMeetingLogMetadata[];
+  selectedMeetingLog: ClientMeetingLogSnapshot | null;
+  title: string;
+  emptyLabel: string;
+  limit?: number;
+  onRefresh: () => void;
+  onSelect: (id: string) => void;
+  onOpen: (id: string) => void;
+}) {
+  const visibleMeetings =
+    typeof limit === "number" ? meetings.slice(0, limit) : meetings;
+
+  return (
+    <section className="setup-card past-meetings">
+      <div className="setup-card-title">
+        <strong>{title}</strong>
+        <button type="button" onClick={onRefresh}>
+          Refresh
+        </button>
+      </div>
+      {visibleMeetings.length === 0 ? (
+        <p>{emptyLabel}</p>
+      ) : (
+        <div className="past-meeting-list">
+          {visibleMeetings.map((pastMeeting) => (
+            <article className="past-meeting-row" key={pastMeeting.id}>
+              <button
+                className="past-meeting-select"
+                type="button"
+                onClick={() => onSelect(pastMeeting.id)}
+              >
+                <span className={`drawer-dot ${pastMeeting.status}`} />
+                <span>
+                  <strong>{pastMeeting.title}</strong>
+                  <small>
+                    {pastMeeting.status} - {pastMeeting.eventCount} events -{" "}
+                    {formatClock(pastMeeting.startedAt)}
+                  </small>
+                </span>
+              </button>
+              <button
+                className="past-meeting-open"
+                type="button"
+                onClick={() => onOpen(pastMeeting.id)}
+              >
+                {pastMeeting.status === "ended" ? "Review" : "Resume"}
+              </button>
+            </article>
+          ))}
+        </div>
+      )}
+      {selectedMeetingLog ? (
+        <div className="meeting-log-preview">
+          <div>
+            <strong>{selectedMeetingLog.metadata.title}</strong>
+            <span>{selectedMeetingLog.events.length} logged events</span>
+          </div>
+          {selectedMeetingLog.events.slice(-6).map((event) => (
+            <p key={event.id}>
+              <span>{formatClock(event.timestamp)}</span>
+              {event.type.replaceAll("_", " ")}
+            </p>
+          ))}
+          <button
+            className="btn outlined"
+            type="button"
+            onClick={() => onOpen(selectedMeetingLog.metadata.id)}
+          >
+            <MaterialIcon
+              name={
+                selectedMeetingLog.metadata.status === "ended"
+                  ? "article"
+                  : "play_arrow"
+              }
+            />
+            {selectedMeetingLog.metadata.status === "ended"
+              ? "Open review"
+              : "Resume session"}
+          </button>
+        </div>
+      ) : null}
+    </section>
   );
 }
 
