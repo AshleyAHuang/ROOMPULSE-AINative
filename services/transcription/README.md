@@ -19,18 +19,22 @@ ROOMPULSE_WHISPER_MODEL=tiny.en uv run uvicorn server:app --host 127.0.0.1 --por
 
 Speaker clustering uses the deterministic local DSP embedder unless a stronger
 speaker-embedding backend is installed and selected. For better voice
-categorization, install the optional speaker stack and use SpeechBrain's ECAPA
-speaker encoder:
+categorization, install the optional speaker stack and use a neural speaker
+encoder from the pyannote.audio, SpeechBrain, or Resemblyzer projects:
 
 ```bash
 uv sync --extra speaker
+ROOMPULSE_SPEAKER_EMBEDDING_BACKEND=pyannote \
+  ROOMPULSE_PYANNOTE_AUTH_TOKEN=hf_... \
+  uv run uvicorn server:app --host 127.0.0.1 --port 8765
+
 ROOMPULSE_SPEAKER_EMBEDDING_BACKEND=speechbrain \
   uv run uvicorn server:app --host 127.0.0.1 --port 8765
 ```
 
-`ROOMPULSE_SPEAKER_EMBEDDING_BACKEND=auto` attempts SpeechBrain, then
-Resemblyzer, then the built-in DSP embedder. Use `dsp` for the fastest
-dependency-free local path.
+`ROOMPULSE_SPEAKER_EMBEDDING_BACKEND=auto` attempts pyannote first when a
+Hugging Face token is configured, then SpeechBrain, then Resemblyzer, then the
+built-in DSP embedder. Use `dsp` for the fastest dependency-free local path.
 
 Useful environment variables:
 
@@ -45,10 +49,17 @@ Useful environment variables:
 - `ROOMPULSE_TRANSCRIPTION_MIN_SECONDS`: default `2.0`
 - `ROOMPULSE_TRANSCRIPTION_MAX_SECONDS`: default `4.0`
 - `ROOMPULSE_SPEAKER_EMBEDDING_BACKEND`: `auto`, `speechbrain`, `resemblyzer`,
-  or `dsp`; default `auto`
+  `pyannote`, or `dsp`; default `auto`
 - `ROOMPULSE_SPEAKER_DISTANCE_THRESHOLD`: lower splits speaker clusters more
   aggressively, higher merges more aggressively. Defaults to `0.14` for DSP
   embeddings and `0.42` for neural embeddings.
+- `ROOMPULSE_WEBRTC_VAD`: default `1`; set `0` to disable optional WebRTC voice
+  activity detection when installed.
+- `ROOMPULSE_WEBRTC_VAD_MODE`: default `2`; valid values are `0` through `3`,
+  where higher is more aggressive.
+- `ROOMPULSE_PYANNOTE_MODEL`: default `pyannote/embedding`
+- `ROOMPULSE_PYANNOTE_AUTH_TOKEN`: Hugging Face token for gated pyannote models.
+- `ROOMPULSE_PYANNOTE_DEVICE`: optional Torch device override.
 - `ROOMPULSE_SPEECHBRAIN_MODEL`: default `speechbrain/spkrec-ecapa-voxceleb`
 - `ROOMPULSE_SPEECHBRAIN_DEVICE`: optional Torch device override
 - `ROOMPULSE_SPEECHBRAIN_SAVEDIR`: optional local SpeechBrain model cache

@@ -1,14 +1,19 @@
 import asyncio
+import os
 import unittest
 
 import numpy as np
 
+import server
 from server import (
     SAMPLE_RATE,
     DspVoiceEmbedder,
+    PyannoteVoiceEmbedder,
     SpeakerClusterer,
     VoiceEmbedding,
+    build_dsp_voice_embedding,
     frame_rms,
+    get_voice_embedder,
     trim_silence,
 )
 
@@ -95,6 +100,29 @@ class SpeakerClustererTest(unittest.TestCase):
         self.assertEqual(starts[0], 0)
         self.assertEqual(starts.size, rms.size)
         self.assertGreater(float(np.max(rms)), float(np.min(rms)))
+
+    def test_dsp_embedding_uses_stable_production_feature_vector(self) -> None:
+        low_voice = build_dsp_voice_embedding(synthetic_voice(110))
+        higher_voice = build_dsp_voice_embedding(synthetic_voice(210))
+
+        self.assertEqual(low_voice.shape, (20,))
+        self.assertTrue(np.all(np.isfinite(low_voice)))
+        self.assertGreater(float(np.linalg.norm(low_voice - higher_voice)), 0.25)
+
+    def test_explicit_pyannote_backend_can_be_selected_without_loading_model(self) -> None:
+        previous_backend = os.environ.get("ROOMPULSE_SPEAKER_EMBEDDING_BACKEND")
+        server.voice_embedder = None
+        os.environ["ROOMPULSE_SPEAKER_EMBEDDING_BACKEND"] = "pyannote"
+        try:
+            embedder = get_voice_embedder()
+        finally:
+            server.voice_embedder = None
+            if previous_backend is None:
+                os.environ.pop("ROOMPULSE_SPEAKER_EMBEDDING_BACKEND", None)
+            else:
+                os.environ["ROOMPULSE_SPEAKER_EMBEDDING_BACKEND"] = previous_backend
+
+        self.assertIsInstance(embedder, PyannoteVoiceEmbedder)
 
 
 class FixedEmbeddingVoiceEmbedder:

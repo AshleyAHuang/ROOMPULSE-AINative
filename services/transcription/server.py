@@ -6,7 +6,9 @@ import math
 import os
 import threading
 import time
+import wave
 from dataclasses import dataclass, field
+from tempfile import NamedTemporaryFile
 from typing import Protocol
 
 import numpy as np
@@ -35,7 +37,14 @@ DEFAULT_SPEAKER_EMBEDDING_BACKEND = "auto"
 DEFAULT_BEAM_SIZE = 5
 DEFAULT_BEST_OF = 5
 DEFAULT_NO_SPEECH_THRESHOLD = 0.55
+DEFAULT_VAD_MODE = 2
 SPEECHBRAIN_MODEL = "speechbrain/spkrec-ecapa-voxceleb"
+PYANNOTE_MODEL = "pyannote/embedding"
+
+try:
+    import webrtcvad
+except Exception:  # pragma: no cover - optional production dependency
+    webrtcvad = None
 
 
 app = FastAPI(title="RoomPulse Local Transcription")
@@ -69,6 +78,11 @@ async def health() -> JSONResponse:
                 DEFAULT_SPEAKER_EMBEDDING_BACKEND,
             ),
             "speakerEmbeddingActiveBackend": active_voice_embedder_name(),
+            "voiceActivityDetector": (
+                "webrtcvad"
+                if webrtcvad is not None and os.getenv("ROOMPULSE_WEBRTC_VAD", "1") != "0"
+                else "energy"
+            ),
             "importError": str(WHISPER_IMPORT_ERROR) if WHISPER_IMPORT_ERROR else None,
             "modelError": model_error,
         }
@@ -227,6 +241,58 @@ class SpeechBrainVoiceEmbedder:
         return self._classifier, self._torch
 
 
+class PyannoteVoiceEmbedder:
+    name = "pyannote-embedding"
+
+    def __init__(self) -> None:
+        self._inference = None
+        self._torch = None
+        self._lock = threading.Lock()
+
+    def embed(self, audio: np.ndarray) -> VoiceEmbedding:
+        with self._lock:
+            inference, torch = self._load()
+            waveform = torch.from_numpy(audio.astype(np.float32)).unsqueeze(0)
+            try:
+                embedding = inference({"waveform": waveform, "sample_rate": SAMPLE_RATE})
+            except Exception:
+                path = write_temp_wav(audio)
+                try:
+                    embedding = inference(path)
+                finally:
+                    try:
+                        os.unlink(path)
+                    except OSError:
+                        pass
+            vector = np.asarray(embedding, dtype=np.float32).reshape(-1)
+        return VoiceEmbedding(self.name, normalize_vector(vector))
+
+    def _load(self):
+        if self._inference is not None and self._torch is not None:
+            return self._inference, self._torch
+
+        from pyannote.audio import Inference, Model
+        import torch
+
+        model_name = os.getenv("ROOMPULSE_PYANNOTE_MODEL", PYANNOTE_MODEL)
+        token = (
+            os.getenv("ROOMPULSE_PYANNOTE_AUTH_TOKEN")
+            or os.getenv("HF_TOKEN")
+            or os.getenv("HUGGINGFACE_TOKEN")
+        )
+        try:
+            model = Model.from_pretrained(model_name, token=token)
+        except TypeError:
+            model = Model.from_pretrained(model_name, use_auth_token=token)
+        device = os.getenv("ROOMPULSE_PYANNOTE_DEVICE")
+        if device:
+            model.to(torch.device(device))
+        window = os.getenv("ROOMPULSE_PYANNOTE_WINDOW", "whole")
+        self._inference = Inference(model, window=window)
+        self._torch = torch
+        return self._inference, self._torch
+
+
 class ResemblyzerVoiceEmbedder:
     name = "resemblyzer"
 
@@ -265,7 +331,11 @@ class AutoVoiceEmbedder:
             if self._resolved is not None:
                 embedder = self._resolved
             else:
-                for candidate in (SpeechBrainVoiceEmbedder(), ResemblyzerVoiceEmbedder()):
+                candidates: list[VoiceEmbedder] = []
+                if has_pyannote_token():
+                    candidates.append(PyannoteVoiceEmbedder())
+                candidates.extend([SpeechBrainVoiceEmbedder(), ResemblyzerVoiceEmbedder()])
+                for candidate in candidates:
                     try:
                         embedding = candidate.embed(audio)
                         self._resolved = candidate
@@ -296,7 +366,9 @@ def get_voice_embedder() -> VoiceEmbedder:
             "ROOMPULSE_SPEAKER_EMBEDDING_BACKEND",
             DEFAULT_SPEAKER_EMBEDDING_BACKEND,
         ).lower()
-        if backend == "speechbrain":
+        if backend == "pyannote":
+            voice_embedder = PyannoteVoiceEmbedder()
+        elif backend == "speechbrain":
             voice_embedder = SpeechBrainVoiceEmbedder()
         elif backend == "resemblyzer":
             voice_embedder = ResemblyzerVoiceEmbedder()
@@ -312,6 +384,14 @@ def active_voice_embedder_name() -> str:
     if isinstance(embedder, AutoVoiceEmbedder) and embedder._resolved is not None:
         return embedder._resolved.name
     return embedder.name if embedder is not None else "not-loaded"
+
+
+def has_pyannote_token() -> bool:
+    return bool(
+        os.getenv("ROOMPULSE_PYANNOTE_AUTH_TOKEN")
+        or os.getenv("HF_TOKEN")
+        or os.getenv("HUGGINGFACE_TOKEN")
+    )
 
 
 class SpeakerClusterer:
@@ -524,12 +604,52 @@ def pcm16_to_float32(raw: bytes) -> np.ndarray:
     return data / 32768.0
 
 
+def write_temp_wav(audio: np.ndarray) -> str:
+    with NamedTemporaryFile(suffix=".wav", delete=False) as file:
+        path = file.name
+    pcm = (np.clip(audio, -1.0, 1.0) * 32767.0).astype(np.int16)
+    with wave.open(path, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(BYTES_PER_SAMPLE)
+        wav_file.setframerate(SAMPLE_RATE)
+        wav_file.writeframes(pcm.tobytes())
+    return path
+
+
 def has_speech(audio: np.ndarray) -> bool:
     if audio.size == 0:
         return False
+    if webrtcvad is not None and os.getenv("ROOMPULSE_WEBRTC_VAD", "1") != "0":
+        try:
+            return has_webrtc_speech(audio)
+        except Exception:
+            pass
     rms = float(np.sqrt(np.mean(np.square(audio))))
     peak = float(np.max(np.abs(audio)))
     return rms > 0.016 and peak > 0.055
+
+
+def has_webrtc_speech(audio: np.ndarray) -> bool:
+    if audio.size < int(SAMPLE_RATE * 0.03):
+        return False
+
+    mode = int(os.getenv("ROOMPULSE_WEBRTC_VAD_MODE", str(DEFAULT_VAD_MODE)))
+    vad = webrtcvad.Vad(max(0, min(3, mode)))  # type: ignore[union-attr]
+    frame_ms = 30
+    frame_size = int(SAMPLE_RATE * frame_ms / 1000)
+    audio = np.clip(audio, -1.0, 1.0)
+    pcm = (audio * 32767.0).astype(np.int16)
+    voiced = 0
+    total = 0
+    for start in range(0, pcm.size - frame_size + 1, frame_size):
+        frame = pcm[start : start + frame_size].tobytes()
+        if vad.is_speech(frame, SAMPLE_RATE):
+            voiced += 1
+        total += 1
+    if total == 0:
+        return False
+    voiced_ratio = voiced / total
+    return voiced >= 2 and voiced_ratio >= 0.18
 
 
 def prepare_speech_audio(audio: np.ndarray) -> np.ndarray:
@@ -624,7 +744,9 @@ def build_dsp_voice_embedding(audio: np.ndarray) -> np.ndarray:
     zcr = zero_crossing_rate(audio)
     rms = float(np.sqrt(np.mean(np.square(audio))))
     pitch = estimate_pitch(audio) / 320.0
-    bands = log_frequency_bands(spectrum, freqs, count=14)
+    bands = log_frequency_bands(spectrum, freqs, count=24)
+    cepstra = mfcc_like_cepstra(np.array(bands, dtype=np.float32), count=8)
+    contrast = spectral_contrast_features(spectrum, freqs, groups=6)
     return np.array(
         [
             clamp01(centroid),
@@ -633,7 +755,8 @@ def build_dsp_voice_embedding(audio: np.ndarray) -> np.ndarray:
             clamp01(zcr / 0.35),
             clamp01(rms),
             clamp01(pitch),
-            *bands,
+            *cepstra,
+            *contrast,
         ],
         dtype=np.float32,
     )
@@ -649,6 +772,36 @@ def log_frequency_bands(
         mask = (freqs >= left) & (freqs < right)
         ratio = float(np.sum(spectrum[mask]) / total)
         values.append(clamp01(math.log1p(ratio * 100.0) / math.log1p(100.0)))
+    return values
+
+
+def mfcc_like_cepstra(log_bands: np.ndarray, count: int) -> list[float]:
+    if log_bands.size == 0:
+        return [0.5] * count
+
+    band_count = log_bands.size
+    indices = np.arange(band_count, dtype=np.float32) + 0.5
+    coefficients: list[float] = []
+    for coefficient in range(1, count + 1):
+        basis = np.cos(np.pi * coefficient * indices / band_count)
+        value = float(np.sum(log_bands * basis) / max(1.0, float(band_count)))
+        coefficients.append(clamp01((value + 0.5) / 1.0))
+    return coefficients
+
+
+def spectral_contrast_features(
+    spectrum: np.ndarray, freqs: np.ndarray, groups: int
+) -> list[float]:
+    edges = np.geomspace(80, 8_000, groups + 1)
+    values: list[float] = []
+    for left, right in zip(edges[:-1], edges[1:]):
+        band = spectrum[(freqs >= left) & (freqs < right)]
+        if band.size == 0:
+            values.append(0.0)
+            continue
+        low = float(np.percentile(band, 10))
+        high = float(np.percentile(band, 90))
+        values.append(clamp01((math.log1p(high) - math.log1p(low)) / math.log1p(high + 1.0)))
     return values
 
 
@@ -723,7 +876,7 @@ def estimate_pitch(audio: np.ndarray) -> float:
 
 
 VOICE_DISTANCE_WEIGHTS = np.array(
-    [1.2, 0.8, 1.0, 0.8, 0.2, 3.6, *([0.35] * 14)],
+    [1.2, 0.8, 1.0, 0.8, 0.2, 3.6, *([0.7] * 8), *([0.45] * 6)],
     dtype=np.float32,
 )
 

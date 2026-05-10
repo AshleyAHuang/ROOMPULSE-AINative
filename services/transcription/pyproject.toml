@@ -12,8 +12,10 @@ dependencies = [
 
 [project.optional-dependencies]
 speaker = [
+  "pyannote.audio>=3.3.0",
   "resemblyzer>=0.1.4",
   "speechbrain>=1.0.0",
+  "webrtcvad>=2.0.10",
 ]
 
 [tool.uv]

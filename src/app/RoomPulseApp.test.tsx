@@ -161,6 +161,100 @@ describe("RoomPulseApp", () => {
     expect(screen.getByText(/2 versions/i)).toBeVisible();
   });
 
+  it("versions the markdown produced by an update_review_document tool", async () => {
+    const toolMarkdown = "# Tool markdown\n\nUpdated through the UI tool.";
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/meetings" && method === "GET") {
+          return Response.json({ meetings: [] });
+        }
+        if (url.includes("/api/review-document/init")) {
+          return Response.json({
+            source: "pi",
+            markdown: "# Initial review",
+            summary: "Initialized."
+          });
+        }
+        if (url === "/api/meetings" && method === "POST") {
+          return Response.json(
+            {
+              id: "meeting-tool-review",
+              title: "Tool review",
+              goal: "Validate tool markdown versioning.",
+              startedAt: Date.now(),
+              updatedAt: Date.now(),
+              endedAt: null,
+              status: "active",
+              isPaused: false,
+              eventCount: 0,
+              meeting: {},
+              state: null,
+              latestReviewMarkdown: "",
+              latestReviewVersionId: null
+            },
+            { status: 201 }
+          );
+        }
+        if (url.includes("/api/heartbeat")) {
+          return Response.json({
+            source: "pi",
+            cards: [
+              {
+                id: "tool-card",
+                kind: "heartbeat",
+                title: "Tool update",
+                body: "Updated markdown through a UI tool.",
+                priority: "medium"
+              }
+            ],
+            summary: "Tool markdown applied.",
+            nextHeartbeatHint: "Continue.",
+            reviewMarkdown: "# Stale markdown",
+            agendaActions: [],
+            uiActions: [
+              {
+                tool: "update_review_document",
+                parameters: { markdown: toolMarkdown },
+                reason: "Agent edited the document through the UI tool."
+              }
+            ],
+            ephemeralReminder: null
+          });
+        }
+        if (url.includes("/events")) {
+          return Response.json({ id: "event-1" }, { status: 201 });
+        }
+        if (url.includes("/api/meetings/meeting-tool-review")) {
+          return Response.json({ id: "meeting-tool-review" });
+        }
+        return Response.json({});
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /run heartbeat/i }));
+    });
+
+    expect(await screen.findByText(/updated through the ui tool/i)).toBeVisible();
+    expect(screen.queryByText(/stale markdown/i)).not.toBeInTheDocument();
+    await waitFor(() => {
+      const heartbeatEvent = fetchMock.mock.calls
+        .filter(([url]) => String(url).includes("/events"))
+        .map(([, init]) => JSON.parse(String(init?.body ?? "{}")))
+        .find((event) => event.type === "heartbeat_output");
+      expect(heartbeatEvent?.payload.output.reviewMarkdown).toBe(toolMarkdown);
+    });
+  });
+
   it("launches the live demo from the setup screen", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

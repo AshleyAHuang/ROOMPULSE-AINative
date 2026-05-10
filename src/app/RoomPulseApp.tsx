@@ -450,42 +450,48 @@ export default function RoomPulseApp() {
 
   const applyHeartbeatOutput = useCallback(
     (output: FacilitatorOutput, heartbeatNow: number) => {
-      setCurrentOutput(output);
-      setReviewMarkdown(output.reviewMarkdown);
+      const finalReviewMarkdown = reviewMarkdownFromOutput(output);
+      const finalOutput =
+        finalReviewMarkdown === output.reviewMarkdown
+          ? output
+          : { ...output, reviewMarkdown: finalReviewMarkdown };
+
+      setCurrentOutput(finalOutput);
+      setReviewMarkdown(finalReviewMarkdown);
       setCurrentReviewVersionId(`${heartbeatNow}-review`);
       setReviewVersions((versions) => [
         {
           id: `${heartbeatNow}-review`,
           timestamp: heartbeatNow,
-          source: output.source,
-          markdown: output.reviewMarkdown,
-          summary: output.summary
+          source: finalOutput.source,
+          markdown: finalReviewMarkdown,
+          summary: finalOutput.summary
         },
         ...versions
       ]);
-      setEphemeralReminder(output.ephemeralReminder);
-      if (output.agendaActions.length > 0) {
-        applyAgendaActions(output.agendaActions);
+      setEphemeralReminder(finalOutput.ephemeralReminder);
+      if (finalOutput.agendaActions.length > 0) {
+        applyAgendaActions(finalOutput.agendaActions);
       }
-      if (output.uiActions?.length > 0) {
-        applyUiActions(output.uiActions);
+      if (finalOutput.uiActions?.length > 0) {
+        applyUiActions(finalOutput.uiActions);
       }
       setTimeline((entries) => [
         {
           id: `${heartbeatNow}-${entries.length + 1}`,
           timestamp: heartbeatNow,
-          source: output.source,
-          cards: output.cards,
-          summary: output.summary,
-          reviewMarkdown: output.reviewMarkdown,
-          reminder: output.ephemeralReminder
+          source: finalOutput.source,
+          cards: finalOutput.cards,
+          summary: finalOutput.summary,
+          reviewMarkdown: finalReviewMarkdown,
+          reminder: finalOutput.ephemeralReminder
         },
         ...entries
       ]);
       logMeetingEvent(
         "heartbeat_output",
         {
-          output,
+          output: finalOutput,
           reviewVersionId: `${heartbeatNow}-review`
         },
         heartbeatNow
@@ -2835,6 +2841,13 @@ function clampFiniteNumber(value: number, fallback: number, min: number): number
 
 function stringParam(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function reviewMarkdownFromOutput(output: FacilitatorOutput): string {
+  const reviewAction = [...(output.uiActions ?? [])]
+    .reverse()
+    .find((action) => action.tool === "update_review_document");
+  return stringParam(reviewAction?.parameters.markdown) ?? output.reviewMarkdown;
 }
 
 function booleanParam(value: unknown): boolean | null {
