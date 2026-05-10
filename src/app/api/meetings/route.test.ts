@@ -667,6 +667,17 @@ describe("/api/meetings", () => {
       error: "Invalid meeting timestamp"
     });
 
+    const invalidCreateType = await POST(
+      jsonRequest({
+        meeting: validMeeting,
+        startedAt: "not-a-timestamp"
+      })
+    );
+    expect(invalidCreateType.status).toBe(400);
+    await expect(invalidCreateType.json()).resolves.toEqual({
+      error: "Invalid meeting timestamp"
+    });
+
     const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
     const created = await createResponse.json();
     const invalidEvent = await POST_EVENT(

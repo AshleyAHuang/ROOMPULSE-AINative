@@ -27,19 +27,18 @@ export async function POST(request: Request) {
   }
 
   try {
-    const startedAt =
-      typeof payload.startedAt === "number" && isValidTimestamp(payload.startedAt)
-        ? payload.startedAt
-        : Date.now();
     if (
-      typeof payload.startedAt === "number" &&
-      !isValidTimestamp(payload.startedAt)
+      "startedAt" in payload &&
+      (typeof payload.startedAt !== "number" ||
+        !isValidTimestamp(payload.startedAt))
     ) {
       return NextResponse.json(
         { error: "Invalid meeting timestamp" },
         { status: 400 }
       );
     }
+    const startedAt =
+      typeof payload.startedAt === "number" ? payload.startedAt : Date.now();
     const metadata = await createMeetingLog(payload.meeting, startedAt);
     return NextResponse.json(metadata, { status: 201 });
   } catch (error) {
