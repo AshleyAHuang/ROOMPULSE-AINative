@@ -279,7 +279,11 @@ export function downsample(
   sourceSampleRate: number,
   targetSampleRate: number
 ): Float32Array {
-  if (sourceSampleRate === targetSampleRate) {
+  if (input.length === 0 || sourceSampleRate <= 0 || targetSampleRate <= 0) {
+    return new Float32Array();
+  }
+
+  if (sourceSampleRate <= targetSampleRate) {
     return input;
   }
 

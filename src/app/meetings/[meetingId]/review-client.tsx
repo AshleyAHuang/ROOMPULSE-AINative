@@ -9,7 +9,7 @@ export default function MeetingReviewClient({
 }: {
   snapshot: MeetingLogSnapshot;
 }) {
-  const [copied, setCopied] = useState<string | null>(null);
+  const [copyMessage, setCopyMessage] = useState<string | null>(null);
   const latestMarkdown = useMemo(() => {
     return (
       snapshot.metadata.latestReviewMarkdown ||
@@ -31,11 +31,11 @@ export default function MeetingReviewClient({
   async function copy(label: string, value: string) {
     try {
       await copyText(value);
-      setCopied(label);
+      setCopyMessage(`Copied ${label}`);
     } catch {
-      setCopied(`${label} failed`);
+      setCopyMessage(`Could not copy ${label}`);
     }
-    window.setTimeout(() => setCopied(null), 1600);
+    window.setTimeout(() => setCopyMessage(null), 1600);
   }
 
   function exportTranscript() {
@@ -107,10 +107,10 @@ export default function MeetingReviewClient({
         </div>
       </section>
 
-      {copied ? (
+      {copyMessage ? (
         <div className="copy-toast" role="status">
           <MaterialIcon name="check_circle" />
-          Copied {copied}
+          {copyMessage}
         </div>
       ) : null}
 

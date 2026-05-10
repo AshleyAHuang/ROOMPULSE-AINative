@@ -56,18 +56,22 @@ function isHeartbeatPayload(value: unknown): value is CreateHeartbeatInputArgs {
     Array.isArray(value.transcript) &&
     value.transcript.every(isTranscriptLine) &&
     Array.isArray(value.observedSpeakerLabels) &&
-    value.observedSpeakerLabels.every((label) => typeof label === "string") &&
-    isFiniteNumber(value.lastHeartbeatAt) &&
-    isFiniteNumber(value.now) &&
+    value.observedSpeakerLabels.every(isNonEmptyString) &&
+    isValidTimestamp(value.lastHeartbeatAt) &&
+    isValidTimestamp(value.now) &&
+    value.now >= value.lastHeartbeatAt &&
     Array.isArray(value.priorInterventions) &&
     value.priorInterventions.every(isTimelineEntry) &&
     (value.currentReviewMarkdown === undefined ||
       typeof value.currentReviewMarkdown === "string") &&
-    (value.reviewVersions === undefined || Array.isArray(value.reviewVersions)) &&
+    (value.reviewVersions === undefined ||
+      (Array.isArray(value.reviewVersions) &&
+        value.reviewVersions.every(isReviewVersion))) &&
     (value.meetingStartedAt === undefined ||
-      isFiniteNumber(value.meetingStartedAt)) &&
+      isValidTimestamp(value.meetingStartedAt)) &&
     (value.isPaused === undefined || typeof value.isPaused === "boolean") &&
-    (value.heartbeatCount === undefined || isFiniteNumber(value.heartbeatCount))
+    (value.heartbeatCount === undefined ||
+      isIntegerAtLeast(value.heartbeatCount, 0))
   );
 }
 
@@ -113,7 +117,7 @@ function isTranscriptLine(value: unknown): boolean {
     isNonEmptyString(value.speakerId) &&
     isNonEmptyString(value.speakerLabel) &&
     typeof value.text === "string" &&
-    isFiniteNumber(value.timestamp) &&
+    isValidTimestamp(value.timestamp) &&
     isTranscriptSource(value.source) &&
     isConfidence(value.confidence)
   );
@@ -127,7 +131,7 @@ function isTimelineEntry(value: unknown): boolean {
   return (
     isRecord(value) &&
     isNonEmptyString(value.id) &&
-    isFiniteNumber(value.timestamp) &&
+    isValidTimestamp(value.timestamp) &&
     (value.source === "pi" ||
       value.source === "openrouter" ||
       value.source === "local-fallback") &&
@@ -146,12 +150,40 @@ function isFacilitatorCard(value: unknown): boolean {
   return (
     isRecord(value) &&
     isNonEmptyString(value.id) &&
-    typeof value.kind === "string" &&
+    isFacilitatorCardKind(value.kind) &&
     isNonEmptyString(value.title) &&
     typeof value.body === "string" &&
     (value.priority === "low" ||
       value.priority === "medium" ||
       value.priority === "high")
+  );
+}
+
+function isReviewVersion(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.id) &&
+    isValidTimestamp(value.timestamp) &&
+    (value.source === "pi" ||
+      value.source === "openrouter" ||
+      value.source === "local-fallback" ||
+      value.source === "initial" ||
+      value.source === "restored") &&
+    typeof value.markdown === "string" &&
+    typeof value.summary === "string"
+  );
+}
+
+function isFacilitatorCardKind(value: unknown): boolean {
+  return (
+    value === "heartbeat" ||
+    value === "participation" ||
+    value === "risk" ||
+    value === "agenda" ||
+    value === "decision" ||
+    value === "action" ||
+    value === "drift" ||
+    value === "reminder"
   );
 }
 
@@ -165,6 +197,14 @@ function isFiniteNumber(value: unknown): value is number {
 
 function isIntegerAtLeast(value: unknown, min: number): value is number {
   return isFiniteNumber(value) && Number.isInteger(value) && value >= min;
+}
+
+function isValidTimestamp(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    !Number.isNaN(new Date(value).getTime())
+  );
 }
 
 function isConfidence(value: unknown): value is number {

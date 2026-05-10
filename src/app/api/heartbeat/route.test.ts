@@ -133,6 +133,98 @@ describe("POST /api/heartbeat", () => {
     expect(runPiHeartbeat).not.toHaveBeenCalled();
   });
 
+  it("rejects unsafe heartbeat timestamps and counters before calling the agent", async () => {
+    const validLine = {
+      id: "line-1",
+      speakerId: "speaker-1",
+      speakerLabel: "Speaker 1",
+      text: "We need a launch owner.",
+      timestamp: 1_000,
+      source: "speech",
+      confidence: 0.9
+    };
+    const validIntervention = {
+      id: "pulse-1",
+      timestamp: 1_000,
+      source: "pi",
+      cards: [
+        {
+          id: "card-1",
+          kind: "heartbeat",
+          title: "Heartbeat",
+          body: "Keep going.",
+          priority: "medium"
+        }
+      ],
+      summary: "One cue.",
+      reminder: null
+    };
+    const invalidPayloads = [
+      { ...validPayload, now: 1e100 },
+      { ...validPayload, lastHeartbeatAt: 2_000, now: 1_000 },
+      { ...validPayload, meetingStartedAt: 1e100 },
+      { ...validPayload, heartbeatCount: -1 },
+      { ...validPayload, transcript: [{ ...validLine, timestamp: 1e100 }] },
+      {
+        ...validPayload,
+        priorInterventions: [{ ...validIntervention, timestamp: 1e100 }]
+      },
+      {
+        ...validPayload,
+        reviewVersions: [
+          {
+            id: "review-1",
+            timestamp: 1e100,
+            source: "pi",
+            markdown: "# Review",
+            summary: "Broken timestamp."
+          }
+        ]
+      }
+    ];
+
+    for (const payload of invalidPayloads) {
+      const response = await POST(jsonRequest(payload));
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: "Invalid heartbeat payload"
+      });
+    }
+    expect(runPiHeartbeat).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed speaker labels and card kinds in heartbeat history", async () => {
+    const response = await POST(
+      jsonRequest({
+        ...validPayload,
+        observedSpeakerLabels: [""],
+        priorInterventions: [
+          {
+            id: "pulse-1",
+            timestamp: 1_000,
+            source: "pi",
+            cards: [
+              {
+                id: "card-1",
+                kind: "unknown",
+                title: "Heartbeat",
+                body: "Keep going.",
+                priority: "medium"
+              }
+            ],
+            summary: "One cue."
+          }
+        ]
+      })
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid heartbeat payload"
+    });
+    expect(runPiHeartbeat).not.toHaveBeenCalled();
+  });
+
   it("marks strict Pi failures so the client does not silently fall back", async () => {
     process.env.ROOMPULSE_REQUIRE_PI = "1";
     vi.mocked(runPiHeartbeat).mockRejectedValue(new Error("Pi unavailable"));

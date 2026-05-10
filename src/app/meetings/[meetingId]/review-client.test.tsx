@@ -75,6 +75,23 @@ describe("MeetingReviewClient", () => {
     });
   });
 
+  it("shows a clear copy failure message", async () => {
+    vi.stubGlobal("navigator", {});
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: vi.fn(() => false)
+    });
+
+    render(<MeetingReviewClient snapshot={snapshot} />);
+    fireEvent.click(screen.getByRole("button", { name: /copy transcript/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "Could not copy transcript"
+      );
+    });
+  });
+
   it("exports transcript with a stable fallback filename", () => {
     const href = "blob:roompulse";
     const createObjectURL = vi.fn(() => href);
