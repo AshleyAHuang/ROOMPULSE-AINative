@@ -631,6 +631,21 @@ class SpeakerClustererTest(unittest.TestCase):
         self.assertEqual(messages[0]["message"], "Invalid control message")
         self.assertEqual(messages[-1]["status"], "configured")
 
+    def test_unknown_control_message_reports_error_without_killing_session(self) -> None:
+        async def run() -> tuple[int, list[dict]]:
+            websocket = FakeWebSocket()
+            session = TranscriptionSession(websocket)
+            await session.handle_control('{"type":"bogus","maxSpeakerClusters":999}')
+            await session.handle_control('{"type":"configure","maxSpeakerClusters":5}')
+            return session.clusterer.max_clusters, websocket.messages
+
+        max_clusters, messages = asyncio.run(run())
+
+        self.assertEqual(max_clusters, 5)
+        self.assertEqual(messages[0]["type"], "engine_error")
+        self.assertEqual(messages[0]["message"], "Unknown control message")
+        self.assertEqual(messages[-1]["status"], "configured")
+
     def test_transcribe_audio_falls_back_for_invalid_whisper_env(self) -> None:
         previous_beam = os.environ.get("ROOMPULSE_WHISPER_BEAM_SIZE")
         previous_best_of = os.environ.get("ROOMPULSE_WHISPER_BEST_OF")

@@ -908,6 +908,8 @@ class TranscriptionSession:
             while await self.flush(force=True):
                 pass
             await self.send_status("flushed", "Transcription buffer flushed")
+        else:
+            await self.send_error("Unknown control message")
 
     async def append_audio(self, chunk: bytes) -> None:
         async with self.buffer_lock:
