@@ -15,6 +15,9 @@ import {
 const DEFAULT_PI_TIMEOUT_MS = 12_000;
 const DEFAULT_CODEX_PROVIDER = "openai-codex";
 const DEFAULT_CODEX_MODEL = "gpt-5.5";
+const OPENROUTER_PROVIDER = "openrouter";
+const DEFAULT_OPENROUTER_MODEL = "openai/gpt-4o-mini";
+const DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const DEFAULT_THINKING_LEVEL = "off";
 const CODEX_AUTH_CLAIM = "https://api.openai.com/auth";
 
@@ -77,6 +80,29 @@ interface PiModule {
   };
 }
 
+interface OpenRouterToolCall {
+  id?: string;
+  type?: "function";
+  function?: {
+    name?: string;
+    arguments?: string;
+  };
+}
+
+interface OpenRouterMessage {
+  content?: string | null;
+  tool_calls?: OpenRouterToolCall[];
+}
+
+interface OpenRouterResponse {
+  choices?: Array<{
+    message?: OpenRouterMessage;
+  }>;
+  error?: {
+    message?: string;
+  };
+}
+
 export async function runPiHeartbeat(
   input: HeartbeatInput
 ): Promise<FacilitatorOutput> {
@@ -134,6 +160,9 @@ async function runPiSession(
 
   const deadline = Date.now() + timeoutMs;
   const config = getPiConfig();
+  if (config.provider === OPENROUTER_PROVIDER) {
+    return runOpenRouterHeartbeat(input, config, deadline);
+  }
   const pi = (await import(
     "@earendil-works/pi-coding-agent"
   )) as unknown as PiModule;
@@ -256,6 +285,9 @@ async function runPiInitialReviewSession(
 
   const deadline = Date.now() + timeoutMs;
   const config = getPiConfig();
+  if (config.provider === OPENROUTER_PROVIDER) {
+    return runOpenRouterInitialReview(meeting, config, deadline);
+  }
   const pi = (await import(
     "@earendil-works/pi-coding-agent"
   )) as unknown as PiModule;
@@ -324,16 +356,28 @@ interface PiConfig {
   model: string;
   thinkingLevel: PiThinkingLevel;
   codexAuthPath: string;
+  openRouterApiKey: string | undefined;
+  openRouterBaseUrl: string;
 }
 
 function getPiConfig(): PiConfig {
+  const provider = process.env.ROOMPULSE_PI_PROVIDER || DEFAULT_CODEX_PROVIDER;
   return {
-    provider: process.env.ROOMPULSE_PI_PROVIDER || DEFAULT_CODEX_PROVIDER,
-    model: process.env.ROOMPULSE_PI_MODEL || DEFAULT_CODEX_MODEL,
+    provider,
+    model:
+      process.env.ROOMPULSE_PI_MODEL ||
+      (provider === OPENROUTER_PROVIDER
+        ? DEFAULT_OPENROUTER_MODEL
+        : DEFAULT_CODEX_MODEL),
     thinkingLevel: parseThinkingLevel(process.env.ROOMPULSE_PI_THINKING_LEVEL),
     codexAuthPath:
       process.env.ROOMPULSE_CODEX_AUTH_PATH ||
-      join(homedir(), ".codex", "auth.json")
+      join(homedir(), ".codex", "auth.json"),
+    openRouterApiKey:
+      process.env.ROOMPULSE_OPENROUTER_API_KEY ||
+      process.env.OPENROUTER_API_KEY,
+    openRouterBaseUrl:
+      process.env.ROOMPULSE_OPENROUTER_BASE_URL || DEFAULT_OPENROUTER_BASE_URL
   };
 }
 
@@ -486,6 +530,280 @@ function buildMissingAuthMessage(provider: string): string {
   }
 
   return `Pi provider ${provider} does not have configured auth.`;
+}
+
+async function runOpenRouterHeartbeat(
+  input: HeartbeatInput,
+  config: PiConfig,
+  deadline: number
+): Promise<FacilitatorOutput> {
+  const message = await postOpenRouterChat(
+    config,
+    {
+      model: config.model,
+      messages: [
+        {
+          role: "user",
+          content: buildOpenRouterHeartbeatPrompt(input)
+        }
+      ],
+      tools: createOpenRouterUiTools(),
+      tool_choice: "auto"
+    },
+    remainingTimeoutMs(deadline),
+    "OpenRouter heartbeat"
+  );
+  const uiActions = parseOpenRouterToolCalls(message.tool_calls);
+
+  if (hasQueuedReviewAction(uiActions)) {
+    return buildOutputFromQueuedUiActions(
+      input,
+      uiActions,
+      "OpenRouter returned RoomPulse UI tool calls",
+      "openrouter"
+    );
+  }
+
+  if (uiActions.length > 0) {
+    throw new Error("OpenRouter returned UI tools without update_review_document");
+  }
+
+  const content = message.content?.trim();
+  if (!content) {
+    throw new Error("OpenRouter response did not include content or tool calls");
+  }
+
+  return {
+    ...parsePiOutput(content),
+    source: "openrouter"
+  };
+}
+
+async function runOpenRouterInitialReview(
+  meeting: MeetingConfig,
+  config: PiConfig,
+  deadline: number
+): Promise<InitialReviewDocument> {
+  const message = await postOpenRouterChat(
+    config,
+    {
+      model: config.model,
+      messages: [
+        {
+          role: "user",
+          content: buildInitialReviewPrompt(meeting)
+        }
+      ],
+      response_format: { type: "json_object" }
+    },
+    remainingTimeoutMs(deadline),
+    "OpenRouter initial review"
+  );
+  const content = message.content?.trim();
+  if (!content) {
+    throw new Error("OpenRouter initial review did not include content");
+  }
+
+  return {
+    ...parseInitialReviewOutput(content, meeting),
+    source: "openrouter"
+  };
+}
+
+async function postOpenRouterChat(
+  config: PiConfig,
+  body: Record<string, unknown>,
+  timeoutMs: number,
+  label: string
+): Promise<OpenRouterMessage> {
+  if (!config.openRouterApiKey) {
+    throw new Error(
+      "OpenRouter API key is not configured. Set ROOMPULSE_OPENROUTER_API_KEY or OPENROUTER_API_KEY."
+    );
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(
+      `${config.openRouterBaseUrl.replace(/\/$/, "")}/chat/completions`,
+      {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${config.openRouterApiKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": process.env.ROOMPULSE_OPENROUTER_REFERER || "http://localhost:3000",
+          "X-Title": process.env.ROOMPULSE_OPENROUTER_TITLE || "RoomPulse"
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal
+      }
+    );
+    const payload = (await response.json().catch(() => null)) as
+      | OpenRouterResponse
+      | null;
+
+    if (!response.ok) {
+      throw new Error(
+        payload?.error?.message ??
+          `OpenRouter returned ${response.status} for ${label}`
+      );
+    }
+
+    const message = payload?.choices?.[0]?.message;
+    if (!message) {
+      throw new Error(`OpenRouter returned no assistant message for ${label}`);
+    }
+
+    return message;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new PiTimeoutError(`${label} timed out after ${timeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function buildOpenRouterHeartbeatPrompt(input: HeartbeatInput): string {
+  return `${buildPiPrompt(input)}
+
+OpenRouter compatibility:
+- Prefer the provided RoomPulse tools and call update_review_document first.
+- If this model cannot call tools, respond with one JSON object matching this shape:
+{
+  "cards": [{"kind": "heartbeat", "title": "short title", "body": "room-facing cue", "priority": "low|medium|high"}],
+  "summary": "one sentence",
+  "nextHeartbeatHint": "one sentence",
+  "reviewMarkdown": "complete markdown document",
+  "agendaActions": [],
+  "uiActions": [],
+  "ephemeralReminder": null
+}`;
+}
+
+function createOpenRouterUiTools() {
+  return [
+    {
+      type: "function",
+      function: {
+        name: "update_review_document",
+        description:
+          "Replace the live markdown review document with a complete non-destructive revision across every relevant section.",
+        parameters: {
+          type: "object",
+          properties: {
+            markdown: { type: "string" },
+            summary: { type: "string" },
+            reason: { type: "string" }
+          },
+          required: ["markdown"]
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "add_agenda_item",
+        description: "Add a visible agenda item to the shared RoomPulse display.",
+        parameters: {
+          type: "object",
+          properties: {
+            title: { type: "string" },
+            reason: { type: "string" }
+          },
+          required: ["title"]
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "set_agenda_item",
+        description: "Check or uncheck an agenda item on the shared RoomPulse display.",
+        parameters: {
+          type: "object",
+          properties: {
+            itemId: { type: "string" },
+            done: { type: "boolean" },
+            reason: { type: "string" }
+          },
+          required: ["itemId", "done"]
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "delete_agenda_item",
+        description:
+          "Remove a visible agenda item only when the room explicitly drops or merges it.",
+        parameters: {
+          type: "object",
+          properties: {
+            itemId: { type: "string" },
+            reason: { type: "string" }
+          },
+          required: ["itemId"]
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "send_room_reminder",
+        description:
+          "Show one quiet ephemeral reminder on the shared RoomPulse display for this heartbeat only.",
+        parameters: {
+          type: "object",
+          properties: {
+            message: { type: "string" },
+            tone: { type: "string" },
+            reason: { type: "string" }
+          },
+          required: ["message"]
+        }
+      }
+    }
+  ];
+}
+
+function parseOpenRouterToolCalls(
+  toolCalls: OpenRouterToolCall[] | undefined
+): UiAction[] {
+  if (!Array.isArray(toolCalls)) {
+    return [];
+  }
+
+  return toolCalls
+    .map((toolCall) => {
+      const tool = toolCall.function?.name;
+      if (!tool || !isKnownUiTool(tool)) {
+        return null;
+      }
+
+      let parameters: Record<string, unknown> = {};
+      const rawArguments = toolCall.function?.arguments;
+      if (rawArguments) {
+        try {
+          const parsed = JSON.parse(rawArguments) as unknown;
+          parameters = isRecord(parsed) ? parsed : {};
+        } catch {
+          parameters = {};
+        }
+      }
+
+      return {
+        tool,
+        parameters,
+        reason:
+          typeof parameters.reason === "string" && parameters.reason.trim()
+            ? parameters.reason.trim()
+            : "OpenRouter proposed a RoomPulse UI action."
+      };
+    })
+    .filter((action): action is UiAction => Boolean(action));
 }
 
 const ALLOWED_CARD_KINDS = new Set([
@@ -986,7 +1304,8 @@ function mergeUiActions(primary: UiAction[], queued: UiAction[]): UiAction[] {
 function buildOutputFromQueuedUiActions(
   input: HeartbeatInput,
   queuedUiActions: UiAction[],
-  notice: string
+  notice: string,
+  source: FacilitatorOutput["source"] = "pi"
 ): FacilitatorOutput {
   const reviewAction = [...queuedUiActions]
     .reverse()
@@ -1041,7 +1360,7 @@ function buildOutputFromQueuedUiActions(
   }
 
   return {
-    source: "pi",
+    source,
     cards: cards.slice(0, MAX_CARDS),
     summary,
     nextHeartbeatHint: "Continue with the next strict Pi heartbeat.",
@@ -1049,7 +1368,7 @@ function buildOutputFromQueuedUiActions(
     agendaActions,
     uiActions: queuedUiActions,
     ephemeralReminder,
-    adapterNotice: `Pi tool updates applied before final JSON completed: ${notice}`
+    adapterNotice: `${source === "openrouter" ? "OpenRouter" : "Pi"} tool updates applied before final JSON completed: ${notice}`
   };
 }
 

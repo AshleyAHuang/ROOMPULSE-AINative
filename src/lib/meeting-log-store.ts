@@ -740,6 +740,7 @@ function normalizeStatus(value: string): MeetingStatus {
 function normalizeReviewSource(value: unknown): ReviewVersion["source"] {
   if (
     value === "pi" ||
+    value === "openrouter" ||
     value === "local-fallback" ||
     value === "initial" ||
     value === "restored"

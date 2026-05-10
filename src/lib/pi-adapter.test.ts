@@ -100,6 +100,9 @@ describe("Pi adapter", () => {
     delete process.env.ROOMPULSE_PI_THINKING_LEVEL;
     delete process.env.ROOMPULSE_PI_TIMEOUT_MS;
     delete process.env.ROOMPULSE_REQUIRE_PI;
+    delete process.env.ROOMPULSE_OPENROUTER_API_KEY;
+    delete process.env.OPENROUTER_API_KEY;
+    delete process.env.ROOMPULSE_OPENROUTER_BASE_URL;
     process.env.ROOMPULSE_CODEX_AUTH_PATH = join(tempDir, "codex-auth.json");
 
     let configured = false;
@@ -148,6 +151,10 @@ describe("Pi adapter", () => {
   afterEach(() => {
     delete process.env.ROOMPULSE_CODEX_AUTH_PATH;
     delete process.env.ROOMPULSE_REQUIRE_PI;
+    delete process.env.ROOMPULSE_OPENROUTER_API_KEY;
+    delete process.env.OPENROUTER_API_KEY;
+    delete process.env.ROOMPULSE_OPENROUTER_BASE_URL;
+    vi.unstubAllGlobals();
     rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -325,6 +332,95 @@ describe("Pi adapter", () => {
     expect(session.dispose).toHaveBeenCalledOnce();
 
     resolvePrompt?.();
+  });
+
+  it("runs heartbeat reviews through OpenRouter tool calls", async () => {
+    process.env.ROOMPULSE_PI_PROVIDER = "openrouter";
+    process.env.ROOMPULSE_PI_MODEL = "openai/gpt-4o-mini";
+    process.env.ROOMPULSE_OPENROUTER_API_KEY = "openrouter-key";
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        choices: [
+          {
+            message: {
+              tool_calls: [
+                {
+                  type: "function",
+                  function: {
+                    name: "update_review_document",
+                    arguments: JSON.stringify({
+                      markdown: "# Updated by OpenRouter\n\n- [ ] Risks",
+                      summary: "OpenRouter updated the markdown."
+                    })
+                  }
+                },
+                {
+                  type: "function",
+                  function: {
+                    name: "send_room_reminder",
+                    arguments: JSON.stringify({
+                      message: "Invite Speaker 2 before closing."
+                    })
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const output = await runPiHeartbeat(heartbeatInput);
+
+    expect(output.source).toBe("openrouter");
+    expect(output.reviewMarkdown).toContain("Updated by OpenRouter");
+    expect(output.ephemeralReminder).toBe("Invite Speaker 2 before closing.");
+    expect(createAgentSession).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://openrouter.ai/api/v1/chat/completions",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Authorization: "Bearer openrouter-key"
+        })
+      })
+    );
+    const requestBody = JSON.parse(fetchMock.mock.calls[0]?.[1].body);
+    expect(requestBody.model).toBe("openai/gpt-4o-mini");
+    expect(requestBody.tools.map((tool: { function: { name: string } }) => tool.function.name))
+      .toContain("update_review_document");
+  });
+
+  it("initializes review markdown through OpenRouter JSON output", async () => {
+    process.env.ROOMPULSE_PI_PROVIDER = "openrouter";
+    process.env.ROOMPULSE_OPENROUTER_API_KEY = "openrouter-key";
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                summary: "OpenRouter initialized the review.",
+                markdown: "# OpenRouter review\n\n## Agenda\n- [ ] Risks"
+              })
+            }
+          }
+        ]
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const output = await runPiInitialReviewDocument(meeting);
+
+    expect(output).toMatchObject({
+      source: "openrouter",
+      summary: "OpenRouter initialized the review.",
+      markdown: expect.stringContaining("## Agenda")
+    });
+    expect(createAgentSession).not.toHaveBeenCalled();
+    const requestBody = JSON.parse(fetchMock.mock.calls[0]?.[1].body);
+    expect(requestBody.response_format).toEqual({ type: "json_object" });
   });
 
   it("marks RoomPulse UI tool results as turn-terminating", async () => {

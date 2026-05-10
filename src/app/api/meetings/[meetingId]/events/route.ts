@@ -112,6 +112,7 @@ function isReviewVersion(value: unknown): boolean {
     typeof value.markdown === "string" &&
     typeof value.summary === "string" &&
     (value.source === "pi" ||
+      value.source === "openrouter" ||
       value.source === "local-fallback" ||
       value.source === "initial" ||
       value.source === "restored")

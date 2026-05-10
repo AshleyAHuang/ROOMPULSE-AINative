@@ -100,6 +100,30 @@ ROOMPULSE_PI_MODEL=gpt-5.5
 ROOMPULSE_PI_THINKING_LEVEL=off
 ```
 
+RoomPulse can also use OpenRouter models directly through OpenRouter's
+OpenAI-compatible chat completions endpoint. In that mode the same heartbeat
+contract still applies: the model receives the RoomPulse UI tools and should
+call `update_review_document` first, then optional agenda/reminder tools.
+
+```bash
+ROOMPULSE_PI_PROVIDER=openrouter
+ROOMPULSE_PI_MODEL=openai/gpt-4o-mini
+OPENROUTER_API_KEY=sk-or-...
+npm run dev
+```
+
+Optional OpenRouter overrides:
+
+```bash
+ROOMPULSE_OPENROUTER_API_KEY=sk-or-...
+ROOMPULSE_OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+ROOMPULSE_OPENROUTER_REFERER=http://localhost:3000
+ROOMPULSE_OPENROUTER_TITLE=RoomPulse
+```
+
+OpenRouter responses are shown as `OpenRouter` in the meeting UI and are stored
+as `openrouter` review versions in local SQLite.
+
 If Pi does not already have `openai-codex` auth, RoomPulse reads the local Codex CLI ChatGPT login from `~/.codex/auth.json` into the in-memory Pi auth store for the heartbeat session. Run `codex login` first on the machine hosting the Next.js server. You can disable that bridge with:
 
 ```bash

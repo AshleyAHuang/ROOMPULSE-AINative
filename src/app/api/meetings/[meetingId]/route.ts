@@ -182,6 +182,7 @@ function isReviewVersion(value: unknown): boolean {
 function isReviewSource(value: unknown): boolean {
   return (
     value === "pi" ||
+    value === "openrouter" ||
     value === "local-fallback" ||
     value === "initial" ||
     value === "restored"

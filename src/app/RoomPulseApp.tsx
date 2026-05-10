@@ -1973,8 +1973,8 @@ export default function RoomPulseApp() {
             {isMicRunning ? "Mic live" : "Mic off"}
           </StatusPill>
           <StatusPill>
-            <MaterialIcon name={currentOutput?.source === "pi" ? "auto_awesome" : "memory"} />
-            {currentOutput?.source === "pi" ? "Pi · GPT-5.5 fast" : "Local"}
+            <MaterialIcon name={currentOutput?.source === "local-fallback" ? "memory" : "auto_awesome"} />
+            {facilitatorSourceLabel(currentOutput?.source)}
           </StatusPill>
           <StatusPill>
             <MaterialIcon name={isPaused ? "pause" : "schedule"} />
@@ -2087,7 +2087,7 @@ export default function RoomPulseApp() {
               <div className="section-kicker">AI reviews</div>
               <h2>Live review document</h2>
             </div>
-            <span>{currentOutput?.source === "pi" ? "GPT-5.5 fast" : "Local"}</span>
+            <span>{facilitatorSourceLabel(currentOutput?.source)}</span>
           </div>
           <div className="review-meta">
             <span>{reviewVersions.length} versions</span>
@@ -2740,7 +2740,10 @@ function normalizeInitialReviewDocument(
     };
   }
 
-  const source = value.source === "pi" ? "pi" : "local-fallback";
+  const source =
+    value.source === "pi" || value.source === "openrouter"
+      ? value.source
+      : "local-fallback";
   return {
     source,
     markdown:
@@ -2754,6 +2757,14 @@ function normalizeInitialReviewDocument(
     adapterNotice:
       typeof value.adapterNotice === "string" ? value.adapterNotice : undefined
   };
+}
+
+function facilitatorSourceLabel(
+  source: FacilitatorOutput["source"] | undefined
+): string {
+  if (source === "pi") return "Pi · GPT-5.5 fast";
+  if (source === "openrouter") return "OpenRouter";
+  return "Local";
 }
 
 function createPendingReviewMarkdown(meeting: MeetingConfig): string {

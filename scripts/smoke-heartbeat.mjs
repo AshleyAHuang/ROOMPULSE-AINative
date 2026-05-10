@@ -73,8 +73,10 @@ try {
   }
 
   const output = JSON.parse(text);
-  if (output.source !== "pi") {
-    throw new Error(`Expected Pi output, got ${output.source ?? "missing source"}`);
+  if (output.source !== "pi" && output.source !== "openrouter") {
+    throw new Error(
+      `Expected remote facilitator output, got ${output.source ?? "missing source"}`
+    );
   }
 
   if (typeof output.reviewMarkdown !== "string" || !output.reviewMarkdown.trim()) {
@@ -95,7 +97,7 @@ try {
         source: output.source,
         summary: output.summary,
         reminder: output.ephemeralReminder ?? null,
-        model: "openai-codex/gpt-5.5",
+        model: `${process.env.ROOMPULSE_PI_PROVIDER ?? "openai-codex"}/${process.env.ROOMPULSE_PI_MODEL ?? "gpt-5.5"}`,
         thinkingLevel: "off"
       },
       null,

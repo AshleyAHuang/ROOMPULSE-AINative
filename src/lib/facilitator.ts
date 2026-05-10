@@ -125,7 +125,7 @@ export interface HeartbeatInput {
 }
 
 export interface FacilitatorOutput {
-  source: "pi" | "local-fallback";
+  source: "pi" | "openrouter" | "local-fallback";
   cards: FacilitatorCard[];
   summary: string;
   nextHeartbeatHint: string;
