@@ -7,6 +7,9 @@ import numpy as np
 import server
 from server import (
     DEFAULT_NEURAL_SPEAKER_DISTANCE_THRESHOLDS,
+    DEFAULT_BEAM_SIZE,
+    DEFAULT_BEST_OF,
+    DEFAULT_NO_SPEECH_THRESHOLD,
     SAMPLE_RATE,
     DspVoiceEmbedder,
     PyannoteVoiceEmbedder,
@@ -17,6 +20,7 @@ from server import (
     get_voice_embedder,
     pre_emphasis_filter,
     trim_silence,
+    transcribe_audio,
     transcription_window_seconds,
     voice_embedding_quality,
 )
@@ -219,6 +223,29 @@ class SpeakerClustererTest(unittest.TestCase):
         self.assertEqual(min_seconds, 4.0)
         self.assertEqual(max_seconds, 4.0)
 
+    def test_transcribe_audio_falls_back_for_invalid_whisper_env(self) -> None:
+        previous_beam = os.environ.get("ROOMPULSE_WHISPER_BEAM_SIZE")
+        previous_best_of = os.environ.get("ROOMPULSE_WHISPER_BEST_OF")
+        previous_no_speech = os.environ.get("ROOMPULSE_WHISPER_NO_SPEECH_THRESHOLD")
+        os.environ["ROOMPULSE_WHISPER_BEAM_SIZE"] = "wide"
+        os.environ["ROOMPULSE_WHISPER_BEST_OF"] = "-2"
+        os.environ["ROOMPULSE_WHISPER_NO_SPEECH_THRESHOLD"] = "2"
+        model = FakeWhisperModel()
+        try:
+            text = asyncio.run(transcribe_audio(model, synthetic_voice(150), "en"))
+        finally:
+            restore_env("ROOMPULSE_WHISPER_BEAM_SIZE", previous_beam)
+            restore_env("ROOMPULSE_WHISPER_BEST_OF", previous_best_of)
+            restore_env("ROOMPULSE_WHISPER_NO_SPEECH_THRESHOLD", previous_no_speech)
+
+        self.assertEqual(text, "hello room")
+        self.assertEqual(model.kwargs["beam_size"], DEFAULT_BEAM_SIZE)
+        self.assertEqual(model.kwargs["best_of"], DEFAULT_BEST_OF)
+        self.assertEqual(
+            model.kwargs["no_speech_threshold"],
+            DEFAULT_NO_SPEECH_THRESHOLD,
+        )
+
 
 class FixedEmbeddingVoiceEmbedder:
     name = "test-neural"
@@ -244,6 +271,27 @@ class QualityEmbeddingVoiceEmbedder:
         vector, quality = self.values[min(self.index, len(self.values) - 1)]
         self.index += 1
         return VoiceEmbedding(self.name, vector, quality)
+
+
+class FakeSegment:
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+
+class FakeWhisperModel:
+    def __init__(self) -> None:
+        self.kwargs = {}
+
+    def transcribe(self, _audio: np.ndarray, **kwargs):
+        self.kwargs = kwargs
+        return [FakeSegment(" hello room ")], {}
+
+
+def restore_env(name: str, value: str | None) -> None:
+    if value is None:
+        os.environ.pop(name, None)
+    else:
+        os.environ[name] = value
 
 
 if __name__ == "__main__":

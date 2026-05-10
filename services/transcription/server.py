@@ -591,8 +591,14 @@ async def transcribe_audio(
         segments, _info = local_model.transcribe(
             audio,
             language=language,
-            beam_size=int(os.getenv("ROOMPULSE_WHISPER_BEAM_SIZE", DEFAULT_BEAM_SIZE)),
-            best_of=int(os.getenv("ROOMPULSE_WHISPER_BEST_OF", DEFAULT_BEST_OF)),
+            beam_size=parse_positive_int(
+                os.getenv("ROOMPULSE_WHISPER_BEAM_SIZE"),
+                DEFAULT_BEAM_SIZE,
+            ),
+            best_of=parse_positive_int(
+                os.getenv("ROOMPULSE_WHISPER_BEST_OF"),
+                DEFAULT_BEST_OF,
+            ),
             temperature=0,
             vad_filter=os.getenv("ROOMPULSE_WHISPER_VAD", "1") != "0",
             vad_parameters={
@@ -601,11 +607,9 @@ async def transcribe_audio(
                 "speech_pad_ms": 120,
             },
             condition_on_previous_text=False,
-            no_speech_threshold=float(
-                os.getenv(
-                    "ROOMPULSE_WHISPER_NO_SPEECH_THRESHOLD",
-                    str(DEFAULT_NO_SPEECH_THRESHOLD),
-                )
+            no_speech_threshold=parse_probability(
+                os.getenv("ROOMPULSE_WHISPER_NO_SPEECH_THRESHOLD"),
+                DEFAULT_NO_SPEECH_THRESHOLD,
             ),
             initial_prompt=(
                 "This is a business meeting transcript. Use ordinary punctuation. "
@@ -643,6 +647,26 @@ def parse_positive_float(raw: str | None, default: float) -> float:
     except ValueError:
         return default
     return value if value > 0 else default
+
+
+def parse_positive_int(raw: str | None, default: int) -> int:
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def parse_probability(raw: str | None, default: float) -> float:
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if 0.0 <= value <= 1.0 else default
 
 
 def pcm16_to_float32(raw: bytes) -> np.ndarray:
