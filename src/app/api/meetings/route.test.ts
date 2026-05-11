@@ -949,6 +949,45 @@ describe("/api/meetings", () => {
     });
   });
 
+  it("rejects blank heartbeat output cards before storage", async () => {
+    const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
+    const created = await createResponse.json();
+
+    const response = await POST_EVENT(
+      jsonRequest({
+        type: "heartbeat_output",
+        timestamp: Date.now(),
+        payload: {
+          reviewVersionId: "review-blank-card",
+          output: {
+            source: "pi",
+            cards: [
+              {
+                id: "blank-card",
+                kind: "heartbeat",
+                title: "Heartbeat",
+                body: "   ",
+                priority: "medium"
+              }
+            ],
+            summary: "Blank room cards should not persist.",
+            nextHeartbeatHint: "Continue.",
+            reviewMarkdown: "# Review",
+            agendaActions: [],
+            uiActions: [],
+            ephemeralReminder: null
+          }
+        }
+      }),
+      routeContext(created.id)
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid log event payload"
+    });
+  });
+
   it("rejects oversized heartbeat output review markdown before storage", async () => {
     const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
     const created = await createResponse.json();
@@ -1483,6 +1522,27 @@ describe("/api/meetings", () => {
             }
           ],
           summary: "Oversized current output.",
+          nextHeartbeatHint: "Continue.",
+          reviewMarkdown: "# Review",
+          agendaActions: [],
+          uiActions: [],
+          ephemeralReminder: null
+        }
+      },
+      {
+        ...baseState,
+        currentOutput: {
+          source: "pi",
+          cards: [
+            {
+              id: "blank-current-output-card",
+              kind: "heartbeat",
+              title: "Heartbeat",
+              body: " ",
+              priority: "medium"
+            }
+          ],
+          summary: "Blank current output cards should not persist.",
           nextHeartbeatHint: "Continue.",
           reviewMarkdown: "# Review",
           agendaActions: [],

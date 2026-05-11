@@ -228,7 +228,7 @@ function isFacilitatorCard(value: unknown): boolean {
     isNonEmptyBoundedString(value.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
     isFacilitatorCardKind(value.kind) &&
     isNonEmptyBoundedString(value.title, MAX_FACILITATOR_CARD_TEXT_LENGTH) &&
-    isBoundedString(value.body, MAX_FACILITATOR_CARD_TEXT_LENGTH) &&
+    isNonEmptyBoundedString(value.body, MAX_FACILITATOR_CARD_TEXT_LENGTH) &&
     (value.priority === "low" ||
       value.priority === "medium" ||
       value.priority === "high")

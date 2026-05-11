@@ -591,7 +591,7 @@ function isFacilitatorCard(value: unknown): boolean {
       value.kind === "drift" ||
       value.kind === "reminder") &&
     isBoundedNonEmptyString(value.title, MAX_FACILITATOR_CARD_TEXT_LENGTH) &&
-    isBoundedString(value.body, MAX_FACILITATOR_CARD_TEXT_LENGTH) &&
+    isBoundedNonEmptyString(value.body, MAX_FACILITATOR_CARD_TEXT_LENGTH) &&
     (value.priority === "low" ||
       value.priority === "medium" ||
       value.priority === "high")
