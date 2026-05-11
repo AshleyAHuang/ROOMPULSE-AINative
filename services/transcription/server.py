@@ -98,7 +98,7 @@ model_error: str | None = None
 async def health() -> JSONResponse:
     return JSONResponse(
         {
-            "ok": WHISPER_IMPORT_ERROR is None,
+            "ok": WHISPER_IMPORT_ERROR is None and model_error is None,
             "engine": "faster-whisper",
             "model": os.getenv("ROOMPULSE_WHISPER_MODEL", DEFAULT_MODEL),
             "device": os.getenv("ROOMPULSE_WHISPER_DEVICE", DEFAULT_DEVICE),

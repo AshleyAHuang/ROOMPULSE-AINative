@@ -606,6 +606,24 @@ class SpeakerClustererTest(unittest.TestCase):
             ("I" * 600)[: server.MAX_ENGINE_MESSAGE_LENGTH],
         )
 
+    def test_health_is_not_ok_after_model_load_error(self) -> None:
+        async def run() -> dict:
+            previous_model_error = server.model_error
+            previous_import_error = server.WHISPER_IMPORT_ERROR
+            server.model_error = "model failed to load"
+            server.WHISPER_IMPORT_ERROR = None
+            try:
+                response = await server.health()
+            finally:
+                server.model_error = previous_model_error
+                server.WHISPER_IMPORT_ERROR = previous_import_error
+            return json.loads(response.body)
+
+        payload = asyncio.run(run())
+
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["modelError"], "model failed to load")
+
     def test_reset_control_configures_session_speaker_cap(self) -> None:
         async def run() -> tuple[int, int, list[dict]]:
             websocket = FakeWebSocket()
