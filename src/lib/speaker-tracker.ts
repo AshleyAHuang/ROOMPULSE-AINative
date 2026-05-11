@@ -45,13 +45,14 @@ export class SpeakerTracker {
   }
 
   assignSpeaker(features: VoiceFeatures): SpeakerCluster {
-    const nearest = this.findNearest(features);
+    const safeFeatures = normalizeVoiceFeatures(features);
+    const nearest = this.findNearest(safeFeatures);
 
     if (!nearest || nearest.distance > this.distanceThreshold) {
       const cluster: SpeakerCluster = {
         id: `speaker-${this.clusters.length + 1}`,
         label: `Speaker ${this.clusters.length + 1}`,
-        centroid: { ...features },
+        centroid: { ...safeFeatures },
         samples: 1,
         lastSeenAt: this.now()
       };
@@ -69,12 +70,16 @@ export class SpeakerTracker {
     cluster.centroid = {
       spectralCentroid:
         cluster.centroid.spectralCentroid * (1 - updateWeight) +
-        features.spectralCentroid * updateWeight,
-      rms: cluster.centroid.rms * (1 - updateWeight) + features.rms * updateWeight,
+        safeFeatures.spectralCentroid * updateWeight,
+      rms:
+        cluster.centroid.rms * (1 - updateWeight) +
+        safeFeatures.rms * updateWeight,
       zeroCrossingRate:
         cluster.centroid.zeroCrossingRate * (1 - updateWeight) +
-        features.zeroCrossingRate * updateWeight,
-      pitch: cluster.centroid.pitch * (1 - updateWeight) + features.pitch * updateWeight
+        safeFeatures.zeroCrossingRate * updateWeight,
+      pitch:
+        cluster.centroid.pitch * (1 - updateWeight) +
+        safeFeatures.pitch * updateWeight
     };
     cluster.samples = samples;
     cluster.lastSeenAt = this.now();
@@ -287,8 +292,24 @@ function normalizeDifference(left: number, right: number, range: number): number
   if (range <= 0) {
     return 0;
   }
+  if (!Number.isFinite(left) || !Number.isFinite(right)) {
+    return 1;
+  }
 
   return Math.min(1, Math.abs(left - right) / range);
+}
+
+function normalizeVoiceFeatures(features: VoiceFeatures): VoiceFeatures {
+  return {
+    spectralCentroid: finiteOrZero(features.spectralCentroid),
+    rms: finiteOrZero(features.rms),
+    zeroCrossingRate: finiteOrZero(features.zeroCrossingRate),
+    pitch: finiteOrZero(features.pitch)
+  };
+}
+
+function finiteOrZero(value: number): number {
+  return Number.isFinite(value) ? value : 0;
 }
 
 function calculateSpectralCentroid(

@@ -77,6 +77,29 @@ describe("SpeakerTracker", () => {
     expect(cluster.centroid.spectralCentroid).toBeLessThan(1300);
   });
 
+  it("keeps non-finite voice features from poisoning cluster centroids", () => {
+    const tracker = new SpeakerTracker({ distanceThreshold: 0.26 });
+
+    tracker.assignSpeaker(features(1000, 0.3, 0.1, 100));
+    tracker.assignSpeaker(
+      features(
+        Number.NaN,
+        Number.POSITIVE_INFINITY,
+        Number.NEGATIVE_INFINITY,
+        Number.NaN
+      )
+    );
+    const next = tracker.assignSpeaker(features(1010, 0.31, 0.11, 102));
+
+    expect(next.label).toBe("Speaker 1");
+    for (const cluster of tracker.getClusters()) {
+      expect(Number.isFinite(cluster.centroid.spectralCentroid)).toBe(true);
+      expect(Number.isFinite(cluster.centroid.rms)).toBe(true);
+      expect(Number.isFinite(cluster.centroid.zeroCrossingRate)).toBe(true);
+      expect(Number.isFinite(cluster.centroid.pitch)).toBe(true);
+    }
+  });
+
   it("does not count blank or whitespace-variant labels as extra speakers", () => {
     expect(
       createParticipationStatus(3, ["Speaker 1", " Speaker 1 ", "", "   "])
