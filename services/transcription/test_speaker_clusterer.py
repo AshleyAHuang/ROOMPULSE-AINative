@@ -693,6 +693,30 @@ class SpeakerClustererTest(unittest.TestCase):
         self.assertEqual(messages[0]["message"], "Unknown control message")
         self.assertEqual(messages[-1]["status"], "configured")
 
+    def test_oversized_control_message_is_rejected_without_killing_session(self) -> None:
+        async def run() -> tuple[int, list[dict]]:
+            websocket = FakeWebSocket()
+            session = TranscriptionSession(websocket)
+            session.clusterer.max_clusters = 4
+            await session.handle_control(
+                json.dumps(
+                    {
+                        "type": "configure",
+                        "maxSpeakerClusters": 5,
+                        "padding": "P" * 3_000,
+                    }
+                )
+            )
+            await session.handle_control('{"type":"configure","maxSpeakerClusters":6}')
+            return session.clusterer.max_clusters, websocket.messages
+
+        max_clusters, messages = asyncio.run(run())
+
+        self.assertEqual(max_clusters, 6)
+        self.assertEqual(messages[0]["type"], "engine_error")
+        self.assertEqual(messages[0]["message"], "Control message too large")
+        self.assertEqual(messages[-1]["status"], "configured")
+
     def test_append_audio_bounds_backlog_when_flush_falls_behind(self) -> None:
         async def run() -> bytes:
             websocket = FakeWebSocket()

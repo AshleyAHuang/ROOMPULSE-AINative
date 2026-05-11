@@ -58,6 +58,7 @@ DEFAULT_NO_SPEECH_THRESHOLD = 0.55
 DEFAULT_VAD_MODE = 2
 DEFAULT_MAX_AUDIO_BUFFER_SECONDS = 20.0
 MAX_ENGINE_MESSAGE_LENGTH = 500
+MAX_CONTROL_MESSAGE_LENGTH = 2_000
 MAX_TRANSCRIPT_TEXT_LENGTH = 1_000
 SPEECHBRAIN_MODEL = "speechbrain/spkrec-ecapa-voxceleb"
 PYANNOTE_MODEL = "pyannote/embedding"
@@ -878,6 +879,10 @@ class TranscriptionSession:
         self.language = os.getenv("ROOMPULSE_WHISPER_LANGUAGE", DEFAULT_LANGUAGE)
 
     async def handle_control(self, raw: str) -> None:
+        if len(raw) > MAX_CONTROL_MESSAGE_LENGTH:
+            await self.send_error("Control message too large")
+            return
+
         try:
             message = json.loads(raw)
         except json.JSONDecodeError:
