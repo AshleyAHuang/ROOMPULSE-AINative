@@ -81,7 +81,7 @@ export const DEMO_SCRIPT: DemoBeat[] = [
   {
     delayMs: 252_000,
     speaker: "Speaker 3",
-    text: "The heartbeat should receive the full raw transcript, not just the delta, because the Pi agent needs to keep context across the whole meeting. The delta is useful for what changed, but the full transcript is what keeps the review coherent."
+    text: "The heartbeat should receive latency-bounded context: recent transcript lines, the fresh delta, compact review history, and the current markdown document. That keeps Pi useful without making long meetings slow again."
   },
   {
     delayMs: 283_000,
@@ -216,7 +216,7 @@ export const DEMO_SCRIPT: DemoBeat[] = [
   {
     delayMs: 1_046_000,
     speaker: "Speaker 1",
-    text: "Agreed. Start Meeting should make a single initialization API call, use that as version one, then every heartbeat should revise the whole file using the current markdown and full transcript."
+    text: "Agreed. Start Meeting should make a single initialization API call, use that as version one, then every heartbeat should revise the whole file using the current markdown, bounded recent context, and fresh transcript delta."
   },
   {
     delayMs: 1_074_000,
@@ -226,7 +226,7 @@ export const DEMO_SCRIPT: DemoBeat[] = [
   {
     delayMs: 1_102_000,
     speaker: "Speaker 3",
-    text: "We've also covered Pi heartbeat and review behavior. I will own the GPT-5.5 fast default, the full-context prompt, and the allowed UI tools for markdown, agenda, and reminders."
+    text: "We've also covered Pi heartbeat and review behavior. I will own the GPT-5.5 fast default, the bounded prompt, and the allowed UI tools for markdown, agenda, and reminders."
   },
   {
     delayMs: 1_128_000,
