@@ -945,6 +945,20 @@ describe("Pi adapter", () => {
     expect(output.adapterNotice).toContain("OpenRouter heartbeat timed out after");
   });
 
+  it("preserves OpenRouter fetch failures when DOMException is unavailable", async () => {
+    process.env.ROOMPULSE_PI_PROVIDER = "openrouter";
+    process.env.ROOMPULSE_OPENROUTER_API_KEY = "openrouter-key";
+    vi.stubGlobal("DOMException", undefined);
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
+
+    const output = await runPiHeartbeat(heartbeatInput);
+
+    expect(output.source).toBe("local-fallback");
+    expect(output.adapterNotice).toContain("network down");
+    expect(output.adapterNotice).not.toContain("DOMException");
+    expect(output.adapterNotice).not.toContain("instanceof");
+  });
+
   it("initializes review markdown through OpenRouter JSON output", async () => {
     process.env.ROOMPULSE_PI_PROVIDER = "openrouter";
     process.env.ROOMPULSE_OPENROUTER_API_KEY = "openrouter-key";

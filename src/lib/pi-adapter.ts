@@ -1781,7 +1781,9 @@ function isPiTimeoutError(error: unknown): error is PiTimeoutError {
 
 function isAbortError(error: unknown): boolean {
   return (
-    error instanceof DOMException && error.name === "AbortError"
+    typeof DOMException !== "undefined" &&
+    error instanceof DOMException &&
+    error.name === "AbortError"
   ) || (
     isRecord(error) &&
     error.name === "AbortError"
