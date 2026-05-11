@@ -145,6 +145,19 @@ const demoSnippets = [
 
 const DEFAULT_CLIENT_PI_TIMEOUT_MS = 25_000;
 const MAX_HEARTBEAT_OUTPUT_CARDS = 5;
+const MIC_RECONNECT_BASE_DELAY_MS = 100;
+const MIC_RECONNECT_MAX_DELAY_MS = 10_000;
+
+export function micReconnectDelayMs(attempt: number): number {
+  if (!Number.isFinite(attempt) || attempt <= 0) {
+    return MIC_RECONNECT_BASE_DELAY_MS;
+  }
+
+  return Math.min(
+    MIC_RECONNECT_MAX_DELAY_MS,
+    MIC_RECONNECT_BASE_DELAY_MS * 2.5 * 2 ** Math.max(0, Math.floor(attempt) - 1)
+  );
+}
 
 export default function RoomPulseApp() {
   const [phase, setPhase] = useState<Phase>("dashboard");
@@ -225,6 +238,7 @@ export default function RoomPulseApp() {
   const micReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null
   );
+  const micReconnectAttemptRef = useRef(0);
   const isHeartbeatRunningRef = useRef(false);
   const heartbeatRunTokenRef = useRef(0);
   const heartbeatAbortControllerRef = useRef<AbortController | null>(null);
@@ -1610,6 +1624,8 @@ export default function RoomPulseApp() {
     }
 
     setMicStatus("Reconnecting local transcription stream");
+    const delayMs = micReconnectDelayMs(micReconnectAttemptRef.current);
+    micReconnectAttemptRef.current += 1;
     micReconnectTimerRef.current = setTimeout(() => {
       micReconnectTimerRef.current = null;
       if (
@@ -1621,7 +1637,7 @@ export default function RoomPulseApp() {
         return;
       }
       void startMic(expectedParticipants);
-    }, 100);
+    }, delayMs);
   }
 
   async function startMic(
@@ -1706,6 +1722,7 @@ export default function RoomPulseApp() {
         return;
       }
       setIsMicRunning(true);
+      micReconnectAttemptRef.current = 0;
     } catch (error) {
       const shouldRetry = isRetryableMicStartError(error);
       micStopRequestedRef.current = !shouldRetry;
@@ -1727,6 +1744,7 @@ export default function RoomPulseApp() {
   function stopMic() {
     micStopRequestedRef.current = true;
     clearMicReconnectTimer();
+    micReconnectAttemptRef.current = 0;
     micStartTokenRef.current += 1;
     void cleanupMicResources();
     currentMicSpeakerRef.current = "Speaker 1";
@@ -1748,6 +1766,7 @@ export default function RoomPulseApp() {
 
     micStopRequestedRef.current = true;
     clearMicReconnectTimer();
+    micReconnectAttemptRef.current = 0;
     micStartTokenRef.current += 1;
     const restartToken = micStartTokenRef.current;
     setIsMicRunning(false);
@@ -1769,6 +1788,7 @@ export default function RoomPulseApp() {
   async function stopMicAndFlushFinalSegment() {
     micStopRequestedRef.current = true;
     clearMicReconnectTimer();
+    micReconnectAttemptRef.current = 0;
     await cleanupMicResources();
     micStartTokenRef.current += 1;
     currentMicSpeakerRef.current = "Speaker 1";

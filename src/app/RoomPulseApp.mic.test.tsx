@@ -36,7 +36,7 @@ vi.mock("@/lib/local-transcription-client", () => ({
   })
 }));
 
-import RoomPulseApp from "./RoomPulseApp";
+import RoomPulseApp, { micReconnectDelayMs } from "./RoomPulseApp";
 
 describe("RoomPulseApp mic lifecycle", () => {
   beforeEach(() => {
@@ -443,6 +443,14 @@ describe("RoomPulseApp mic lifecycle", () => {
     expect(screen.getByText(/browser mic:/i)).not.toHaveTextContent(
       /local transcription stopped unexpectedly/i
     );
+  });
+
+  it("backs off repeated mic reconnect attempts", () => {
+    expect(
+      [0, 1, 2, 3, 4, 10, Number.NaN].map((attempt) =>
+        micReconnectDelayMs(attempt)
+      )
+    ).toEqual([100, 250, 500, 1_000, 2_000, 10_000, 100]);
   });
 
   it("retries mic capture when the initial transcription socket connection fails", async () => {
