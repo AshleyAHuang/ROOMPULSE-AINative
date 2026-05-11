@@ -153,7 +153,10 @@ export function createParticipationStatus(
   observedLabels: string[]
 ): ParticipationStatus {
   const expected = Number.isFinite(expectedParticipants)
-    ? Math.max(0, Math.floor(expectedParticipants))
+    ? Math.min(
+        MAX_OBSERVED_SPEAKER_LABELS,
+        Math.max(0, Math.floor(expectedParticipants))
+      )
     : 0;
   const uniqueLabels = normalizeObservedSpeakerLabels(observedLabels);
   const observed = uniqueLabels.length;

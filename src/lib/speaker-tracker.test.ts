@@ -146,6 +146,16 @@ describe("SpeakerTracker", () => {
     expect(status.observedLabels.at(-1)).toBe("Speaker 24");
   });
 
+  it("bounds excessive expected participant counts before creating reminders", () => {
+    expect(createParticipationStatus(10_000, ["Speaker 1"])).toMatchObject({
+      expected: 24,
+      observed: 1,
+      missingCount: 23,
+      reminder:
+        "23 people have not been heard yet. Invite quieter voices before moving on."
+    });
+  });
+
   it("normalizes long or multiline speaker labels before prompt use", () => {
     const status = createParticipationStatus(2, [
       ` ${"Speaker 1 ".repeat(30)} `,
