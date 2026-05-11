@@ -146,6 +146,17 @@ describe("SpeakerTracker", () => {
     expect(status.observedLabels.at(-1)).toBe("Speaker 24");
   });
 
+  it("caps browser speaker clusters and reuses existing labels", () => {
+    const tracker = new SpeakerTracker({ distanceThreshold: 0.01 });
+
+    for (let index = 0; index < 40; index += 1) {
+      tracker.assignSpeaker(features(index * 500, index / 40, index / 80, index * 20));
+    }
+
+    expect(tracker.getClusters()).toHaveLength(24);
+    expect(tracker.getObservedSpeakers().at(-1)).toBe("Speaker 24");
+  });
+
   it("bounds excessive expected participant counts before creating reminders", () => {
     expect(createParticipationStatus(10_000, ["Speaker 1"])).toMatchObject({
       expected: 24,

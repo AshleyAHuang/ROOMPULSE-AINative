@@ -48,7 +48,10 @@ export class SpeakerTracker {
     const safeFeatures = normalizeVoiceFeatures(features);
     const nearest = this.findNearest(safeFeatures);
 
-    if (!nearest || nearest.distance > this.distanceThreshold) {
+    if (
+      (!nearest || nearest.distance > this.distanceThreshold) &&
+      this.clusters.length < MAX_OBSERVED_SPEAKER_LABELS
+    ) {
       const cluster: SpeakerCluster = {
         id: `speaker-${this.clusters.length + 1}`,
         label: `Speaker ${this.clusters.length + 1}`,
@@ -60,10 +63,10 @@ export class SpeakerTracker {
       return { ...cluster, centroid: { ...cluster.centroid } };
     }
 
-    const cluster = nearest.cluster;
+    const cluster = nearest?.cluster ?? this.clusters[this.clusters.length - 1];
     const samples = cluster.samples + 1;
     const updateWeight = centroidUpdateWeight(
-      nearest.distance,
+      nearest?.distance ?? this.distanceThreshold,
       this.distanceThreshold,
       samples
     );
