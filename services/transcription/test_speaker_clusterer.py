@@ -696,6 +696,27 @@ class SpeakerClustererTest(unittest.TestCase):
         self.assertEqual(messages[0]["status"], "configured")
         self.assertEqual(messages[-1]["status"], "configured")
 
+    def test_boolean_control_numbers_do_not_reconfigure_session(self) -> None:
+        async def run() -> tuple[int, int, list[dict]]:
+            websocket = FakeWebSocket()
+            session = TranscriptionSession(websocket)
+            session.clusterer.max_clusters = 4
+            session.clusterer.speaker_label_offset = 2
+            await session.handle_control(
+                '{"type":"configure","maxSpeakerClusters":true,"speakerLabelOffset":false}'
+            )
+            return (
+                session.clusterer.max_clusters,
+                session.clusterer.speaker_label_offset,
+                websocket.messages,
+            )
+
+        max_clusters, speaker_label_offset, messages = asyncio.run(run())
+
+        self.assertEqual(max_clusters, 4)
+        self.assertEqual(speaker_label_offset, 2)
+        self.assertEqual(messages[-1]["status"], "configured")
+
     def test_unknown_control_message_reports_error_without_killing_session(self) -> None:
         async def run() -> tuple[int, list[dict]]:
             websocket = FakeWebSocket()
