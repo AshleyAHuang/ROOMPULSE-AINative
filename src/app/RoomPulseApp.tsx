@@ -1691,7 +1691,12 @@ export default function RoomPulseApp() {
           if (micStartTokenRef.current !== startToken) {
             return;
           }
-          setMicStatus(`Local transcription error: ${message}`);
+          setMicStatus(
+            capText(
+              `Local transcription error: ${message}`,
+              MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+            )
+          );
         }
       });
       transcriptionClientRef.current = client;
@@ -1714,7 +1719,12 @@ export default function RoomPulseApp() {
       }
       if (micStartTokenRef.current === startToken) {
         setIsMicRunning(false);
-        setMicStatus(error instanceof Error ? error.message : String(error));
+        setMicStatus(
+          capText(
+            error instanceof Error ? error.message : String(error),
+            MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+          )
+        );
         if (shouldRetry) {
           scheduleMicReconnect(expectedParticipants);
         }

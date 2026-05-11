@@ -56,6 +56,8 @@ DEFAULT_BEAM_SIZE = 5
 DEFAULT_BEST_OF = 5
 DEFAULT_NO_SPEECH_THRESHOLD = 0.55
 DEFAULT_VAD_MODE = 2
+MAX_ENGINE_MESSAGE_LENGTH = 500
+MAX_TRANSCRIPT_TEXT_LENGTH = 1_000
 SPEECHBRAIN_MODEL = "speechbrain/spkrec-ecapa-voxceleb"
 PYANNOTE_MODEL = "pyannote/embedding"
 NEMO_MODEL = "nvidia/speakerverification_en_titanet_large"
@@ -951,6 +953,7 @@ class TranscriptionSession:
             if not text:
                 await self.send_status("listening", "Listening")
                 return True
+            text = cap_text(text, MAX_TRANSCRIPT_TEXT_LENGTH)
 
             self.sequence += 1
             try:
@@ -987,14 +990,19 @@ class TranscriptionSession:
         await self.websocket.send_json(
             {
                 "type": "engine_status",
-                "status": status,
-                "message": message,
+                "status": cap_text(status, MAX_ENGINE_MESSAGE_LENGTH),
+                "message": cap_text(message, MAX_ENGINE_MESSAGE_LENGTH),
                 "observedSpeakerLabels": self.clusterer.labels(),
             }
         )
 
     async def send_error(self, message: str) -> None:
-        await self.websocket.send_json({"type": "engine_error", "message": message})
+        await self.websocket.send_json(
+            {
+                "type": "engine_error",
+                "message": cap_text(message, MAX_ENGINE_MESSAGE_LENGTH),
+            }
+        )
 
 
 def fallback_speaker_label(clusterer: object, labels: list[str]) -> str:
@@ -1134,6 +1142,10 @@ def clean_transcript_text(text: str) -> str:
             return ""
 
     return normalized
+
+
+def cap_text(value: str, max_length: int) -> str:
+    return value if len(value) <= max_length else value[:max_length]
 
 
 def pcm16_to_float32(raw: bytes) -> np.ndarray:

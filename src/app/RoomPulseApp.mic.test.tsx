@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_FACILITATOR_OUTPUT_TEXT_LENGTH } from "@/lib/facilitator";
 
 const clients = vi.hoisted(
   () =>
@@ -388,6 +389,28 @@ describe("RoomPulseApp mic lifecycle", () => {
     expect(screen.getByText(/browser mic:/i)).not.toHaveTextContent(
       /permission denied after stop/i
     );
+  });
+
+  it("caps oversized mic start failures before rendering the room status", async () => {
+    const oversizedError = "E".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH + 1);
+    startHandlers.push(() => Promise.reject(new Error(oversizedError)));
+
+    render(<RoomPulseApp />);
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: /new meeting/i })[0]);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+
+    await waitFor(() => {
+      const micStatus = screen.getByText(/browser mic:/i);
+      expect(micStatus).toHaveTextContent(
+        "E".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH)
+      );
+      expect(micStatus).not.toHaveTextContent(oversizedError);
+    });
   });
 
   it("restarts mic capture after an unexpected transcription stream close", async () => {

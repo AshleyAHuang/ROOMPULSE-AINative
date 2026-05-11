@@ -773,6 +773,71 @@ class SpeakerClustererTest(unittest.TestCase):
         )
         self.assertEqual(messages[-1].get("status"), "listening")
 
+    def test_flush_caps_oversized_transcription_errors_before_socket_send(self) -> None:
+        async def run() -> list[dict]:
+            websocket = FakeWebSocket()
+            session = TranscriptionSession(websocket)
+            session.min_seconds = 0.1
+            session.max_seconds = 2.0
+            await session.append_audio(float32_to_pcm16(synthetic_voice(150, seconds=0.5)))
+
+            previous_model = server.ensure_model_loaded
+            oversized_error = "E" * 600
+
+            async def fake_model():
+                raise RuntimeError(oversized_error)
+
+            server.ensure_model_loaded = fake_model
+            try:
+                await session.flush(force=True)
+            finally:
+                server.ensure_model_loaded = previous_model
+
+            return websocket.messages
+
+        messages = asyncio.run(run())
+        error = next(message for message in messages if message.get("type") == "engine_error")
+
+        self.assertEqual(len(error["message"]), 500)
+        self.assertEqual(error["message"], ("Transcription failed: " + ("E" * 600))[:500])
+        self.assertEqual(messages[-1].get("status"), "listening")
+
+    def test_flush_caps_oversized_transcripts_before_socket_send(self) -> None:
+        async def run() -> list[dict]:
+            websocket = FakeWebSocket()
+            session = TranscriptionSession(websocket)
+            session.min_seconds = 0.1
+            session.max_seconds = 2.0
+            await session.append_audio(float32_to_pcm16(synthetic_voice(150, seconds=0.5)))
+
+            previous_model = server.ensure_model_loaded
+            previous_transcribe = server.transcribe_audio
+
+            async def fake_model():
+                return object()
+
+            async def fake_transcribe(_model, _audio, _language):
+                return "T" * 1001
+
+            server.ensure_model_loaded = fake_model
+            server.transcribe_audio = fake_transcribe
+            try:
+                await session.flush(force=True)
+            finally:
+                server.ensure_model_loaded = previous_model
+                server.transcribe_audio = previous_transcribe
+
+            return websocket.messages
+
+        messages = asyncio.run(run())
+        transcript = next(
+            message for message in messages if message.get("type") == "final_transcript"
+        )
+
+        self.assertEqual(len(transcript["text"]), 1000)
+        self.assertEqual(transcript["text"], "T" * 1000)
+        self.assertEqual(messages[-1].get("status"), "listening")
+
     def test_flush_keeps_transcript_when_speaker_clustering_fails(self) -> None:
         async def run() -> list[dict]:
             websocket = FakeWebSocket()
