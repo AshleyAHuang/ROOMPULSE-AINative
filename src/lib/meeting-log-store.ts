@@ -129,6 +129,10 @@ interface ReviewVersionRow {
 }
 
 let cache: DatabaseCache | null = null;
+const MAX_EVENT_PAYLOAD_STRING_LENGTH = MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH;
+const MAX_EVENT_PAYLOAD_ARRAY_ITEMS = 80;
+const MAX_EVENT_PAYLOAD_OBJECT_KEYS = 40;
+const MAX_EVENT_PAYLOAD_DEPTH = 8;
 
 export async function createMeetingLog(
   meeting: MeetingConfig,
@@ -359,12 +363,9 @@ export async function readMeetingLog(
 
   return {
     metadata,
-    events: eventRows.map((row) => ({
-      id: row.id,
-      type: row.type,
-      timestamp: row.timestamp,
-      payload: parseJson(row.payload_json, null)
-    })),
+    events: eventRows
+      .map(eventFromRow)
+      .filter((event): event is MeetingLogEvent => event !== null),
     transcript: readTranscriptLines(db, meetingId),
     reviewVersions: readReviewVersions(db, meetingId)
   };
@@ -914,6 +915,92 @@ function reviewVersionFromRow(row: ReviewVersionRow): ReviewVersion | null {
     markdown: row.markdown,
     summary: row.summary
   };
+}
+
+function eventFromRow(row: EventRow): MeetingLogEvent | null {
+  if (
+    !isBoundedNonEmptyString(row.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) ||
+    !isBoundedNonEmptyString(row.type, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) ||
+    !isValidTimestamp(row.timestamp)
+  ) {
+    return null;
+  }
+
+  return {
+    id: row.id,
+    type: row.type,
+    timestamp: row.timestamp,
+    payload: compactEventPayload(row.type, parseJson(row.payload_json, null))
+  };
+}
+
+function compactEventPayload(type: string, payload: unknown): unknown {
+  if (type === "transcript_line" && isRecord(payload) && isRecord(payload.line)) {
+    return {
+      ...(compactJsonPayload(payload) as Record<string, unknown>),
+      line: compactEventTranscriptLine(payload.line)
+    };
+  }
+
+  return compactJsonPayload(payload);
+}
+
+function compactEventTranscriptLine(
+  value: Record<string, unknown>
+): Record<string, unknown> {
+  return {
+    id:
+      typeof value.id === "string"
+        ? capText(value.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH)
+        : "",
+    speakerId:
+      typeof value.speakerId === "string"
+        ? capText(value.speakerId, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH)
+        : "",
+    speakerLabel: isSafeSpeakerLabel(value.speakerLabel)
+      ? value.speakerLabel
+      : "Speaker 1",
+    text:
+      typeof value.text === "string"
+        ? capText(value.text, MAX_HEARTBEAT_INPUT_TEXT_LENGTH)
+        : "",
+    timestamp: isValidTimestamp(value.timestamp) ? value.timestamp : 0,
+    source: isTranscriptSource(value.source) ? value.source : "speech",
+    confidence: isConfidence(value.confidence) ? value.confidence : 1
+  };
+}
+
+function compactJsonPayload(value: unknown, depth = 0): unknown {
+  if (depth >= MAX_EVENT_PAYLOAD_DEPTH) {
+    return null;
+  }
+  if (typeof value === "string") {
+    return capText(value, MAX_EVENT_PAYLOAD_STRING_LENGTH);
+  }
+  if (
+    value === null ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+  ) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value
+      .slice(0, MAX_EVENT_PAYLOAD_ARRAY_ITEMS)
+      .map((item) => compactJsonPayload(item, depth + 1));
+  }
+  if (isRecord(value)) {
+    return Object.fromEntries(
+      Object.entries(value)
+        .slice(0, MAX_EVENT_PAYLOAD_OBJECT_KEYS)
+        .map(([key, item]) => [
+          capText(key, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH),
+          compactJsonPayload(item, depth + 1)
+        ])
+    );
+  }
+
+  return null;
 }
 
 function mergeStateWithMaterializedRows(

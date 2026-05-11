@@ -357,6 +357,54 @@ describe("meeting log store", () => {
     );
   });
 
+  it("caps oversized legacy event payload fields on read", async () => {
+    const startedAt = Date.UTC(2026, 4, 9, 12, 0, 0);
+    const metadata = await createMeetingLog(meeting, startedAt);
+    const database = new DatabaseSync(join(logDir, "roompulse.sqlite"));
+    database
+      .prepare(
+        `INSERT INTO meeting_events (
+          id,
+          meeting_id,
+          type,
+          timestamp,
+          payload_json
+        ) VALUES (?, ?, ?, ?, ?)`
+      )
+      .run(
+        "legacy-event",
+        metadata.id,
+        "transcript_line",
+        startedAt + 1_000,
+        JSON.stringify({
+          line: {
+            id: "i".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH + 1),
+            speakerId: "s".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH + 1),
+            speakerLabel: "Speaker 1",
+            text: "T".repeat(MAX_HEARTBEAT_INPUT_TEXT_LENGTH + 1),
+            timestamp: startedAt + 1_000,
+            source: "speech",
+            confidence: 0.9
+          },
+          note: "N".repeat(MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH + 1)
+        })
+      );
+    database.close();
+
+    const snapshot = await readMeetingLog(metadata.id);
+    const payload = snapshot.events[0]?.payload as {
+      line?: { id?: string; speakerId?: string; text?: string };
+      note?: string;
+    };
+
+    expect(payload.line?.id).toHaveLength(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH);
+    expect(payload.line?.speakerId).toHaveLength(
+      MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+    );
+    expect(payload.line?.text).toHaveLength(MAX_HEARTBEAT_INPUT_TEXT_LENGTH);
+    expect(payload.note).toHaveLength(MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH);
+  });
+
   it("drops persisted state with future-dated materialized children", async () => {
     const startedAt = Date.UTC(2026, 4, 9, 12, 0, 0);
     const metadata = await createMeetingLog(meeting, startedAt);
