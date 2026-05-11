@@ -304,4 +304,35 @@ describe("MeetingReviewClient", () => {
     expect(clickSpy).toHaveBeenCalledOnce();
     expect(clickedDownloads).toEqual(["roompulse-meeting-transcript.txt"]);
   });
+
+  it("bounds long transcript export filenames", () => {
+    const href = "blob:roompulse";
+    const createObjectURL = vi.fn(() => href);
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", {
+      ...URL,
+      createObjectURL,
+      revokeObjectURL
+    });
+    const clickedDownloads: string[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(
+      function click(this: HTMLAnchorElement) {
+        clickedDownloads.push(this.download);
+      }
+    );
+    const longTitleSnapshot: MeetingLogSnapshot = {
+      ...snapshot,
+      metadata: {
+        ...snapshot.metadata,
+        title: `Launch ${"readiness ".repeat(40)}`
+      }
+    };
+
+    render(<MeetingReviewClient snapshot={longTitleSnapshot} />);
+    fireEvent.click(screen.getByRole("button", { name: /export transcript/i }));
+
+    expect(clickedDownloads[0]).toMatch(/^launch-readiness/);
+    expect(clickedDownloads[0]?.endsWith("-transcript.txt")).toBe(true);
+    expect(clickedDownloads[0]?.length).toBeLessThanOrEqual(95);
+  });
 });

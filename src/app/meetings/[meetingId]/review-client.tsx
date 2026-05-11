@@ -6,6 +6,8 @@ import { reviewMarkdownForDisplay } from "@/lib/facilitator";
 import type { MeetingLogSnapshot } from "@/lib/meeting-log-store";
 import { speakerBadgeClass, speakerBadgeLabel } from "@/lib/speaker-tracker";
 
+const MAX_DOWNLOAD_SLUG_LENGTH = 80;
+
 export default function MeetingReviewClient({
   snapshot
 }: {
@@ -266,11 +268,14 @@ async function copyText(value: string): Promise<void> {
 }
 
 function downloadSlug(title: string): string {
-  return (
+  const slug =
     title
       .replace(/[^a-z0-9]+/gi, "-")
       .replace(/^-|-$/g, "")
-      .toLowerCase() || "roompulse-meeting"
+      .toLowerCase() || "roompulse-meeting";
+  return (
+    slug.slice(0, MAX_DOWNLOAD_SLUG_LENGTH).replace(/-$/g, "") ||
+    "roompulse-meeting"
   );
 }
 
