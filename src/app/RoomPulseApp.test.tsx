@@ -18,6 +18,7 @@ import {
   MAX_AGENDA_ITEMS,
   MAX_EXPECTED_PARTICIPANTS,
   MAX_HEARTBEAT_INTERVAL_SECONDS,
+  MAX_HEARTBEAT_INPUT_TEXT_LENGTH,
   MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH
 } from "@/lib/facilitator";
 
@@ -681,7 +682,7 @@ describe("RoomPulseApp", () => {
     expect(screen.queryByText(/paused stale heartbeat/i)).not.toBeInTheDocument();
   });
 
-  it("caps pasted setup agenda and participant lists before initialization", async () => {
+  it("caps pasted setup text, agenda, and participant lists before initialization", async () => {
     let initialReviewBody: Record<string, unknown> | null = null;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -726,16 +727,29 @@ describe("RoomPulseApp", () => {
 
     render(<RoomPulseApp />);
     await openSetupScreen();
+    const oversizedText = "T".repeat(MAX_HEARTBEAT_INPUT_TEXT_LENGTH + 1);
+    fireEvent.change(screen.getByLabelText(/meeting title/i), {
+      target: { value: oversizedText }
+    });
+    fireEvent.change(screen.getByLabelText(/^goal$/i), {
+      target: { value: oversizedText }
+    });
+    fireEvent.change(screen.getByLabelText(/important context/i), {
+      target: { value: oversizedText }
+    });
     fireEvent.change(screen.getByLabelText(/agenda/i), {
       target: {
-        value: Array.from({ length: 40 }, (_, index) => `Item ${index}`).join("\n")
+        value: Array.from(
+          { length: 40 },
+          (_, index) => `${oversizedText} ${index}`
+        ).join("\n")
       }
     });
     fireEvent.change(screen.getByLabelText(/optional names and roles/i), {
       target: {
         value: Array.from(
           { length: 30 },
-          (_, index) => `Person ${index} - Role`
+          (_, index) => `${oversizedText} ${index} - ${oversizedText}`
         ).join("\n")
       }
     });
@@ -746,11 +760,26 @@ describe("RoomPulseApp", () => {
 
     await waitFor(() => {
       const meeting = initialReviewBody?.meeting as {
+        title: string;
+        goal: string;
+        context: string;
         agenda: unknown[];
-        participants: unknown[];
+        participants: Array<{ name: string; role?: string }>;
       };
+      expect(meeting.title).toHaveLength(MAX_HEARTBEAT_INPUT_TEXT_LENGTH);
+      expect(meeting.goal).toHaveLength(MAX_HEARTBEAT_INPUT_TEXT_LENGTH);
+      expect(meeting.context).toHaveLength(MAX_HEARTBEAT_INPUT_TEXT_LENGTH);
       expect(meeting.agenda).toHaveLength(30);
+      expect((meeting.agenda[0] as { title: string }).title).toHaveLength(
+        MAX_HEARTBEAT_INPUT_TEXT_LENGTH
+      );
       expect(meeting.participants).toHaveLength(24);
+      expect(meeting.participants[0].name).toHaveLength(
+        MAX_HEARTBEAT_INPUT_TEXT_LENGTH
+      );
+      expect(meeting.participants[0].role).toHaveLength(
+        MAX_HEARTBEAT_INPUT_TEXT_LENGTH
+      );
     });
   });
 

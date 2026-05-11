@@ -13,6 +13,7 @@ import {
   MAX_AGENDA_ITEMS,
   MAX_EXPECTED_PARTICIPANTS,
   MAX_HEARTBEAT_INTERVAL_SECONDS,
+  MAX_HEARTBEAT_INPUT_TEXT_LENGTH,
   MAX_PARTICIPANT_ENTRIES,
   MIN_HEARTBEAT_INTERVAL_SECONDS,
   capFacilitatorOutput,
@@ -3811,9 +3812,9 @@ function normalizeMeetingDraft(
 ): MeetingConfig {
   return {
     ...draft,
-    title: draft.title.trim() || defaultMeeting.title,
-    goal: draft.goal.trim() || defaultMeeting.goal,
-    context: draft.context.trim(),
+    title: capSetupText(draft.title.trim() || defaultMeeting.title),
+    goal: capSetupText(draft.goal.trim() || defaultMeeting.goal),
+    context: capSetupText(draft.context.trim()),
     expectedParticipants: clampFiniteNumber(
       draft.expectedParticipants,
       1,
@@ -3913,7 +3914,7 @@ function parseAgenda(value: string): AgendaItem[] {
 
   return (items.length > 0 ? items : ["Open discussion"]).map((title, index) => ({
     id: `agenda-${index + 1}`,
-    title,
+    title: capSetupText(title),
     done: false
   }));
 }
@@ -3927,10 +3928,16 @@ function parseParticipants(value: string) {
     .map((line) => {
       const [name, role] = line.split(/\s+-\s+/, 2);
       return {
-        name,
-        role
+        name: capSetupText(name),
+        role: role === undefined ? undefined : capSetupText(role)
       };
     });
+}
+
+function capSetupText(value: string): string {
+  return value.length <= MAX_HEARTBEAT_INPUT_TEXT_LENGTH
+    ? value
+    : value.slice(0, MAX_HEARTBEAT_INPUT_TEXT_LENGTH);
 }
 
 function clampFiniteNumber(
