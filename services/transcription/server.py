@@ -119,8 +119,16 @@ async def health() -> JSONResponse:
                 if webrtcvad is not None and os.getenv("ROOMPULSE_WEBRTC_VAD", "1") != "0"
                 else "energy"
             ),
-            "importError": str(WHISPER_IMPORT_ERROR) if WHISPER_IMPORT_ERROR else None,
-            "modelError": model_error,
+            "importError": (
+                cap_text(str(WHISPER_IMPORT_ERROR), MAX_ENGINE_MESSAGE_LENGTH)
+                if WHISPER_IMPORT_ERROR
+                else None
+            ),
+            "modelError": (
+                cap_text(model_error, MAX_ENGINE_MESSAGE_LENGTH)
+                if model_error
+                else None
+            ),
         }
     )
 

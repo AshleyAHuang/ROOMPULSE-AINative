@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import unittest
 
@@ -581,6 +582,29 @@ class SpeakerClustererTest(unittest.TestCase):
 
         self.assertEqual(min_seconds, 4.0)
         self.assertEqual(max_seconds, 4.0)
+
+    def test_health_caps_engine_error_fields(self) -> None:
+        async def run() -> dict:
+            previous_model_error = server.model_error
+            previous_import_error = server.WHISPER_IMPORT_ERROR
+            server.model_error = "M" * 600
+            server.WHISPER_IMPORT_ERROR = RuntimeError("I" * 600)
+            try:
+                response = await server.health()
+            finally:
+                server.model_error = previous_model_error
+                server.WHISPER_IMPORT_ERROR = previous_import_error
+            return json.loads(response.body)
+
+        payload = asyncio.run(run())
+
+        self.assertEqual(len(payload["modelError"]), server.MAX_ENGINE_MESSAGE_LENGTH)
+        self.assertEqual(len(payload["importError"]), server.MAX_ENGINE_MESSAGE_LENGTH)
+        self.assertEqual(payload["modelError"], "M" * server.MAX_ENGINE_MESSAGE_LENGTH)
+        self.assertEqual(
+            payload["importError"],
+            ("I" * 600)[: server.MAX_ENGINE_MESSAGE_LENGTH],
+        )
 
     def test_reset_control_configures_session_speaker_cap(self) -> None:
         async def run() -> tuple[int, int, list[dict]]:
