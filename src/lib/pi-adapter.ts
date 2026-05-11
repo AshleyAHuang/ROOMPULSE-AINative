@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import {
   MAX_FACILITATOR_OUTPUT_CARDS,
+  MAX_FACILITATOR_OUTPUT_TEXT_LENGTH,
   capFacilitatorOutput,
   createInitialReviewMarkdown,
   runLocalFacilitation,
@@ -113,14 +114,15 @@ export async function runPiHeartbeat(
     const output = await runPiSession(input, timeoutMs);
     return output;
   } catch (error) {
+    const message = errorToMessage(error);
     if (process.env.ROOMPULSE_REQUIRE_PI === "1") {
-      throw new Error(`Pi adapter required but unavailable: ${errorToMessage(error)}`);
+      throw new Error(adapterMessage(`Pi adapter required but unavailable: ${message}`));
     }
 
     const fallback = await runLocalFacilitation(input);
     return {
       ...fallback,
-      adapterNotice: `Pi adapter fell back locally: ${errorToMessage(error)}`
+      adapterNotice: adapterMessage(`Pi adapter fell back locally: ${message}`)
     };
   }
 }
@@ -139,15 +141,16 @@ export async function runPiInitialReviewDocument(
   try {
     return await runPiInitialReviewSession(meeting, timeoutMs);
   } catch (error) {
+    const message = errorToMessage(error);
     if (process.env.ROOMPULSE_REQUIRE_PI === "1") {
-      throw new Error(`Pi adapter required but unavailable: ${errorToMessage(error)}`);
+      throw new Error(adapterMessage(`Pi adapter required but unavailable: ${message}`));
     }
 
     return {
       source: "local-fallback",
       markdown: createInitialReviewMarkdown(meeting),
       summary: "Local fallback initialized the meeting review document.",
-      adapterNotice: `Pi adapter fell back locally: ${errorToMessage(error)}`
+      adapterNotice: adapterMessage(`Pi adapter fell back locally: ${message}`)
     };
   }
 }
@@ -1792,4 +1795,10 @@ function isAbortError(error: unknown): boolean {
 
 function errorToMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function adapterMessage(message: string): string {
+  return message.length <= MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+    ? message
+    : message.slice(0, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH);
 }

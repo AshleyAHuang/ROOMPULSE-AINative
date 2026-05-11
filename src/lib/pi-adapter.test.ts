@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runPiHeartbeat, runPiInitialReviewDocument } from "./pi-adapter";
 import {
   MAX_AGENDA_ITEMS,
+  MAX_FACILITATOR_OUTPUT_TEXT_LENGTH,
   createInitialReviewMarkdown,
   createUiToolDefinitions,
   type HeartbeatInput,
@@ -924,6 +925,28 @@ describe("Pi adapter", () => {
     expect(output.source).toBe("local-fallback");
     expect(output.adapterNotice).toContain(
       "OpenRouter returned invalid parameters for update_review_document"
+    );
+  });
+
+  it("caps oversized OpenRouter fallback notices inside the adapter", async () => {
+    process.env.ROOMPULSE_PI_PROVIDER = "openrouter";
+    process.env.ROOMPULSE_OPENROUTER_API_KEY = "openrouter-key";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json(
+          { error: { message: "E".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH + 1) } },
+          { status: 500 }
+        )
+      )
+    );
+
+    const output = await runPiHeartbeat(heartbeatInput);
+
+    expect(output.source).toBe("local-fallback");
+    expect(output.adapterNotice).toHaveLength(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH);
+    expect(output.adapterNotice).not.toContain(
+      "E".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH + 1)
     );
   });
 
