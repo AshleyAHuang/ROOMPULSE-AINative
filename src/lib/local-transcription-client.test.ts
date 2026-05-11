@@ -1483,4 +1483,41 @@ describe("local transcription audio utilities", () => {
     expect(onStatus).not.toHaveBeenCalled();
     expect(closeSocket).not.toHaveBeenCalled();
   });
+
+  it("ignores late microphone ended callbacks after mic capture has already stopped", () => {
+    const stopTrack = vi.fn();
+    const closeAudio = vi.fn();
+    const onError = vi.fn();
+    const onStatus = vi.fn();
+    const client = new LocalTranscriptionClient({
+      onSegment: vi.fn(),
+      onStatus,
+      onError
+    });
+    Object.assign(client as unknown as Record<string, unknown>, {
+      stream: {
+        getTracks: () => [{ stop: stopTrack }]
+      },
+      audioContext: {
+        close: closeAudio
+      }
+    });
+
+    client.stopImmediately();
+    onError.mockClear();
+    onStatus.mockClear();
+    stopTrack.mockClear();
+    closeAudio.mockClear();
+
+    (
+      client as unknown as {
+        handleInputDeviceEnded: () => void;
+      }
+    ).handleInputDeviceEnded();
+
+    expect(onError).not.toHaveBeenCalled();
+    expect(onStatus).not.toHaveBeenCalled();
+    expect(stopTrack).not.toHaveBeenCalled();
+    expect(closeAudio).not.toHaveBeenCalled();
+  });
 });

@@ -387,6 +387,10 @@ export class LocalTranscriptionClient {
   }
 
   private handleInputDeviceEnded(): void {
+    if (this.stopped) {
+      return;
+    }
+
     this.stopped = true;
     const socket = this.socket;
     this.onError("Browser microphone input ended.");
