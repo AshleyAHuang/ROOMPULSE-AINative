@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import MarkdownDocument from "@/app/MarkdownDocument";
+import { reviewMarkdownForDisplay } from "@/lib/facilitator";
 import type { MeetingLogSnapshot } from "@/lib/meeting-log-store";
 import { speakerBadgeClass, speakerBadgeLabel } from "@/lib/speaker-tracker";
 
@@ -145,7 +146,7 @@ export default function MeetingReviewClient({
           </div>
           <article className="markdown-document review-markdown">
             {latestMarkdown ? (
-              <MarkdownDocument markdown={latestMarkdown} />
+              <MarkdownDocument markdown={reviewMarkdownForDisplay(latestMarkdown)} />
             ) : (
               <p className="empty-state">No review document was saved.</p>
             )}

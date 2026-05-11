@@ -851,6 +851,9 @@ describe("RoomPulseApp", () => {
     expect(screen.getByText(/document ready/i)).toBeVisible();
     expect(screen.queryByText("R".repeat(MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH + 1)))
       .not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/RoomPulse omitted middle review content/i)
+    ).not.toBeInTheDocument();
   });
 
   it("moves now discussing to the next open agenda item when the active item is completed", async () => {

@@ -132,6 +132,30 @@ describe("MeetingReviewClient", () => {
     });
   });
 
+  it("does not render heartbeat compaction markers in the final review page", () => {
+    const markerSnapshot: MeetingLogSnapshot = {
+      ...snapshot,
+      reviewVersions: [
+        {
+          id: "review-marker",
+          timestamp,
+          source: "pi",
+          markdown:
+            "# Review\n\nOpening content.\n\n[RoomPulse omitted middle review content for heartbeat latency. Preserve the visible document structure and keep the next version compact.]\n\nClosing content.",
+          summary: "Marker should stay internal."
+        }
+      ]
+    };
+
+    render(<MeetingReviewClient snapshot={markerSnapshot} />);
+
+    expect(screen.getByText(/opening content/i)).toBeVisible();
+    expect(screen.getByText(/closing content/i)).toBeVisible();
+    expect(
+      screen.queryByText(/RoomPulse omitted middle review content/i)
+    ).not.toBeInTheDocument();
+  });
+
   it("does not render arbitrary label digits as review speaker badges", () => {
     const roomLabelSnapshot: MeetingLogSnapshot = {
       ...snapshot,

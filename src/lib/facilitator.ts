@@ -427,6 +427,14 @@ export function compactReviewMarkdownForHeartbeat(markdown: string): string {
   return compactMiddleText(markdown, MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH);
 }
 
+export function reviewMarkdownForDisplay(markdown: string): string {
+  return markdown
+    .split(HEARTBEAT_REVIEW_COMPACTION_MARKER)
+    .join("\n\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 export interface CreateHeartbeatInputArgs {
   meeting: MeetingConfig;
   transcript: TranscriptLine[];

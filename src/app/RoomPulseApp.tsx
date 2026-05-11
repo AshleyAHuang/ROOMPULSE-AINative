@@ -23,6 +23,7 @@ import {
   createHeartbeatInput,
   createInitialReviewMarkdown,
   getAgendaProgress,
+  reviewMarkdownForDisplay,
   type AgendaItem,
   type FacilitatorOutput,
   type MeetingConfig,
@@ -2676,7 +2677,7 @@ export default function RoomPulseApp() {
             </section>
           ) : null}
           <article className="markdown-document">
-            <MarkdownDocument markdown={reviewMarkdown} />
+            <MarkdownDocument markdown={reviewMarkdownForDisplay(reviewMarkdown)} />
           </article>
           <div className="version-bar" aria-label="Review document version control">
             <button
