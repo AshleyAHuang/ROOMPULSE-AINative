@@ -56,6 +56,7 @@ DEFAULT_BEAM_SIZE = 5
 DEFAULT_BEST_OF = 5
 DEFAULT_NO_SPEECH_THRESHOLD = 0.55
 DEFAULT_VAD_MODE = 2
+DEFAULT_MAX_AUDIO_BUFFER_SECONDS = 20.0
 MAX_ENGINE_MESSAGE_LENGTH = 500
 MAX_TRANSCRIPT_TEXT_LENGTH = 1_000
 SPEECHBRAIN_MODEL = "speechbrain/spkrec-ecapa-voxceleb"
@@ -916,6 +917,11 @@ class TranscriptionSession:
     async def append_audio(self, chunk: bytes) -> None:
         async with self.buffer_lock:
             self.buffer.extend(chunk)
+            max_buffer_bytes = seconds_to_bytes(
+                max(DEFAULT_MAX_AUDIO_BUFFER_SECONDS, self.max_seconds * 3.0)
+            )
+            if len(self.buffer) > max_buffer_bytes:
+                del self.buffer[: len(self.buffer) - max_buffer_bytes]
 
     async def process_loop(self) -> None:
         while not self.closed:

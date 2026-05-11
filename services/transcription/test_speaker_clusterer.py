@@ -669,6 +669,26 @@ class SpeakerClustererTest(unittest.TestCase):
         self.assertEqual(messages[0]["message"], "Unknown control message")
         self.assertEqual(messages[-1]["status"], "configured")
 
+    def test_append_audio_bounds_backlog_when_flush_falls_behind(self) -> None:
+        async def run() -> bytes:
+            websocket = FakeWebSocket()
+            session = TranscriptionSession(websocket)
+            session.max_seconds = 2.0
+            max_buffer_bytes = server.seconds_to_bytes(
+                max(server.DEFAULT_MAX_AUDIO_BUFFER_SECONDS, session.max_seconds * 3.0)
+            )
+            await session.append_audio(b"A" * max_buffer_bytes)
+            await session.append_audio(b"B" * max_buffer_bytes)
+            return bytes(session.buffer)
+
+        buffer = asyncio.run(run())
+        max_buffer_bytes = server.seconds_to_bytes(
+            max(server.DEFAULT_MAX_AUDIO_BUFFER_SECONDS, 2.0 * 3.0)
+        )
+
+        self.assertEqual(len(buffer), max_buffer_bytes)
+        self.assertEqual(buffer, b"B" * max_buffer_bytes)
+
     def test_transcribe_audio_falls_back_for_invalid_whisper_env(self) -> None:
         previous_beam = os.environ.get("ROOMPULSE_WHISPER_BEAM_SIZE")
         previous_best_of = os.environ.get("ROOMPULSE_WHISPER_BEST_OF")
