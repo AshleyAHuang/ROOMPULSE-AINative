@@ -70,7 +70,7 @@ export async function POST(request: Request, context: RouteContext) {
     return NextResponse.json(event, { status: 201 });
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Meeting event log failed" },
+      { error: routeErrorMessage(error, "Meeting event log failed") },
       { status: eventWriteErrorStatus(error) }
     );
   }
@@ -645,6 +645,13 @@ function isBoundedNonEmptyString(
 
 function capString(value: string, maxLength: number): string {
   return value.length <= maxLength ? value : value.slice(0, maxLength);
+}
+
+function routeErrorMessage(error: unknown, fallback: string): string {
+  return capString(
+    error instanceof Error ? error.message : fallback,
+    MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+  );
 }
 
 function isEventType(value: unknown): value is string {

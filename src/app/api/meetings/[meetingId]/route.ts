@@ -39,7 +39,7 @@ export async function GET(_request: Request, context: RouteContext) {
     return NextResponse.json(meeting);
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Meeting log not found" },
+      { error: routeErrorMessage(error, "Meeting log not found") },
       { status: 404 }
     );
   }
@@ -111,7 +111,7 @@ export async function PATCH(request: Request, context: RouteContext) {
     return NextResponse.json(metadata);
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Meeting state update failed" },
+      { error: routeErrorMessage(error, "Meeting state update failed") },
       { status: stateUpdateErrorStatus(error) }
     );
   }
@@ -488,6 +488,17 @@ function isBoundedNonEmptyString(
   maxLength: number
 ): value is string {
   return isBoundedString(value, maxLength) && value.trim().length > 0;
+}
+
+function routeErrorMessage(error: unknown, fallback: string): string {
+  return capString(
+    error instanceof Error ? error.message : fallback,
+    MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+  );
+}
+
+function capString(value: string, maxLength: number): string {
+  return value.length <= maxLength ? value : value.slice(0, maxLength);
 }
 
 function isMeetingNotFound(error: unknown): boolean {
