@@ -2654,6 +2654,55 @@ describe("RoomPulseApp", () => {
     );
   });
 
+  it("caps live-demo initial-review fallback adapter notices", async () => {
+    const oversizedNotice = "N".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH + 1);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/review-document/init")) {
+        throw new Error(oversizedNotice);
+      }
+      if (url === "/api/meetings") {
+        return Response.json(
+          {
+            id: "demo-fallback-session",
+            title: "Demo fallback",
+            goal: "Keep fallback notices bounded.",
+            startedAt: Date.now(),
+            updatedAt: Date.now(),
+            endedAt: null,
+            status: "active",
+            isPaused: false,
+            eventCount: 0,
+            meeting: {},
+            state: null,
+            latestReviewMarkdown: "",
+            latestReviewVersionId: null
+          },
+          { status: 201 }
+        );
+      }
+      if (url.includes("/events")) {
+        return Response.json({ id: "event-1" }, { status: 201 });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /launch live demo/i }));
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("N".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH))
+      ).toBeVisible();
+    });
+    expect(screen.queryByText(oversizedNotice)).not.toBeInTheDocument();
+  });
+
   it("enters the live demo immediately while strict Pi initialization is pending", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
