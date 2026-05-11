@@ -3557,6 +3557,41 @@ describe("RoomPulseApp", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("caps oversized meeting logging failures before rendering log status", async () => {
+    const oversizedError = "E".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH + 1);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/review-document/init")) {
+        return Response.json({
+          source: "pi",
+          markdown: "# Review",
+          summary: "Initialized review."
+        });
+      }
+      if (url === "/api/meetings") {
+        throw new Error(oversizedError);
+      }
+      return Response.json({ meetings: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /meeting settings/i }));
+    });
+
+    await waitFor(() => {
+      const logStatus = screen.getByText(/meeting logging unavailable:/i);
+      expect(logStatus.textContent).toHaveLength(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH);
+      expect(logStatus).not.toHaveTextContent(oversizedError);
+    });
+  });
+
   it("keeps an in-flight heartbeat when new meeting checkpointing fails", async () => {
     let resolveHeartbeat: ((response: Response) => void) | null = null;
     let heartbeatSignal: AbortSignal | null = null;

@@ -444,9 +444,7 @@ export default function RoomPulseApp() {
           setLogStatus(`Logging locally: ${currentMeetingLogId}`);
         })
         .catch((error) => {
-          setLogStatus(
-            `Log write failed: ${error instanceof Error ? error.message : String(error)}`
-          );
+          setLogStatus(cappedStatusText("Log write failed: ", error));
         });
     },
     [flushPendingLogEvents]
@@ -479,7 +477,7 @@ export default function RoomPulseApp() {
         metadata: {
           id,
           title: "Unable to load meeting",
-          goal: error instanceof Error ? error.message : String(error),
+          goal: cappedErrorText(error),
           startedAt: Date.now(),
           updatedAt: Date.now(),
           endedAt: null,
@@ -533,11 +531,7 @@ export default function RoomPulseApp() {
         await flushPendingLogEvents(metadata.id);
         void refreshPastMeetings();
       } catch (error) {
-        setLogStatus(
-          `Meeting logging unavailable: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        );
+        setLogStatus(cappedStatusText("Meeting logging unavailable: ", error));
       }
     },
     [flushPendingLogEvents, refreshPastMeetings]
@@ -913,9 +907,7 @@ export default function RoomPulseApp() {
 
       restoreMeetingFromSnapshot(snapshot);
     } catch (error) {
-      setLogStatus(
-        `Meeting restore failed: ${error instanceof Error ? error.message : String(error)}`
-      );
+      setLogStatus(cappedStatusText("Meeting restore failed: ", error));
     }
   }
 
@@ -1122,17 +1114,13 @@ export default function RoomPulseApp() {
         setIsEndingSession(false);
         setReviewHandoffUrl(handoffUrl);
         setLogStatus(
-          `Meeting ended; final state save failed: ${
-            error instanceof Error ? error.message : String(error)
-          }`
+          cappedStatusText("Meeting ended; final state save failed: ", error)
         );
         return;
       }
       endingSessionRef.current = false;
       setIsEndingSession(false);
-      setLogStatus(
-        `End session failed: ${error instanceof Error ? error.message : String(error)}`
-      );
+      setLogStatus(cappedStatusText("End session failed: ", error));
     }
   }
 
@@ -1319,9 +1307,14 @@ export default function RoomPulseApp() {
         ) {
           return;
         }
-        const message = error instanceof Error ? error.message : String(error);
+        const message = cappedErrorText(error);
         setHeartbeatError(message);
-        setLogStatus(`Live demo Pi init failed: ${message}`);
+        setLogStatus(
+          capText(
+            `Live demo Pi init failed: ${message}`,
+            MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+          )
+        );
         logMeetingEvent(
           "review_initialization_failed",
           { message },
@@ -1475,9 +1468,7 @@ export default function RoomPulseApp() {
         updatedAt: state.updatedAt,
         state
       }).catch((error) => {
-        setLogStatus(
-          `Session save failed: ${error instanceof Error ? error.message : String(error)}`
-        );
+        setLogStatus(cappedStatusText("Session save failed: ", error));
       });
     }, 350);
 
@@ -1509,9 +1500,14 @@ export default function RoomPulseApp() {
         meetingStartInFlightRef.current = false;
         return;
       }
-      const message = error instanceof Error ? error.message : String(error);
+      const message = cappedErrorText(error);
       setHeartbeatError(message);
-      setLogStatus(`Meeting start blocked: ${message}`);
+      setLogStatus(
+        capText(
+          `Meeting start blocked: ${message}`,
+          MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+        )
+      );
       setIsInitializingReview(false);
       meetingStartInFlightRef.current = false;
       return;
@@ -1719,12 +1715,7 @@ export default function RoomPulseApp() {
       }
       if (micStartTokenRef.current === startToken) {
         setIsMicRunning(false);
-        setMicStatus(
-          capText(
-            error instanceof Error ? error.message : String(error),
-            MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
-          )
-        );
+        setMicStatus(cappedErrorText(error));
         if (shouldRetry) {
           scheduleMicReconnect(expectedParticipants);
         }
@@ -1994,9 +1985,7 @@ export default function RoomPulseApp() {
       });
       return true;
     } catch (error) {
-      setLogStatus(
-        `Session checkpoint failed: ${error instanceof Error ? error.message : String(error)}`
-      );
+      setLogStatus(cappedStatusText("Session checkpoint failed: ", error));
       return false;
     }
   }
@@ -3961,6 +3950,21 @@ function capSetupText(value: string): string {
 
 function capText(value: string, maxLength: number): string {
   return value.length <= maxLength ? value : value.slice(0, maxLength);
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function cappedErrorText(error: unknown): string {
+  return capText(errorText(error), MAX_FACILITATOR_OUTPUT_TEXT_LENGTH);
+}
+
+function cappedStatusText(prefix: string, error: unknown): string {
+  return capText(
+    `${prefix}${errorText(error)}`,
+    MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+  );
 }
 
 function clampFiniteNumber(
