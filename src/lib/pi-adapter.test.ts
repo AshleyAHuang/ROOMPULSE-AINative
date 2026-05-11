@@ -6,6 +6,7 @@ import { runPiHeartbeat, runPiInitialReviewDocument } from "./pi-adapter";
 import {
   MAX_AGENDA_ITEMS,
   MAX_FACILITATOR_OUTPUT_TEXT_LENGTH,
+  MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH,
   createInitialReviewMarkdown,
   createUiToolDefinitions,
   type HeartbeatInput,
@@ -1011,6 +1012,34 @@ describe("Pi adapter", () => {
     expect(createAgentSession).not.toHaveBeenCalled();
     const requestBody = JSON.parse(fetchMock.mock.calls[0]?.[1].body);
     expect(requestBody.response_format).toEqual({ type: "json_object" });
+  });
+
+  it("caps oversized initial review documents inside the adapter", async () => {
+    process.env.ROOMPULSE_PI_PROVIDER = "openrouter";
+    process.env.ROOMPULSE_OPENROUTER_API_KEY = "openrouter-key";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  summary: "S".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH + 1),
+                  markdown: "M".repeat(MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH + 1)
+                })
+              }
+            }
+          ]
+        })
+      )
+    );
+
+    const output = await runPiInitialReviewDocument(meeting);
+
+    expect(output.source).toBe("openrouter");
+    expect(output.summary).toHaveLength(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH);
+    expect(output.markdown).toHaveLength(MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH);
   });
 
   it("falls back when OpenRouter initial review is not valid JSON", async () => {

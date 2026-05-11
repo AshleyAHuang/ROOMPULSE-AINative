@@ -5,6 +5,7 @@ import { Type } from "@earendil-works/pi-ai";
 import {
   MAX_FACILITATOR_OUTPUT_CARDS,
   MAX_FACILITATOR_OUTPUT_TEXT_LENGTH,
+  MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH,
   capFacilitatorOutput,
   createInitialReviewMarkdown,
   runLocalFacilitation,
@@ -916,10 +917,10 @@ function parseInitialReviewOutput(
 
   return {
     source: "pi",
-    markdown: parsed.markdown,
+    markdown: parsed.markdown.slice(0, MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH),
     summary:
       typeof parsed.summary === "string" && parsed.summary.trim()
-        ? parsed.summary
+        ? parsed.summary.slice(0, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH)
         : "Pi initialized the meeting review document."
   };
 }
