@@ -21,6 +21,10 @@ export default function MeetingReviewClient({
       ""
     );
   }, [snapshot]);
+  const displayMarkdown = useMemo(
+    () => reviewMarkdownForDisplay(latestMarkdown),
+    [latestMarkdown]
+  );
   const transcriptText = useMemo(() => formatTranscript(snapshot), [snapshot]);
   const durationSeconds = Math.max(
     0,
@@ -116,7 +120,7 @@ export default function MeetingReviewClient({
           <button
             className="pill-btn primary"
             type="button"
-            onClick={() => void copy("review", latestMarkdown)}
+            onClick={() => void copy("review", displayMarkdown)}
           >
             <MaterialIcon name="article" />
             Copy latest review
@@ -146,7 +150,7 @@ export default function MeetingReviewClient({
           </div>
           <article className="markdown-document review-markdown">
             {latestMarkdown ? (
-              <MarkdownDocument markdown={reviewMarkdownForDisplay(latestMarkdown)} />
+              <MarkdownDocument markdown={displayMarkdown} />
             ) : (
               <p className="empty-state">No review document was saved.</p>
             )}

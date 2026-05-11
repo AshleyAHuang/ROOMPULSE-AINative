@@ -132,7 +132,9 @@ describe("MeetingReviewClient", () => {
     });
   });
 
-  it("does not render heartbeat compaction markers in the final review page", () => {
+  it("does not render or copy heartbeat compaction markers in the final review page", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
     const markerSnapshot: MeetingLogSnapshot = {
       ...snapshot,
       reviewVersions: [
@@ -154,6 +156,13 @@ describe("MeetingReviewClient", () => {
     expect(
       screen.queryByText(/RoomPulse omitted middle review content/i)
     ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /copy latest review/i }));
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(
+        expect.not.stringContaining("RoomPulse omitted middle review content")
+      );
+    });
   });
 
   it("does not render arbitrary label digits as review speaker badges", () => {
