@@ -64,6 +64,7 @@ export class LocalTranscriptionClient {
   private processor: ScriptProcessorNode | null = null;
   private silentGain: GainNode | null = null;
   private flushResolver: (() => void) | null = null;
+  private stopPromise: Promise<void> | null = null;
   private stopped = false;
 
   constructor(options: LocalTranscriptionClientOptions) {
@@ -181,13 +182,13 @@ export class LocalTranscriptionClient {
   }
 
   async stop(): Promise<void> {
-    this.stopped = true;
-    this.disconnectAudioGraph();
-    try {
-      await this.flushOpenSocket();
-    } finally {
-      this.closeResources();
+    if (this.stopPromise) {
+      return this.stopPromise;
     }
+
+    this.stopped = true;
+    this.stopPromise = this.stopGracefully();
+    return this.stopPromise;
   }
 
   configureExpectedParticipants(expectedParticipants: number): void {
@@ -215,6 +216,15 @@ export class LocalTranscriptionClient {
     this.resolveFlushWaiter();
     this.disconnectAudioGraph();
     this.closeResources();
+  }
+
+  private async stopGracefully(): Promise<void> {
+    this.disconnectAudioGraph();
+    try {
+      await this.flushOpenSocket();
+    } finally {
+      this.closeResources();
+    }
   }
 
   private throwIfStoppedDuringStart(): void {

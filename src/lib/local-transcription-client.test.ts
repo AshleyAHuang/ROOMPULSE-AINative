@@ -27,6 +27,8 @@ function capturedPendingSocket(
 }
 
 afterEach(() => {
+  delete process.env.NEXT_PUBLIC_ROOMPULSE_TRANSCRIPTION_FLUSH_TIMEOUT_MS;
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -753,6 +755,66 @@ describe("local transcription audio utilities", () => {
     expect(disconnectProcessor).toHaveBeenCalledOnce();
     expect(disconnectSource).toHaveBeenCalledOnce();
     expect(disconnectGain).toHaveBeenCalledOnce();
+  });
+
+  it("reuses the pending flush when stop is called twice", async () => {
+    vi.useFakeTimers();
+    process.env.NEXT_PUBLIC_ROOMPULSE_TRANSCRIPTION_FLUSH_TIMEOUT_MS = "1000";
+    const closeSocket = vi.fn();
+    const closeAudio = vi.fn();
+    const send = vi.fn();
+    const client = new LocalTranscriptionClient({
+      onSegment: vi.fn(),
+      onStatus: vi.fn(),
+      onError: vi.fn()
+    });
+    Object.assign(client as unknown as Record<string, unknown>, {
+      socket: {
+        readyState: WebSocket.OPEN,
+        send,
+        close: closeSocket
+      },
+      stream: {
+        getTracks: () => []
+      },
+      audioContext: {
+        close: closeAudio
+      }
+    });
+    const handleMessage = (
+      client as unknown as {
+        handleMessage: (event: MessageEvent) => void;
+      }
+    ).handleMessage.bind(client);
+
+    const firstStop = client.stop();
+    await Promise.resolve();
+    const secondStop = client.stop();
+    await Promise.resolve();
+
+    handleMessage({
+      data: JSON.stringify({
+        type: "engine_status",
+        status: "flushed",
+        message: "Transcription buffer flushed"
+      })
+    } as MessageEvent);
+    const settleProbe = Promise.race([
+      Promise.all([firstStop, secondStop]).then(() => "settled" as const),
+      new Promise<"pending">((resolve) => {
+        window.setTimeout(() => resolve("pending"), 0);
+      })
+    ]);
+    await vi.advanceTimersByTimeAsync(0);
+    const settleState = await settleProbe;
+    await vi.advanceTimersByTimeAsync(1_000);
+    await Promise.all([firstStop, secondStop]);
+
+    expect(settleState).toBe("settled");
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledWith(JSON.stringify({ type: "flush" }));
+    expect(closeSocket).toHaveBeenCalledOnce();
+    expect(closeAudio).toHaveBeenCalledOnce();
   });
 
   it("closes cleanly when an audio frame send races a socket close", async () => {
