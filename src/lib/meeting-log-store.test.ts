@@ -342,7 +342,7 @@ describe("meeting log store", () => {
       )
       .run(
         "R".repeat(MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH + 1),
-        "legacy-review",
+        "legacy-review-".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH),
         metadata.id
       );
     database.close();
@@ -351,6 +351,9 @@ describe("meeting log store", () => {
 
     expect(snapshot.metadata.latestReviewMarkdown).toHaveLength(
       MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH
+    );
+    expect(snapshot.metadata.latestReviewVersionId).toHaveLength(
+      MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
     );
   });
 

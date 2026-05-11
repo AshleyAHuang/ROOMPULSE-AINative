@@ -628,7 +628,13 @@ function rowToMetadata(row: MeetingRow): MeetingLogMetadata {
       row.latest_review_markdown ?? "",
       MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH
     ),
-    latestReviewVersionId: row.latest_review_version_id
+    latestReviewVersionId:
+      row.latest_review_version_id === null
+        ? null
+        : capText(
+            row.latest_review_version_id,
+            MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+          )
   };
 }
 
