@@ -205,6 +205,10 @@ function capOutputText(value: unknown, maxLength: number): string {
   return typeof value === "string" ? capText(value, maxLength) : "";
 }
 
+function isNonBlankString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
 function capCards(cards: unknown[]): FacilitatorCard[] {
   const cappedCards = cards
     .filter(isRuntimeFacilitatorCard)
@@ -224,8 +228,8 @@ function capCards(cards: unknown[]): FacilitatorCard[] {
     return {
       id,
       kind: card.kind,
-      title: capText(card.title, MAX_FACILITATOR_CARD_TEXT_LENGTH),
-      body: capText(card.body, MAX_FACILITATOR_CARD_TEXT_LENGTH),
+      title: capText(card.title.trim(), MAX_FACILITATOR_CARD_TEXT_LENGTH),
+      body: capText(card.body.trim(), MAX_FACILITATOR_CARD_TEXT_LENGTH),
       priority: card.priority
     };
   });
@@ -236,8 +240,8 @@ function isRuntimeFacilitatorCard(value: unknown): value is FacilitatorCard {
     isRecord(value) &&
     typeof value.id === "string" &&
     isFacilitatorCardKind(value.kind) &&
-    typeof value.title === "string" &&
-    typeof value.body === "string" &&
+    isNonBlankString(value.title) &&
+    isNonBlankString(value.body) &&
     isFacilitatorCardPriority(value.priority)
   );
 }

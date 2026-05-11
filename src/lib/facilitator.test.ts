@@ -904,6 +904,51 @@ describe("heartbeat facilitation", () => {
     ]);
   });
 
+  it("drops blank facilitator cards while capping output", () => {
+    const output = {
+      source: "pi",
+      cards: [
+        {
+          id: "blank-title",
+          kind: "heartbeat",
+          title: "   ",
+          body: "No room-facing title.",
+          priority: "medium"
+        },
+        {
+          id: "blank-body",
+          kind: "risk",
+          title: "Risk",
+          body: "",
+          priority: "high"
+        },
+        {
+          id: "valid-card",
+          kind: "heartbeat",
+          title: "  Heartbeat  ",
+          body: "  Keep going.  ",
+          priority: "medium"
+        }
+      ],
+      summary: "Cards.",
+      nextHeartbeatHint: "Continue.",
+      reviewMarkdown: "# Review",
+      agendaActions: [],
+      uiActions: [],
+      ephemeralReminder: null
+    } as unknown as FacilitatorOutput;
+
+    expect(capFacilitatorOutput(output).cards).toEqual([
+      {
+        id: "valid-card",
+        kind: "heartbeat",
+        title: "Heartbeat",
+        body: "Keep going.",
+        priority: "medium"
+      }
+    ]);
+  });
+
   it("normalizes malformed top-level facilitator output fields", () => {
     const output = {
       source: "external-agent",
