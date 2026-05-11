@@ -1139,6 +1139,45 @@ describe("RoomPulseApp", () => {
     ).toBe(false);
   });
 
+  it("normalizes AbortError-shaped initial-review failures as Pi timeouts", async () => {
+    process.env.NEXT_PUBLIC_ROOMPULSE_REQUIRE_PI = "1";
+    process.env.NEXT_PUBLIC_ROOMPULSE_PI_TIMEOUT_MS = "1000";
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/meetings" && method === "GET") {
+          return Response.json({ meetings: [] });
+        }
+        if (url.includes("/api/review-document/init")) {
+          throw Object.assign(new Error("The operation was aborted."), {
+            name: "AbortError"
+          });
+        }
+        if (url === "/api/meetings" && method === "POST") {
+          return Response.json({ id: "should-not-create" }, { status: 201 });
+        }
+        return Response.json({});
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /pi initial review timed out after 1000ms/i
+    );
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) => String(url) === "/api/meetings" && init?.method === "POST"
+      )
+    ).toBe(false);
+  });
+
   it("blocks a successful local initial-review fallback in client strict mode", async () => {
     process.env.NEXT_PUBLIC_ROOMPULSE_REQUIRE_PI = "1";
     const fetchMock = vi.fn(
@@ -1259,6 +1298,69 @@ describe("RoomPulseApp", () => {
     expect(await screen.findByText(/pi heartbeat required/i)).toBeVisible();
     expect(screen.queryByText(/this fallback must not render/i))
       .not.toBeInTheDocument();
+  });
+
+  it("normalizes AbortError-shaped heartbeat failures as Pi timeouts", async () => {
+    process.env.NEXT_PUBLIC_ROOMPULSE_REQUIRE_PI = "1";
+    process.env.NEXT_PUBLIC_ROOMPULSE_PI_TIMEOUT_MS = "1000";
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/meetings" && method === "GET") {
+          return Response.json({ meetings: [] });
+        }
+        if (url.includes("/api/review-document/init")) {
+          return Response.json({
+            source: "pi",
+            markdown: "# Strict review",
+            summary: "Initialized through Pi."
+          });
+        }
+        if (url === "/api/meetings" && method === "POST") {
+          return Response.json(
+            {
+              id: "meeting-strict-heartbeat-timeout",
+              title: "Strict heartbeat timeout",
+              goal: "Show useful timeout errors.",
+              startedAt: Date.now(),
+              updatedAt: Date.now(),
+              endedAt: null,
+              status: "active",
+              isPaused: false,
+              eventCount: 0,
+              meeting: {},
+              state: null,
+              latestReviewMarkdown: "",
+              latestReviewVersionId: null
+            },
+            { status: 201 }
+          );
+        }
+        if (url.includes("/api/heartbeat")) {
+          throw Object.assign(new Error("The operation was aborted."), {
+            name: "AbortError"
+          });
+        }
+        if (url.includes("/events")) {
+          return Response.json({ id: "event-1" }, { status: 201 });
+        }
+        return Response.json({});
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /run heartbeat/i }));
+    });
+
+    expect(await screen.findByText(/pi heartbeat timed out after 1000ms/i))
+      .toBeVisible();
   });
 
   it("versions the markdown produced by an update_review_document tool", async () => {

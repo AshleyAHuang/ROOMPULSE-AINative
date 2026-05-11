@@ -745,7 +745,7 @@ export default function RoomPulseApp() {
       }
       const message = error instanceof Error ? error.message : String(error);
       setHeartbeatError(
-        error instanceof DOMException && error.name === "AbortError"
+        isAbortError(error)
           ? `Pi heartbeat timed out after ${getClientPiTimeoutMs()}ms`
           : message
       );
@@ -849,7 +849,7 @@ export default function RoomPulseApp() {
         (error as Error & { piRequired?: boolean })?.piRequired === true
       ) {
         throw new Error(
-          error instanceof DOMException && error.name === "AbortError"
+          isAbortError(error)
             ? `Pi initial review timed out after ${getClientPiTimeoutMs()}ms`
             : message
         );
@@ -3995,6 +3995,15 @@ function isRetryableMicStartError(error: unknown): boolean {
     message.includes("could not connect to") ||
     message.includes("websocket") ||
     message.includes("local transcription")
+  );
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    (typeof DOMException !== "undefined" &&
+      error instanceof DOMException &&
+      error.name === "AbortError") ||
+    (isRecord(error) && error.name === "AbortError")
   );
 }
 
