@@ -61,7 +61,10 @@ export async function POST(request: Request) {
   } catch (error) {
     return NextResponse.json(
       {
-        error: error instanceof Error ? error.message : "Heartbeat failed",
+        error: capText(
+          error instanceof Error ? error.message : "Heartbeat failed",
+          MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+        ),
         piRequired: process.env.ROOMPULSE_REQUIRE_PI === "1"
       },
       { status: 500 }
@@ -307,4 +310,8 @@ function isNonEmptyBoundedString(
   maxLength: number
 ): value is string {
   return isNonEmptyString(value) && value.length <= maxLength;
+}
+
+function capText(value: string, maxLength: number): string {
+  return value.length <= maxLength ? value : value.slice(0, maxLength);
 }

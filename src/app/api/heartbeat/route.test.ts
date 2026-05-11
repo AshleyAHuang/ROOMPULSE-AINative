@@ -874,6 +874,19 @@ describe("POST /api/heartbeat", () => {
       piRequired: true
     });
   });
+
+  it("caps oversized Pi failure messages before returning route JSON", async () => {
+    const oversizedError = "E".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH + 1);
+    vi.mocked(runPiHeartbeat).mockRejectedValue(new Error(oversizedError));
+
+    const response = await POST(jsonRequest(validPayload));
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body.error).toHaveLength(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH);
+    expect(body.error).toBe("E".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH));
+    expect(body.piRequired).toBe(false);
+  });
 });
 
 function jsonRequest(payload: unknown): Request {

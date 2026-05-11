@@ -164,6 +164,21 @@ describe("POST /api/review-document/init", () => {
     expect(body.markdown).toHaveLength(MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH);
   });
 
+  it("caps oversized initialization failure messages before returning route JSON", async () => {
+    const oversizedError = "E".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH + 1);
+    vi.mocked(runPiInitialReviewDocument).mockRejectedValue(
+      new Error(oversizedError)
+    );
+
+    const response = await POST(jsonRequest({ meeting: validMeeting }));
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body.error).toHaveLength(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH);
+    expect(body.error).toBe("E".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH));
+    expect(body.piRequired).toBe(false);
+  });
+
   it("marks failed initialization as Pi-required when strict mode is enabled", async () => {
     process.env.ROOMPULSE_REQUIRE_PI = "1";
     vi.mocked(runPiInitialReviewDocument).mockRejectedValue(

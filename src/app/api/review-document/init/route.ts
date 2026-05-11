@@ -46,10 +46,12 @@ export async function POST(request: Request) {
   } catch (error) {
     return NextResponse.json(
       {
-        error:
+        error: capText(
           error instanceof Error
             ? error.message
             : "Initial review document failed",
+          MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+        ),
         piRequired: process.env.ROOMPULSE_REQUIRE_PI === "1"
       },
       { status: 500 }
