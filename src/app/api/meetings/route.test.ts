@@ -5,7 +5,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { GET, POST } from "./route";
 import { GET as GET_MEETING, PATCH } from "./[meetingId]/route";
 import { POST as POST_EVENT } from "./[meetingId]/events/route";
-import { MAX_HEARTBEAT_INTERVAL_SECONDS } from "@/lib/facilitator";
+import {
+  MAX_FACILITATOR_CARD_TEXT_LENGTH,
+  MAX_FACILITATOR_OUTPUT_TEXT_LENGTH,
+  MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH,
+  MAX_HEARTBEAT_INPUT_TEXT_LENGTH,
+  MAX_HEARTBEAT_INTERVAL_SECONDS
+} from "@/lib/facilitator";
 
 let logDir = "";
 
@@ -43,6 +49,215 @@ describe("/api/meetings", () => {
     await expect(listResponse.json()).resolves.toMatchObject({
       meetings: [{ id: created.id, title: "Logged meeting", status: "active" }]
     });
+  });
+
+  it("caps oversized meeting text before storing log metadata", async () => {
+    const response = await POST(
+      jsonRequest({
+        meeting: {
+          ...validMeeting,
+          title: "T".repeat(2_000),
+          goal: "G".repeat(2_000),
+          context: "C".repeat(2_000),
+          agenda: [{ id: "a1", title: "A".repeat(2_000), done: false }],
+          participants: [{ name: "N".repeat(2_000), role: "R".repeat(2_000) }]
+        }
+      })
+    );
+    const created = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(created.title).toHaveLength(MAX_HEARTBEAT_INPUT_TEXT_LENGTH);
+    expect(created.goal).toHaveLength(MAX_HEARTBEAT_INPUT_TEXT_LENGTH);
+    expect(created.meeting.context).toHaveLength(MAX_HEARTBEAT_INPUT_TEXT_LENGTH);
+    expect(created.meeting.agenda[0].title).toHaveLength(
+      MAX_HEARTBEAT_INPUT_TEXT_LENGTH
+    );
+    expect(created.meeting.participants[0].name).toHaveLength(
+      MAX_HEARTBEAT_INPUT_TEXT_LENGTH
+    );
+    expect(created.meeting.participants[0].role).toHaveLength(
+      MAX_HEARTBEAT_INPUT_TEXT_LENGTH
+    );
+  });
+
+  it("caps oversized meeting_started event setup before storing the event log", async () => {
+    const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
+    const created = await createResponse.json();
+    const timestamp = Date.now();
+
+    const response = await POST_EVENT(
+      jsonRequest({
+        type: "meeting_started",
+        timestamp,
+        payload: {
+          meeting: {
+            ...validMeeting,
+            title: "T".repeat(2_000),
+            goal: "G".repeat(2_000),
+            context: "C".repeat(2_000),
+            agenda: [{ id: "a1", title: "A".repeat(2_000), done: false }],
+            participants: [{ name: "N".repeat(2_000), role: "R".repeat(2_000) }]
+          },
+          mode: "manual"
+        }
+      }),
+      routeContext(created.id)
+    );
+    expect(response.status).toBe(201);
+
+    const snapshotResponse = await GET_MEETING(
+      new Request("http://localhost/api/meetings/test"),
+      routeContext(created.id)
+    );
+    const snapshot = await snapshotResponse.json();
+    const startedEvent = snapshot.events.find(
+      (event: { type: string }) => event.type === "meeting_started"
+    );
+
+    expect(startedEvent.payload.meeting.title).toHaveLength(
+      MAX_HEARTBEAT_INPUT_TEXT_LENGTH
+    );
+    expect(startedEvent.payload.meeting.goal).toHaveLength(
+      MAX_HEARTBEAT_INPUT_TEXT_LENGTH
+    );
+    expect(startedEvent.payload.meeting.context).toHaveLength(
+      MAX_HEARTBEAT_INPUT_TEXT_LENGTH
+    );
+    expect(startedEvent.payload.meeting.agenda[0].title).toHaveLength(
+      MAX_HEARTBEAT_INPUT_TEXT_LENGTH
+    );
+    expect(startedEvent.payload.meeting.participants[0].name).toHaveLength(
+      MAX_HEARTBEAT_INPUT_TEXT_LENGTH
+    );
+    expect(startedEvent.payload.meeting.participants[0].role).toHaveLength(
+      MAX_HEARTBEAT_INPUT_TEXT_LENGTH
+    );
+  });
+
+  it("rejects unknown event types before storing arbitrary payloads", async () => {
+    const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
+    const created = await createResponse.json();
+
+    const response = await POST_EVENT(
+      jsonRequest({
+        type: "debug_dump",
+        timestamp: Date.now(),
+        payload: {
+          dump: "D".repeat(MAX_HEARTBEAT_INPUT_TEXT_LENGTH + 1)
+        }
+      }),
+      routeContext(created.id)
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid log event payload"
+    });
+  });
+
+  it("caps and strips known event payload fields before storing the event log", async () => {
+    const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
+    const created = await createResponse.json();
+    const timestamp = Date.now();
+    const oversizedOutputText = "O".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH + 1);
+    const oversizedInputText = "I".repeat(MAX_HEARTBEAT_INPUT_TEXT_LENGTH + 1);
+
+    const failedInitResponse = await POST_EVENT(
+      jsonRequest({
+        type: "review_initialization_failed",
+        timestamp,
+        payload: {
+          message: oversizedOutputText,
+          debug: oversizedInputText
+        }
+      }),
+      routeContext(created.id)
+    );
+    expect(failedInitResponse.status).toBe(201);
+
+    const agendaResponse = await POST_EVENT(
+      jsonRequest({
+        type: "agenda_item_added",
+        timestamp: timestamp + 1,
+        payload: {
+          item: {
+            id: "agenda-extra",
+            title: oversizedInputText,
+            done: false,
+            debug: oversizedInputText
+          },
+          reason: oversizedOutputText,
+          debug: oversizedInputText
+        }
+      }),
+      routeContext(created.id)
+    );
+    expect(agendaResponse.status).toBe(201);
+
+    const heartbeatResponse = await POST_EVENT(
+      jsonRequest({
+        type: "heartbeat_output",
+        timestamp: timestamp + 2,
+        payload: {
+          reviewVersionId: "review-extra",
+          output: {
+            source: "local-fallback",
+            cards: [
+              {
+                id: "card-extra",
+                kind: "heartbeat",
+                title: "Heartbeat",
+                body: "Keep going.",
+                priority: "medium",
+                debug: oversizedInputText
+              }
+            ],
+            summary: "Summary",
+            nextHeartbeatHint: "Next heartbeat.",
+            reviewMarkdown: "# Review",
+            agendaActions: [],
+            uiActions: [],
+            ephemeralReminder: null,
+            debug: oversizedInputText
+          },
+          debug: oversizedInputText
+        }
+      }),
+      routeContext(created.id)
+    );
+    expect(heartbeatResponse.status).toBe(201);
+
+    const snapshotResponse = await GET_MEETING(
+      new Request("http://localhost/api/meetings/test"),
+      routeContext(created.id)
+    );
+    const snapshot = await snapshotResponse.json();
+    const failedInitEvent = snapshot.events.find(
+      (event: { type: string }) => event.type === "review_initialization_failed"
+    );
+    const agendaEvent = snapshot.events.find(
+      (event: { type: string }) => event.type === "agenda_item_added"
+    );
+    const heartbeatEvent = snapshot.events.find(
+      (event: { type: string }) => event.type === "heartbeat_output"
+    );
+
+    expect(failedInitEvent.payload.message).toHaveLength(
+      MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+    );
+    expect(failedInitEvent.payload.debug).toBeUndefined();
+    expect(agendaEvent.payload.item.title).toHaveLength(
+      MAX_HEARTBEAT_INPUT_TEXT_LENGTH
+    );
+    expect(agendaEvent.payload.item.debug).toBeUndefined();
+    expect(agendaEvent.payload.reason).toHaveLength(
+      MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+    );
+    expect(agendaEvent.payload.debug).toBeUndefined();
+    expect(heartbeatEvent.payload.output.cards[0].debug).toBeUndefined();
+    expect(heartbeatEvent.payload.output.debug).toBeUndefined();
+    expect(heartbeatEvent.payload.debug).toBeUndefined();
   });
 
   it("stores transcript lines, review versions, and resumable state in SQLite", async () => {
@@ -130,6 +345,111 @@ describe("/api/meetings", () => {
       transcript: [{ text: "We need a launch owner." }],
       reviewVersions: [{ id: "review-1" }]
     });
+  });
+
+  it("strips oversized extra fields from persisted state before storing", async () => {
+    const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
+    const created = await createResponse.json();
+    const timestamp = Date.now();
+    const oversized = "X".repeat(MAX_HEARTBEAT_INPUT_TEXT_LENGTH + 1);
+    const baseState = persistedState(timestamp);
+
+    const patchResponse = await PATCH(
+      jsonRequest({
+        updatedAt: timestamp,
+        state: {
+          ...baseState,
+          debug: oversized,
+          meeting: {
+            ...baseState.meeting,
+            debug: oversized,
+            agenda: [
+              {
+                ...baseState.meeting.agenda[0],
+                debug: oversized
+              }
+            ],
+            participants: [
+              {
+                name: "Ada",
+                role: "Facilitator",
+                debug: oversized
+              }
+            ]
+          },
+          transcript: [
+            {
+              id: "line-extra",
+              speakerId: "speaker-1",
+              speakerLabel: "Speaker 1",
+              text: "State checkpoint line.",
+              timestamp,
+              source: "manual",
+              confidence: 1,
+              debug: oversized
+            }
+          ],
+          reviewVersions: [
+            {
+              ...baseState.reviewVersions[0],
+              debug: oversized
+            }
+          ],
+          timeline: [
+            {
+              ...baseState.timeline[0],
+              cards: [
+                {
+                  ...baseState.timeline[0].cards[0],
+                  debug: oversized
+                }
+              ],
+              debug: oversized
+            }
+          ],
+          currentOutput: {
+            source: "local-fallback",
+            cards: [
+              {
+                id: "current-card",
+                kind: "heartbeat",
+                title: "Current",
+                body: "Keep moving.",
+                priority: "medium",
+                debug: oversized
+              }
+            ],
+            summary: "Current output.",
+            nextHeartbeatHint: "Next.",
+            reviewMarkdown: "# Review",
+            agendaActions: [],
+            uiActions: [],
+            ephemeralReminder: null,
+            debug: oversized
+          }
+        }
+      }),
+      routeContext(created.id)
+    );
+    expect(patchResponse.status).toBe(200);
+
+    const snapshotResponse = await GET_MEETING(
+      new Request("http://localhost/api/meetings/test"),
+      routeContext(created.id)
+    );
+    const snapshot = await snapshotResponse.json();
+    const state = snapshot.metadata.state;
+
+    expect(state.debug).toBeUndefined();
+    expect(state.meeting.debug).toBeUndefined();
+    expect(state.meeting.agenda[0].debug).toBeUndefined();
+    expect(state.meeting.participants[0].debug).toBeUndefined();
+    expect(state.transcript[0].debug).toBeUndefined();
+    expect(state.reviewVersions[0].debug).toBeUndefined();
+    expect(state.timeline[0].debug).toBeUndefined();
+    expect(state.timeline[0].cards[0].debug).toBeUndefined();
+    expect(state.currentOutput.debug).toBeUndefined();
+    expect(state.currentOutput.cards[0].debug).toBeUndefined();
   });
 
   it("keeps materialized transcript and review rows immutable for duplicate payload ids", async () => {
@@ -249,6 +569,36 @@ describe("/api/meetings", () => {
     });
   });
 
+  it("rejects oversized materialized transcript text before storage", async () => {
+    const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
+    const created = await createResponse.json();
+    const timestamp = Date.now();
+
+    const response = await POST_EVENT(
+      jsonRequest({
+        type: "transcript_line",
+        timestamp,
+        payload: {
+          line: {
+            id: "line-oversized-text",
+            speakerId: "speaker-1",
+            speakerLabel: "Speaker 1",
+            text: "T".repeat(MAX_HEARTBEAT_INPUT_TEXT_LENGTH + 1),
+            timestamp,
+            source: "speech",
+            confidence: 0.9
+          }
+        }
+      }),
+      routeContext(created.id)
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid log event payload"
+    });
+  });
+
   it("rejects whitespace-only event types before writing log rows", async () => {
     const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
     const created = await createResponse.json();
@@ -258,6 +608,36 @@ describe("/api/meetings", () => {
         type: "   ",
         timestamp: Date.now(),
         payload: { ignored: true }
+      }),
+      routeContext(created.id)
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid log event payload"
+    });
+  });
+
+  it("rejects padded materialized event types before they can bypass materialization", async () => {
+    const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
+    const created = await createResponse.json();
+    const timestamp = Date.now();
+
+    const response = await POST_EVENT(
+      jsonRequest({
+        type: " transcript_line ",
+        timestamp,
+        payload: {
+          line: {
+            id: "line-1",
+            speakerId: "speaker-1",
+            speakerLabel: "Speaker 1",
+            text: "This should not be silently logged as a generic event.",
+            timestamp,
+            source: "speech",
+            confidence: 0.9
+          }
+        }
       }),
       routeContext(created.id)
     );
@@ -297,6 +677,36 @@ describe("/api/meetings", () => {
     });
   });
 
+  it("rejects transcript events with unsafe speaker labels", async () => {
+    const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
+    const created = await createResponse.json();
+    const timestamp = Date.now();
+
+    const response = await POST_EVENT(
+      jsonRequest({
+        type: "transcript_line",
+        timestamp,
+        payload: {
+          line: {
+            id: "line-1",
+            speakerId: "speaker-1",
+            speakerLabel: "Speaker\n1",
+            text: "Unsafe labels should not persist.",
+            timestamp,
+            source: "speech",
+            confidence: 0.9
+          }
+        }
+      }),
+      routeContext(created.id)
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid log event payload"
+    });
+  });
+
   it("rejects review events that would not materialize into queryable versions", async () => {
     const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
     const created = await createResponse.json();
@@ -311,6 +721,60 @@ describe("/api/meetings", () => {
             timestamp: Date.now(),
             source: "pi",
             markdown: "# Review",
+            summary: "Should be rejected before storage."
+          }
+        }
+      }),
+      routeContext(created.id)
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid log event payload"
+    });
+  });
+
+  it("rejects review events with oversized version summaries before storage", async () => {
+    const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
+    const created = await createResponse.json();
+
+    const response = await POST_EVENT(
+      jsonRequest({
+        type: "review_initialized",
+        timestamp: Date.now(),
+        payload: {
+          reviewVersion: {
+            id: "review-oversized-summary",
+            timestamp: Date.now(),
+            source: "pi",
+            markdown: "# Review",
+            summary: "S".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH + 1)
+          }
+        }
+      }),
+      routeContext(created.id)
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid log event payload"
+    });
+  });
+
+  it("rejects review events with oversized markdown before storage", async () => {
+    const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
+    const created = await createResponse.json();
+
+    const response = await POST_EVENT(
+      jsonRequest({
+        type: "review_initialized",
+        timestamp: Date.now(),
+        payload: {
+          reviewVersion: {
+            id: "review-oversized-markdown",
+            timestamp: Date.now(),
+            source: "pi",
+            markdown: "R".repeat(MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH + 1),
             summary: "Should be rejected before storage."
           }
         }
@@ -412,6 +876,145 @@ describe("/api/meetings", () => {
 
     expect(malformedUiAction.status).toBe(400);
     await expect(malformedUiAction.json()).resolves.toEqual({
+      error: "Invalid log event payload"
+    });
+
+    const uiActionWithExtraParameters = await POST_EVENT(
+      jsonRequest({
+        type: "heartbeat_output",
+        timestamp: Date.now(),
+        payload: {
+          reviewVersionId: "review-tools-3",
+          output: {
+            ...baseOutput,
+            agendaActions: [],
+            uiActions: [
+              {
+                tool: "send_room_reminder",
+                parameters: {
+                  message: "Invite quiet voices.",
+                  unused: "x".repeat(10_000)
+                },
+                reason: "Extra parameter should be rejected."
+              }
+            ]
+          }
+        }
+      }),
+      routeContext(created.id)
+    );
+
+    expect(uiActionWithExtraParameters.status).toBe(400);
+    await expect(uiActionWithExtraParameters.json()).resolves.toEqual({
+      error: "Invalid log event payload"
+    });
+  });
+
+  it("rejects oversized heartbeat output room-facing text before storage", async () => {
+    const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
+    const created = await createResponse.json();
+
+    const response = await POST_EVENT(
+      jsonRequest({
+        type: "heartbeat_output",
+        timestamp: Date.now(),
+        payload: {
+          reviewVersionId: "review-oversized",
+          output: {
+            source: "pi",
+            cards: [
+              {
+                id: "card-1",
+                kind: "heartbeat",
+                title: "Heartbeat",
+                body: "B".repeat(MAX_FACILITATOR_CARD_TEXT_LENGTH + 1),
+                priority: "medium"
+              }
+            ],
+            summary: "S".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH + 1),
+            nextHeartbeatHint: "Continue.",
+            reviewMarkdown: "# Review",
+            agendaActions: [],
+            uiActions: [],
+            ephemeralReminder: null
+          }
+        }
+      }),
+      routeContext(created.id)
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid log event payload"
+    });
+  });
+
+  it("rejects blank heartbeat output cards before storage", async () => {
+    const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
+    const created = await createResponse.json();
+
+    const response = await POST_EVENT(
+      jsonRequest({
+        type: "heartbeat_output",
+        timestamp: Date.now(),
+        payload: {
+          reviewVersionId: "review-blank-card",
+          output: {
+            source: "pi",
+            cards: [
+              {
+                id: "blank-card",
+                kind: "heartbeat",
+                title: "Heartbeat",
+                body: "   ",
+                priority: "medium"
+              }
+            ],
+            summary: "Blank room cards should not persist.",
+            nextHeartbeatHint: "Continue.",
+            reviewMarkdown: "# Review",
+            agendaActions: [],
+            uiActions: [],
+            ephemeralReminder: null
+          }
+        }
+      }),
+      routeContext(created.id)
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid log event payload"
+    });
+  });
+
+  it("rejects oversized heartbeat output review markdown before storage", async () => {
+    const createResponse = await POST(jsonRequest({ meeting: validMeeting }));
+    const created = await createResponse.json();
+
+    const response = await POST_EVENT(
+      jsonRequest({
+        type: "heartbeat_output",
+        timestamp: Date.now(),
+        payload: {
+          reviewVersionId: "review-oversized-markdown",
+          output: {
+            source: "pi",
+            cards: [],
+            summary: "Oversized markdown.",
+            nextHeartbeatHint: "Continue.",
+            reviewMarkdown: "R".repeat(MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH + 1),
+            agendaActions: [],
+            uiActions: [],
+            ephemeralReminder: null
+          }
+        }
+      }),
+      routeContext(created.id)
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
       error: "Invalid log event payload"
     });
   });
@@ -659,14 +1262,22 @@ describe("/api/meetings", () => {
     const created = await createResponse.json();
     const timestamp = Date.now();
     const baseState = persistedState(timestamp);
+    const oversizedId = "x".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH + 1);
     const invalidStates = [
       { ...baseState, heartbeatCount: -1 },
       { ...baseState, currentReviewVersionId: "" },
       { ...baseState, currentReviewVersionId: "missing-review" },
       {
         ...baseState,
+        currentReviewVersionId: oversizedId,
+        reviewVersions: [{ ...baseState.reviewVersions[0], id: oversizedId }]
+      },
+      { ...baseState, activeAgendaItemId: oversizedId },
+      {
+        ...baseState,
         reviewVersions: [{ ...baseState.reviewVersions[0], id: " " }]
       },
+      { ...baseState, reviewVersions: [] },
       {
         ...baseState,
         transcript: [
@@ -692,6 +1303,48 @@ describe("/api/meetings", () => {
       },
       {
         ...baseState,
+        transcript: [
+          {
+            id: oversizedId,
+            speakerId: "speaker-1",
+            speakerLabel: "Speaker 1",
+            text: "Oversized transcript ids should not persist.",
+            timestamp,
+            source: "speech",
+            confidence: 0.9
+          }
+        ]
+      },
+      {
+        ...baseState,
+        transcript: [
+          {
+            id: "line-1",
+            speakerId: oversizedId,
+            speakerLabel: "Speaker 1",
+            text: "Oversized transcript speaker ids should not persist.",
+            timestamp,
+            source: "speech",
+            confidence: 0.9
+          }
+        ]
+      },
+      {
+        ...baseState,
+        transcript: [
+          {
+            id: "unsafe-label",
+            speakerId: "speaker-1",
+            speakerLabel: "Speaker\n1",
+            text: "Unsafe labels should not persist.",
+            timestamp,
+            source: "speech",
+            confidence: 0.9
+          }
+        ]
+      },
+      {
+        ...baseState,
         reviewVersions: [
           baseState.reviewVersions[0],
           { ...baseState.reviewVersions[0], markdown: "# Duplicate review" }
@@ -699,9 +1352,49 @@ describe("/api/meetings", () => {
       },
       {
         ...baseState,
+        reviewVersions: [
+          {
+            ...baseState.reviewVersions[0],
+            summary: "S".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH + 1)
+          }
+        ]
+      },
+      {
+        ...baseState,
+        reviewMarkdown: "R".repeat(MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH + 1)
+      },
+      {
+        ...baseState,
+        reviewVersions: [
+          {
+            ...baseState.reviewVersions[0],
+            markdown: "R".repeat(MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH + 1)
+          }
+        ]
+      },
+      {
+        ...baseState,
         timeline: [
           baseState.timeline[0],
           { ...baseState.timeline[0], summary: "Duplicate timeline entry." }
+        ]
+      },
+      {
+        ...baseState,
+        timeline: [
+          {
+            ...baseState.timeline[0],
+            id: oversizedId
+          }
+        ]
+      },
+      {
+        ...baseState,
+        timeline: [
+          {
+            ...baseState.timeline[0],
+            cards: [{ ...baseState.timeline[0].cards[0], id: oversizedId }]
+          }
         ]
       },
       {
@@ -754,6 +1447,108 @@ describe("/api/meetings", () => {
       {
         ...baseState,
         timeline: [{ ...baseState.timeline[0], timestamp: timestamp + 1 }]
+      },
+      {
+        ...baseState,
+        timeline: [
+          {
+            ...baseState.timeline[0],
+            reviewMarkdown: "R".repeat(MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH + 1)
+          }
+        ]
+      },
+      {
+        ...baseState,
+        currentOutput: {
+          source: "pi",
+          cards: [],
+          summary: "Malformed current output is missing review markdown."
+        }
+      },
+      {
+        ...baseState,
+        currentOutput: {
+          source: "pi",
+          cards: [],
+          summary: "Oversized review markdown.",
+          nextHeartbeatHint: "Continue.",
+          reviewMarkdown: "R".repeat(MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH + 1),
+          agendaActions: [],
+          uiActions: [],
+          ephemeralReminder: null
+        }
+      },
+      {
+        ...baseState,
+        timeline: [
+          {
+            ...baseState.timeline[0],
+            summary: "S".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH + 1)
+          }
+        ]
+      },
+      {
+        ...baseState,
+        currentOutput: {
+          source: "pi",
+          cards: [
+            {
+              id: oversizedId,
+              kind: "heartbeat",
+              title: "Heartbeat",
+              body: "Current output card id should be bounded.",
+              priority: "medium"
+            }
+          ],
+          summary: "Oversized current output card id.",
+          nextHeartbeatHint: "Continue.",
+          reviewMarkdown: "# Review",
+          agendaActions: [],
+          uiActions: [],
+          ephemeralReminder: null
+        }
+      },
+      {
+        ...baseState,
+        currentOutput: {
+          source: "pi",
+          cards: [
+            {
+              id: "card-1",
+              kind: "heartbeat",
+              title: "Heartbeat",
+              body: "B".repeat(MAX_FACILITATOR_CARD_TEXT_LENGTH + 1),
+              priority: "medium"
+            }
+          ],
+          summary: "Oversized current output.",
+          nextHeartbeatHint: "Continue.",
+          reviewMarkdown: "# Review",
+          agendaActions: [],
+          uiActions: [],
+          ephemeralReminder: null
+        }
+      },
+      {
+        ...baseState,
+        currentOutput: {
+          source: "pi",
+          cards: [
+            {
+              id: "blank-current-output-card",
+              kind: "heartbeat",
+              title: "Heartbeat",
+              body: " ",
+              priority: "medium"
+            }
+          ],
+          summary: "Blank current output cards should not persist.",
+          nextHeartbeatHint: "Continue.",
+          reviewMarkdown: "# Review",
+          agendaActions: [],
+          uiActions: [],
+          ephemeralReminder: null
+        }
       }
     ];
 
@@ -938,6 +1733,28 @@ describe("/api/meetings", () => {
           agenda: [
             { id: "duplicate", title: "First", done: false },
             { id: "duplicate", title: "Second", done: false }
+          ]
+        }
+      })
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid meeting payload"
+    });
+  });
+
+  it("rejects agenda ids that exceed the persisted adapter id cap", async () => {
+    const response = await POST(
+      jsonRequest({
+        meeting: {
+          ...validMeeting,
+          agenda: [
+            {
+              id: "a".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH + 1),
+              title: "Oversized id",
+              done: false
+            }
           ]
         }
       })

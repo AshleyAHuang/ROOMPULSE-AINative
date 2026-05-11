@@ -56,6 +56,10 @@ DEFAULT_BEAM_SIZE = 5
 DEFAULT_BEST_OF = 5
 DEFAULT_NO_SPEECH_THRESHOLD = 0.55
 DEFAULT_VAD_MODE = 2
+DEFAULT_MAX_AUDIO_BUFFER_SECONDS = 20.0
+MAX_ENGINE_MESSAGE_LENGTH = 500
+MAX_CONTROL_MESSAGE_LENGTH = 2_000
+MAX_TRANSCRIPT_TEXT_LENGTH = 1_000
 SPEECHBRAIN_MODEL = "speechbrain/spkrec-ecapa-voxceleb"
 PYANNOTE_MODEL = "pyannote/embedding"
 NEMO_MODEL = "nvidia/speakerverification_en_titanet_large"
@@ -94,7 +98,7 @@ model_error: str | None = None
 async def health() -> JSONResponse:
     return JSONResponse(
         {
-            "ok": WHISPER_IMPORT_ERROR is None,
+            "ok": WHISPER_IMPORT_ERROR is None and model_error is None,
             "engine": "faster-whisper",
             "model": os.getenv("ROOMPULSE_WHISPER_MODEL", DEFAULT_MODEL),
             "device": os.getenv("ROOMPULSE_WHISPER_DEVICE", DEFAULT_DEVICE),
@@ -116,8 +120,16 @@ async def health() -> JSONResponse:
                 if webrtcvad is not None and os.getenv("ROOMPULSE_WEBRTC_VAD", "1") != "0"
                 else "energy"
             ),
-            "importError": str(WHISPER_IMPORT_ERROR) if WHISPER_IMPORT_ERROR else None,
-            "modelError": model_error,
+            "importError": (
+                cap_text(str(WHISPER_IMPORT_ERROR), MAX_ENGINE_MESSAGE_LENGTH)
+                if WHISPER_IMPORT_ERROR
+                else None
+            ),
+            "modelError": (
+                cap_text(model_error, MAX_ENGINE_MESSAGE_LENGTH)
+                if model_error
+                else None
+            ),
         }
     )
 
@@ -659,7 +671,7 @@ class SpeakerClusterer:
         )
         if should_create_cluster:
             if len(self.clusters) >= self.max_clusters:
-                return self.assign_to_existing_cluster(best, embedding)
+                return self.assign_to_existing_cluster(best, embedding, threshold)
             return self.create_cluster(embedding, min_quality)
 
         if (
@@ -810,6 +822,7 @@ class SpeakerClusterer:
         self,
         best: tuple[float, SpeakerCluster] | None,
         embedding: VoiceEmbedding,
+        threshold: float,
     ) -> SpeakerCluster:
         if best is not None:
             cluster = best[1]
@@ -817,7 +830,12 @@ class SpeakerClusterer:
             cluster = max(self.clusters, key=lambda existing: existing.last_seen_at)
         cluster.samples += 1
         cluster.last_seen_at = time.time()
-        if cluster.backend == embedding.backend and embedding.quality >= speaker_min_quality():
+        if (
+            best is not None
+            and best[0] <= threshold
+            and cluster.backend == embedding.backend
+            and embedding.quality >= speaker_min_quality()
+        ):
             update_weight = min(0.08, max(0.02, embedding.quality / (cluster.quality_sum + embedding.quality)))
             cluster.centroid = (
                 cluster.centroid * (1.0 - update_weight)
@@ -861,9 +879,16 @@ class TranscriptionSession:
         self.language = os.getenv("ROOMPULSE_WHISPER_LANGUAGE", DEFAULT_LANGUAGE)
 
     async def handle_control(self, raw: str) -> None:
+        if len(raw) > MAX_CONTROL_MESSAGE_LENGTH:
+            await self.send_error("Control message too large")
+            return
+
         try:
             message = json.loads(raw)
         except json.JSONDecodeError:
+            await self.send_error("Invalid control message")
+            return
+        if not isinstance(message, dict):
             await self.send_error("Invalid control message")
             return
 
@@ -896,37 +921,45 @@ class TranscriptionSession:
                     )
             await self.send_status("configured", "Transcription session configured")
         elif message.get("type") == "flush":
-            await self.flush(force=True)
+            while await self.flush(force=True):
+                pass
             await self.send_status("flushed", "Transcription buffer flushed")
+        else:
+            await self.send_error("Unknown control message")
 
     async def append_audio(self, chunk: bytes) -> None:
         async with self.buffer_lock:
             self.buffer.extend(chunk)
+            max_buffer_bytes = seconds_to_bytes(
+                max(DEFAULT_MAX_AUDIO_BUFFER_SECONDS, self.max_seconds * 3.0)
+            )
+            if len(self.buffer) > max_buffer_bytes:
+                del self.buffer[: len(self.buffer) - max_buffer_bytes]
 
     async def process_loop(self) -> None:
         while not self.closed:
             await asyncio.sleep(0.5)
             await self.flush(force=False)
 
-    async def flush(self, force: bool) -> None:
+    async def flush(self, force: bool) -> bool:
         async with self.flush_lock:
             min_bytes = seconds_to_bytes(self.min_seconds)
             max_bytes = seconds_to_bytes(self.max_seconds)
 
             async with self.buffer_lock:
                 if len(self.buffer) < min_bytes and not force:
-                    return
+                    return False
                 if not self.buffer:
-                    return
+                    return False
                 take = min(len(self.buffer), max_bytes)
                 if take < min_bytes and not force:
-                    return
+                    return False
                 raw = bytes(self.buffer[:take])
                 del self.buffer[:take]
 
             audio = prepare_speech_audio(pcm16_to_float32(raw))
             if not has_speech(audio):
-                return
+                return True
 
             await self.send_status("transcribing", "Transcribing speech segment")
             try:
@@ -935,10 +968,11 @@ class TranscriptionSession:
             except Exception as exc:
                 await self.send_error(f"Transcription failed: {exc}")
                 await self.send_status("listening", "Listening")
-                return
+                return True
             if not text:
                 await self.send_status("listening", "Listening")
-                return
+                return True
+            text = cap_text(text, MAX_TRANSCRIPT_TEXT_LENGTH)
 
             self.sequence += 1
             try:
@@ -948,9 +982,13 @@ class TranscriptionSession:
                 observed_speaker_labels = self.clusterer.labels()
             except Exception as exc:
                 await self.send_error(f"Speaker clustering failed: {exc}")
-                speaker_id = "speaker-1"
-                speaker_label = "Speaker 1"
-                observed_speaker_labels = self.clusterer.labels() or [speaker_label]
+                observed_speaker_labels = self.clusterer.labels()
+                speaker_label = fallback_speaker_label(
+                    self.clusterer,
+                    observed_speaker_labels,
+                )
+                speaker_id = fallback_speaker_id(speaker_label)
+                observed_speaker_labels = observed_speaker_labels or [speaker_label]
             duration_ms = round((len(audio) / SAMPLE_RATE) * 1000)
             await self.websocket.send_json(
                 {
@@ -965,19 +1003,40 @@ class TranscriptionSession:
                 }
             )
             await self.send_status("listening", "Listening")
+            return True
 
     async def send_status(self, status: str, message: str) -> None:
         await self.websocket.send_json(
             {
                 "type": "engine_status",
-                "status": status,
-                "message": message,
+                "status": cap_text(status, MAX_ENGINE_MESSAGE_LENGTH),
+                "message": cap_text(message, MAX_ENGINE_MESSAGE_LENGTH),
                 "observedSpeakerLabels": self.clusterer.labels(),
             }
         )
 
     async def send_error(self, message: str) -> None:
-        await self.websocket.send_json({"type": "engine_error", "message": message})
+        await self.websocket.send_json(
+            {
+                "type": "engine_error",
+                "message": cap_text(message, MAX_ENGINE_MESSAGE_LENGTH),
+            }
+        )
+
+
+def fallback_speaker_label(clusterer: object, labels: list[str]) -> str:
+    if labels:
+        return labels[-1]
+    offset = parse_speaker_label_offset(
+        getattr(clusterer, "speaker_label_offset", 0)
+    )
+    return f"Speaker {offset + 1}"
+
+
+def fallback_speaker_id(label: str) -> str:
+    match = re.search(r"\d+", label)
+    number = int(match.group(0)) if match else 1
+    return f"speaker-{number}"
 
 
 async def transcribe_audio(
@@ -1054,9 +1113,11 @@ def parse_positive_int(raw: str | None, default: int) -> int:
 def parse_positive_int_value(raw: object, default: int) -> int:
     if raw is None:
         return default
+    if isinstance(raw, bool):
+        return default
     try:
         value = int(raw)
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return default
     return value if value > 0 else default
 
@@ -1102,6 +1163,10 @@ def clean_transcript_text(text: str) -> str:
             return ""
 
     return normalized
+
+
+def cap_text(value: str, max_length: int) -> str:
+    return value if len(value) <= max_length else value[:max_length]
 
 
 def pcm16_to_float32(raw: bytes) -> np.ndarray:
@@ -1416,9 +1481,11 @@ def wespeaker_gpu_index() -> int:
 
 
 def parse_nonnegative_int_value(raw: object, default: int) -> int:
+    if isinstance(raw, bool):
+        return default
     try:
         value = int(raw)
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return default
     return value if value >= 0 else default
 

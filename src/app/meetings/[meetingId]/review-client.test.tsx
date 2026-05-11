@@ -132,6 +132,81 @@ describe("MeetingReviewClient", () => {
     });
   });
 
+  it("does not render or copy heartbeat compaction markers in the final review page", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const markerSnapshot: MeetingLogSnapshot = {
+      ...snapshot,
+      reviewVersions: [
+        {
+          id: "review-marker",
+          timestamp,
+          source: "pi",
+          markdown:
+            "# Review\n\nOpening content.\n\n[RoomPulse omitted middle review content for heartbeat latency. Preserve the visible document structure and keep the next version compact.]\n\nClosing content.",
+          summary: "Marker should stay internal."
+        }
+      ]
+    };
+
+    render(<MeetingReviewClient snapshot={markerSnapshot} />);
+
+    expect(screen.getByText(/opening content/i)).toBeVisible();
+    expect(screen.getByText(/closing content/i)).toBeVisible();
+    expect(
+      screen.queryByText(/RoomPulse omitted middle review content/i)
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /copy latest review/i }));
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(
+        expect.not.stringContaining("RoomPulse omitted middle review content")
+      );
+    });
+  });
+
+  it("does not render arbitrary label digits as review speaker badges", () => {
+    const roomLabelSnapshot: MeetingLogSnapshot = {
+      ...snapshot,
+      transcript: [
+        {
+          ...snapshot.transcript[0],
+          id: "line-room-2026",
+          speakerId: "room-2026",
+          speakerLabel: "Room 2026",
+          text: "The room number should not become a speaker badge."
+        }
+      ]
+    };
+
+    render(<MeetingReviewClient snapshot={roomLabelSnapshot} />);
+
+    expect(screen.getByText("Room 2026")).toBeVisible();
+    expect(screen.queryByText("S2026")).not.toBeInTheDocument();
+    expect(screen.getByText("S1")).toBeVisible();
+  });
+
+  it("keeps oversized canonical speaker numbers from overflowing review badges", () => {
+    const hugeSpeakerSnapshot: MeetingLogSnapshot = {
+      ...snapshot,
+      transcript: [
+        {
+          ...snapshot.transcript[0],
+          id: "line-huge-speaker",
+          speakerId: "speaker-1000000",
+          speakerLabel: "Speaker 1000000",
+          text: "The full label stays visible, but the badge must stay compact."
+        }
+      ]
+    };
+
+    render(<MeetingReviewClient snapshot={hugeSpeakerSnapshot} />);
+
+    expect(screen.getByText("Speaker 1000000")).toBeVisible();
+    expect(screen.queryByText("S1000000")).not.toBeInTheDocument();
+    expect(screen.getByText("S99+")).toBeVisible();
+  });
+
   it("treats epoch endedAt as a real meeting end in transcript export text", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
@@ -228,5 +303,36 @@ describe("MeetingReviewClient", () => {
     expect(createObjectURL).toHaveBeenCalledOnce();
     expect(clickSpy).toHaveBeenCalledOnce();
     expect(clickedDownloads).toEqual(["roompulse-meeting-transcript.txt"]);
+  });
+
+  it("bounds long transcript export filenames", () => {
+    const href = "blob:roompulse";
+    const createObjectURL = vi.fn(() => href);
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", {
+      ...URL,
+      createObjectURL,
+      revokeObjectURL
+    });
+    const clickedDownloads: string[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(
+      function click(this: HTMLAnchorElement) {
+        clickedDownloads.push(this.download);
+      }
+    );
+    const longTitleSnapshot: MeetingLogSnapshot = {
+      ...snapshot,
+      metadata: {
+        ...snapshot.metadata,
+        title: `Launch ${"readiness ".repeat(40)}`
+      }
+    };
+
+    render(<MeetingReviewClient snapshot={longTitleSnapshot} />);
+    fireEvent.click(screen.getByRole("button", { name: /export transcript/i }));
+
+    expect(clickedDownloads[0]).toMatch(/^launch-readiness/);
+    expect(clickedDownloads[0]?.endsWith("-transcript.txt")).toBe(true);
+    expect(clickedDownloads[0]?.length).toBeLessThanOrEqual(95);
   });
 });

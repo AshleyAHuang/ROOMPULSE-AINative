@@ -2,9 +2,12 @@ import { NextResponse } from "next/server";
 import {
   MAX_AGENDA_ITEMS,
   MAX_EXPECTED_PARTICIPANTS,
+  MAX_FACILITATOR_OUTPUT_TEXT_LENGTH,
   MAX_HEARTBEAT_INTERVAL_SECONDS,
+  MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH,
   MAX_PARTICIPANT_ENTRIES,
   MIN_HEARTBEAT_INTERVAL_SECONDS,
+  compactMeetingForAdapter,
   type MeetingConfig
 } from "@/lib/facilitator";
 import { runPiInitialReviewDocument } from "@/lib/pi-adapter";
@@ -28,15 +31,27 @@ export async function POST(request: Request) {
   }
 
   try {
-    const document = await runPiInitialReviewDocument(payload.meeting);
-    return NextResponse.json(document);
+    const document = await runPiInitialReviewDocument(
+      compactMeetingForAdapter(payload.meeting)
+    );
+    return NextResponse.json({
+      ...document,
+      markdown: capText(document.markdown, MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH),
+      summary: capText(document.summary, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH),
+      adapterNotice:
+        document.adapterNotice === undefined
+          ? undefined
+          : capText(document.adapterNotice, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH)
+    });
   } catch (error) {
     return NextResponse.json(
       {
-        error:
+        error: capText(
           error instanceof Error
             ? error.message
             : "Initial review document failed",
+          MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+        ),
         piRequired: process.env.ROOMPULSE_REQUIRE_PI === "1"
       },
       { status: 500 }
@@ -70,7 +85,7 @@ function isMeeting(value: unknown): value is MeetingConfig {
 function isAgendaItem(value: unknown): boolean {
   return (
     isRecord(value) &&
-    isNonEmptyString(value.id) &&
+    isBoundedNonEmptyString(value.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
     isNonEmptyString(value.title) &&
     typeof value.done === "boolean"
   );
@@ -114,4 +129,15 @@ function isIntegerInRange(
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function isBoundedNonEmptyString(
+  value: unknown,
+  maxLength: number
+): value is string {
+  return isNonEmptyString(value) && value.length <= maxLength;
+}
+
+function capText(value: string, maxLength: number): string {
+  return value.length <= maxLength ? value : value.slice(0, maxLength);
 }

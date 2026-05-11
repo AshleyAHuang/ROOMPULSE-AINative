@@ -8,10 +8,17 @@ import {
 import {
   MAX_AGENDA_ITEMS,
   MAX_EXPECTED_PARTICIPANTS,
+  MAX_FACILITATOR_CARD_TEXT_LENGTH,
+  MAX_FACILITATOR_OUTPUT_CARDS,
+  MAX_FACILITATOR_OUTPUT_TEXT_LENGTH,
+  MAX_FACILITATOR_OUTPUT_UI_ACTIONS,
   MAX_HEARTBEAT_INTERVAL_SECONDS,
+  MAX_HEARTBEAT_INPUT_TEXT_LENGTH,
+  MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH,
   MAX_PARTICIPANT_ENTRIES,
   MIN_HEARTBEAT_INTERVAL_SECONDS
 } from "@/lib/facilitator";
+import { isSafeSpeakerLabel } from "@/lib/speaker-tracker";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,7 +39,7 @@ export async function GET(_request: Request, context: RouteContext) {
     return NextResponse.json(meeting);
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Meeting log not found" },
+      { error: routeErrorMessage(error, "Meeting log not found") },
       { status: 404 }
     );
   }
@@ -104,8 +111,8 @@ export async function PATCH(request: Request, context: RouteContext) {
     return NextResponse.json(metadata);
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Meeting state update failed" },
-      { status: isMeetingNotFound(error) ? 404 : 500 }
+      { error: routeErrorMessage(error, "Meeting state update failed") },
+      { status: stateUpdateErrorStatus(error) }
     );
   }
 }
@@ -125,11 +132,14 @@ function isPersistedMeetingState(value: unknown): value is PersistedMeetingState
     !Array.isArray(value.transcript) ||
     !value.transcript.every(isTranscriptLine) ||
     !hasUniqueRecordIds(value.transcript) ||
-    typeof value.reviewMarkdown !== "string" ||
+    !isBoundedString(value.reviewMarkdown, MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH) ||
     !Array.isArray(value.reviewVersions) ||
     !value.reviewVersions.every(isReviewVersion) ||
     !hasUniqueRecordIds(value.reviewVersions) ||
-    !isNonEmptyString(value.currentReviewVersionId) ||
+    !isBoundedNonEmptyString(
+      value.currentReviewVersionId,
+      MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+    ) ||
     !Array.isArray(value.timeline) ||
     !value.timeline.every(isTimelineEntry) ||
     !hasUniqueRecordIds(value.timeline) ||
@@ -138,8 +148,12 @@ function isPersistedMeetingState(value: unknown): value is PersistedMeetingState
     !isValidTimestamp(value.meetingStartedAt) ||
     !isIntegerAtLeast(value.heartbeatCount, 0) ||
     typeof value.isPaused !== "boolean" ||
+    (value.currentOutput !== null && !isFacilitatorOutput(value.currentOutput)) ||
     (value.activeAgendaItemId !== null &&
-      !isNonEmptyString(value.activeAgendaItemId)) ||
+      !isBoundedNonEmptyString(
+        value.activeAgendaItemId,
+        MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+      )) ||
     !isValidTimestamp(value.updatedAt) ||
     (value.endedAt !== undefined &&
       value.endedAt !== null &&
@@ -197,7 +211,7 @@ function isMeeting(value: unknown): boolean {
 function isAgendaItem(value: unknown): boolean {
   return (
     isRecord(value) &&
-    isNonEmptyString(value.id) &&
+    isBoundedNonEmptyString(value.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
     isNonEmptyString(value.title) &&
     typeof value.done === "boolean"
   );
@@ -228,10 +242,10 @@ function isParticipant(value: unknown): boolean {
 function isTranscriptLine(value: unknown): boolean {
   return (
     isRecord(value) &&
-    isNonEmptyString(value.id) &&
-    isNonEmptyString(value.speakerId) &&
-    isNonEmptyString(value.speakerLabel) &&
-    typeof value.text === "string" &&
+    isBoundedNonEmptyString(value.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
+    isBoundedNonEmptyString(value.speakerId, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
+    isSafeSpeakerLabel(value.speakerLabel) &&
+    isBoundedString(value.text, MAX_HEARTBEAT_INPUT_TEXT_LENGTH) &&
     isValidTimestamp(value.timestamp) &&
     isTranscriptSource(value.source) &&
     isConfidence(value.confidence)
@@ -245,11 +259,11 @@ function isTranscriptSource(value: unknown): boolean {
 function isReviewVersion(value: unknown): boolean {
   return (
     isRecord(value) &&
-    isNonEmptyString(value.id) &&
+    isBoundedNonEmptyString(value.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
     isValidTimestamp(value.timestamp) &&
     isReviewSource(value.source) &&
-    typeof value.markdown === "string" &&
-    typeof value.summary === "string"
+    isBoundedString(value.markdown, MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH) &&
+    isBoundedString(value.summary, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH)
   );
 }
 
@@ -266,32 +280,156 @@ function isReviewSource(value: unknown): boolean {
 function isTimelineEntry(value: unknown): boolean {
   return (
     isRecord(value) &&
-    isNonEmptyString(value.id) &&
+    isBoundedNonEmptyString(value.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
     isValidTimestamp(value.timestamp) &&
     isReviewSource(value.source) &&
     Array.isArray(value.cards) &&
+    value.cards.length <= MAX_FACILITATOR_OUTPUT_CARDS &&
     value.cards.every(isFacilitatorCard) &&
     hasUniqueRecordIds(value.cards) &&
-    typeof value.summary === "string" &&
+    isBoundedString(value.summary, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
     (value.reviewMarkdown === undefined ||
-      typeof value.reviewMarkdown === "string") &&
+      isBoundedString(
+        value.reviewMarkdown,
+        MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH
+      )) &&
     (value.reminder === undefined ||
       value.reminder === null ||
-      typeof value.reminder === "string")
+      isBoundedString(value.reminder, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH))
   );
+}
+
+function isFacilitatorOutput(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isFacilitatorSource(value.source) &&
+    Array.isArray(value.cards) &&
+    value.cards.length <= MAX_FACILITATOR_OUTPUT_CARDS &&
+    value.cards.every(isFacilitatorCard) &&
+    hasUniqueRecordIds(value.cards) &&
+    isBoundedString(value.summary, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
+    isBoundedString(value.nextHeartbeatHint, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
+    isBoundedString(value.reviewMarkdown, MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH) &&
+    Array.isArray(value.agendaActions) &&
+    value.agendaActions.length <= MAX_AGENDA_ITEMS &&
+    value.agendaActions.every(isAgendaAction) &&
+    Array.isArray(value.uiActions) &&
+    value.uiActions.length <= MAX_FACILITATOR_OUTPUT_UI_ACTIONS &&
+    value.uiActions.every(isUiAction) &&
+    (value.ephemeralReminder === null ||
+      isBoundedString(value.ephemeralReminder, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH)) &&
+    (value.adapterNotice === undefined ||
+      isBoundedString(value.adapterNotice, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH))
+  );
+}
+
+function isFacilitatorSource(value: unknown): boolean {
+  return value === "pi" || value === "openrouter" || value === "local-fallback";
 }
 
 function isFacilitatorCard(value: unknown): boolean {
   return (
     isRecord(value) &&
-    isNonEmptyString(value.id) &&
+    isBoundedNonEmptyString(value.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
     isFacilitatorCardKind(value.kind) &&
-    isNonEmptyString(value.title) &&
-    typeof value.body === "string" &&
+    isBoundedNonEmptyString(value.title, MAX_FACILITATOR_CARD_TEXT_LENGTH) &&
+    isBoundedNonEmptyString(value.body, MAX_FACILITATOR_CARD_TEXT_LENGTH) &&
     (value.priority === "low" ||
       value.priority === "medium" ||
       value.priority === "high")
   );
+}
+
+function isAgendaAction(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isBoundedNonEmptyString(value.itemId, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
+    typeof value.done === "boolean" &&
+    isBoundedNonEmptyString(value.reason, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH)
+  );
+}
+
+function isUiAction(value: unknown): boolean {
+  if (
+    !isRecord(value) ||
+    !isKnownUiTool(value.tool) ||
+    !isRecord(value.parameters) ||
+    !isBoundedNonEmptyString(value.reason, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH)
+  ) {
+    return false;
+  }
+
+  if (value.tool === "add_agenda_item") {
+    return (
+      hasOnlyKeys(value.parameters, ["title"]) &&
+      isBoundedNonEmptyString(
+        value.parameters.title,
+        MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+      )
+    );
+  }
+
+  if (value.tool === "set_agenda_item") {
+    return (
+      hasOnlyKeys(value.parameters, ["done", "itemId"]) &&
+      isBoundedNonEmptyString(
+        value.parameters.itemId,
+        MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+      ) &&
+      typeof value.parameters.done === "boolean"
+    );
+  }
+
+  if (value.tool === "delete_agenda_item") {
+    return (
+      hasOnlyKeys(value.parameters, ["itemId"]) &&
+      isBoundedNonEmptyString(
+        value.parameters.itemId,
+        MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+      )
+    );
+  }
+
+  if (value.tool === "send_room_reminder") {
+    return (
+      hasOnlyKeys(value.parameters, ["message", "tone"]) &&
+      isBoundedNonEmptyString(
+        value.parameters.message,
+        MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+      ) &&
+      (value.parameters.tone === undefined ||
+        isBoundedString(value.parameters.tone, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH))
+    );
+  }
+
+  if (value.tool === "update_review_document") {
+    return (
+      hasOnlyKeys(value.parameters, ["markdown", "summary"]) &&
+      isBoundedNonEmptyString(
+        value.parameters.markdown,
+        MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH
+      ) &&
+      (value.parameters.summary === undefined ||
+        isBoundedString(value.parameters.summary, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH))
+    );
+  }
+
+  return false;
+}
+
+function isKnownUiTool(value: unknown): value is string {
+  return (
+    value === "add_agenda_item" ||
+    value === "set_agenda_item" ||
+    value === "delete_agenda_item" ||
+    value === "send_room_reminder" ||
+    value === "update_review_document"
+  );
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, allowedKeys: string[]): boolean {
+  const allowed = new Set(allowedKeys);
+  return Object.keys(value).every((key) => allowed.has(key));
 }
 
 function isFacilitatorCardKind(value: unknown): boolean {
@@ -341,8 +479,40 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function isBoundedString(value: unknown, maxLength: number): value is string {
+  return typeof value === "string" && value.length <= maxLength;
+}
+
+function isBoundedNonEmptyString(
+  value: unknown,
+  maxLength: number
+): value is string {
+  return isBoundedString(value, maxLength) && value.trim().length > 0;
+}
+
+function routeErrorMessage(error: unknown, fallback: string): string {
+  return capString(
+    error instanceof Error ? error.message : fallback,
+    MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+  );
+}
+
+function capString(value: string, maxLength: number): string {
+  return value.length <= maxLength ? value : value.slice(0, maxLength);
+}
+
 function isMeetingNotFound(error: unknown): boolean {
   return error instanceof Error && error.message === "Meeting log not found";
+}
+
+function isInvalidMeetingState(error: unknown): boolean {
+  return error instanceof Error && error.message === "Invalid meeting state payload";
+}
+
+function stateUpdateErrorStatus(error: unknown): number {
+  if (isMeetingNotFound(error)) return 404;
+  if (isInvalidMeetingState(error)) return 400;
+  return 500;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

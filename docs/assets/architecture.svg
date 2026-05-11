@@ -1,0 +1,42 @@
+<svg width="960" height="520" viewBox="0 0 960 520" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">RoomPulse architecture</title>
+  <desc id="desc">RoomPulse browser UI, Next.js API routes, Pi or OpenRouter facilitator adapter, local SQLite logs, and optional transcription service.</desc>
+  <rect width="960" height="520" rx="34" fill="#F7F3EA"/>
+  <text x="64" y="74" fill="#171512" font-family="Space Grotesk, Arial, sans-serif" font-size="36" font-weight="700">Local-first architecture</text>
+  <text x="64" y="104" fill="#6F6658" font-family="DM Sans, Arial, sans-serif" font-size="16">Everything demos locally; Pi and mic transcription are optional upgrades.</text>
+  <g font-family="DM Sans, Arial, sans-serif">
+    <rect x="64" y="150" width="220" height="250" rx="28" fill="#FFFDF8" stroke="#DED5C7"/>
+    <text x="96" y="190" fill="#171512" font-family="Space Grotesk, Arial, sans-serif" font-size="24" font-weight="700">Browser</text>
+    <text x="96" y="224" fill="#514A40" font-size="15">Setup feeder</text>
+    <text x="96" y="252" fill="#514A40" font-size="15">Room display</text>
+    <text x="96" y="280" fill="#514A40" font-size="15">Raw transcript pane</text>
+    <text x="96" y="308" fill="#514A40" font-size="15">Manual heartbeat</text>
+    <rect x="370" y="150" width="220" height="250" rx="28" fill="#171512"/>
+    <text x="402" y="190" fill="#FFF8EA" font-family="Space Grotesk, Arial, sans-serif" font-size="24" font-weight="700">Next.js API</text>
+    <text x="402" y="224" fill="#D6D0C3" font-size="15">/api/heartbeat</text>
+    <text x="402" y="252" fill="#D6D0C3" font-size="15">/api/review-document/init</text>
+    <text x="402" y="280" fill="#D6D0C3" font-size="15">/api/meetings</text>
+    <text x="402" y="308" fill="#D6D0C3" font-size="15">state shaping + caps</text>
+    <rect x="676" y="150" width="220" height="110" rx="28" fill="#D7F3EA" stroke="#A6DCCB"/>
+    <text x="708" y="190" fill="#073328" font-family="Space Grotesk, Arial, sans-serif" font-size="23" font-weight="700">Facilitator</text>
+    <text x="708" y="222" fill="#174D41" font-size="15">Pi / OpenRouter / fallback</text>
+    <rect x="676" y="290" width="220" height="110" rx="28" fill="#FFFDF8" stroke="#DED5C7"/>
+    <text x="708" y="330" fill="#171512" font-family="Space Grotesk, Arial, sans-serif" font-size="23" font-weight="700">SQLite logs</text>
+    <text x="708" y="362" fill="#514A40" font-size="15">sessions, events, versions</text>
+    <rect x="210" y="424" width="540" height="56" rx="28" fill="#FFFFFF" stroke="#DED5C7"/>
+    <text x="246" y="458" fill="#171512" font-family="Space Grotesk, Arial, sans-serif" font-size="20" font-weight="700">Optional local transcription service</text>
+    <text x="556" y="458" fill="#6F6658" font-size="15">Whisper + Speaker N clusters</text>
+  </g>
+  <g stroke="#1F7A68" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M284 238H370"/>
+    <path d="M360 229L370 238L360 247"/>
+    <path d="M590 205H676"/>
+    <path d="M666 196L676 205L666 214"/>
+    <path d="M590 330H676"/>
+    <path d="M666 321L676 330L666 339"/>
+    <path d="M480 400V424"/>
+    <path d="M471 414L480 424L489 414"/>
+    <path d="M284 452H210"/>
+    <path d="M220 443L210 452L220 461"/>
+  </g>
+</svg>

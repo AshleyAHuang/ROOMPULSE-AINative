@@ -2,7 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import MarkdownDocument from "@/app/MarkdownDocument";
+import { reviewMarkdownForDisplay } from "@/lib/facilitator";
 import type { MeetingLogSnapshot } from "@/lib/meeting-log-store";
+import { speakerBadgeClass, speakerBadgeLabel } from "@/lib/speaker-tracker";
+
+const MAX_DOWNLOAD_SLUG_LENGTH = 80;
 
 export default function MeetingReviewClient({
   snapshot
@@ -19,6 +23,10 @@ export default function MeetingReviewClient({
       ""
     );
   }, [snapshot]);
+  const displayMarkdown = useMemo(
+    () => reviewMarkdownForDisplay(latestMarkdown),
+    [latestMarkdown]
+  );
   const transcriptText = useMemo(() => formatTranscript(snapshot), [snapshot]);
   const durationSeconds = Math.max(
     0,
@@ -114,7 +122,7 @@ export default function MeetingReviewClient({
           <button
             className="pill-btn primary"
             type="button"
-            onClick={() => void copy("review", latestMarkdown)}
+            onClick={() => void copy("review", displayMarkdown)}
           >
             <MaterialIcon name="article" />
             Copy latest review
@@ -144,7 +152,7 @@ export default function MeetingReviewClient({
           </div>
           <article className="markdown-document review-markdown">
             {latestMarkdown ? (
-              <MarkdownDocument markdown={latestMarkdown} />
+              <MarkdownDocument markdown={displayMarkdown} />
             ) : (
               <p className="empty-state">No review document was saved.</p>
             )}
@@ -165,8 +173,8 @@ export default function MeetingReviewClient({
             ) : (
               snapshot.transcript.map((line) => (
                 <article className="transcript-line" key={line.id}>
-                  <div className={`speaker-badge speaker-${speakerNumber(line.speakerLabel)}`}>
-                    S{speakerNumber(line.speakerLabel)}
+                  <div className={`speaker-badge ${speakerBadgeClass(line.speakerLabel)}`}>
+                    {speakerBadgeLabel(line.speakerLabel)}
                   </div>
                   <div>
                     <span>{line.speakerLabel}</span>
@@ -260,11 +268,14 @@ async function copyText(value: string): Promise<void> {
 }
 
 function downloadSlug(title: string): string {
-  return (
+  const slug =
     title
       .replace(/[^a-z0-9]+/gi, "-")
       .replace(/^-|-$/g, "")
-      .toLowerCase() || "roompulse-meeting"
+      .toLowerCase() || "roompulse-meeting";
+  return (
+    slug.slice(0, MAX_DOWNLOAD_SLUG_LENGTH).replace(/-$/g, "") ||
+    "roompulse-meeting"
   );
 }
 
@@ -292,9 +303,4 @@ function formatElapsed(totalSeconds: number): string {
   const seconds = totalSeconds % 60;
   if (minutes === 0) return `${seconds}s`;
   return `${minutes}m ${seconds.toString().padStart(2, "0")}s`;
-}
-
-function speakerNumber(label: string): number {
-  const match = label.match(/\d+/);
-  return match ? Number(match[0]) : 1;
 }

@@ -1,4 +1,8 @@
-import type { TranscriptLine, TranscriptSource } from "./facilitator";
+import {
+  MAX_HEARTBEAT_INPUT_TEXT_LENGTH,
+  type TranscriptLine,
+  type TranscriptSource
+} from "./facilitator";
 
 export interface AddTranscriptLineInput {
   speakerId: string;
@@ -19,7 +23,7 @@ export class TranscriptStore {
       id,
       speakerId: input.speakerId,
       speakerLabel: input.speakerLabel,
-      text: input.text.trim(),
+      text: input.text.trim().slice(0, MAX_HEARTBEAT_INPUT_TEXT_LENGTH),
       timestamp,
       source: input.source,
       confidence: input.confidence ?? 1

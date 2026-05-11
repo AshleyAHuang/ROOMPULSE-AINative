@@ -28,6 +28,10 @@ export interface SpeakerTrackerOptions {
 }
 
 const DEFAULT_DISTANCE_THRESHOLD = 0.22;
+export const MAX_OBSERVED_SPEAKER_LABELS = 24;
+export const MAX_SPEAKER_LABEL_LENGTH = 80;
+export const MAX_SPEAKER_BADGE_NUMBER = 99;
+export const SPEAKER_BADGE_COLOR_COUNT = 6;
 
 export class SpeakerTracker {
   private readonly distanceThreshold: number;
@@ -41,13 +45,17 @@ export class SpeakerTracker {
   }
 
   assignSpeaker(features: VoiceFeatures): SpeakerCluster {
-    const nearest = this.findNearest(features);
+    const safeFeatures = normalizeVoiceFeatures(features);
+    const nearest = this.findNearest(safeFeatures);
 
-    if (!nearest || nearest.distance > this.distanceThreshold) {
+    if (
+      (!nearest || nearest.distance > this.distanceThreshold) &&
+      this.clusters.length < MAX_OBSERVED_SPEAKER_LABELS
+    ) {
       const cluster: SpeakerCluster = {
         id: `speaker-${this.clusters.length + 1}`,
         label: `Speaker ${this.clusters.length + 1}`,
-        centroid: { ...features },
+        centroid: { ...safeFeatures },
         samples: 1,
         lastSeenAt: this.now()
       };
@@ -55,20 +63,26 @@ export class SpeakerTracker {
       return { ...cluster, centroid: { ...cluster.centroid } };
     }
 
-    const cluster = nearest.cluster;
+    const cluster = nearest?.cluster ?? this.clusters[this.clusters.length - 1];
     const samples = cluster.samples + 1;
+    const updateWeight = centroidUpdateWeight(
+      nearest?.distance ?? this.distanceThreshold,
+      this.distanceThreshold,
+      samples
+    );
     cluster.centroid = {
       spectralCentroid:
-        (cluster.centroid.spectralCentroid * cluster.samples +
-          features.spectralCentroid) /
-        samples,
-      rms: (cluster.centroid.rms * cluster.samples + features.rms) / samples,
+        cluster.centroid.spectralCentroid * (1 - updateWeight) +
+        safeFeatures.spectralCentroid * updateWeight,
+      rms:
+        cluster.centroid.rms * (1 - updateWeight) +
+        safeFeatures.rms * updateWeight,
       zeroCrossingRate:
-        (cluster.centroid.zeroCrossingRate * cluster.samples +
-          features.zeroCrossingRate) /
-        samples,
+        cluster.centroid.zeroCrossingRate * (1 - updateWeight) +
+        safeFeatures.zeroCrossingRate * updateWeight,
       pitch:
-        (cluster.centroid.pitch * cluster.samples + features.pitch) / samples
+        cluster.centroid.pitch * (1 - updateWeight) +
+        safeFeatures.pitch * updateWeight
     };
     cluster.samples = samples;
     cluster.lastSeenAt = this.now();
@@ -122,20 +136,32 @@ export class SpeakerTracker {
   }
 }
 
+function centroidUpdateWeight(
+  distance: number,
+  threshold: number,
+  samples: number
+): number {
+  const averageWeight = 1 / Math.max(1, samples);
+  if (threshold <= 0) {
+    return averageWeight;
+  }
+
+  const confidence = Math.max(0, Math.min(1, 1 - distance / threshold));
+  const guardedWeight = 0.04 + confidence * 0.46;
+  return Math.min(averageWeight, guardedWeight);
+}
+
 export function createParticipationStatus(
   expectedParticipants: number,
   observedLabels: string[]
 ): ParticipationStatus {
   const expected = Number.isFinite(expectedParticipants)
-    ? Math.max(0, Math.floor(expectedParticipants))
+    ? Math.min(
+        MAX_OBSERVED_SPEAKER_LABELS,
+        Math.max(0, Math.floor(expectedParticipants))
+      )
     : 0;
-  const uniqueLabels = Array.from(
-    new Set(
-      observedLabels
-        .map((label) => label.trim())
-        .filter((label) => label.length > 0)
-    )
-  );
+  const uniqueLabels = normalizeObservedSpeakerLabels(observedLabels);
   const observed = uniqueLabels.length;
   const missingCount = Math.max(0, expected - observed);
 
@@ -150,6 +176,81 @@ export function createParticipationStatus(
         ? `${missingCount} ${missingCount === 1 ? "person has" : "people have"} not been heard yet. Invite quieter voices before moving on.`
         : null
   };
+}
+
+export function normalizeObservedSpeakerLabels(observedLabels: string[]): string[] {
+  const uniqueLabels: string[] = [];
+  const seen = new Set<string>();
+
+  for (const rawLabel of observedLabels) {
+    const label = normalizeSpeakerLabel(rawLabel);
+    if (!label || seen.has(label)) {
+      continue;
+    }
+
+    seen.add(label);
+    uniqueLabels.push(label);
+    if (uniqueLabels.length >= MAX_OBSERVED_SPEAKER_LABELS) {
+      break;
+    }
+  }
+
+  return uniqueLabels;
+}
+
+export function normalizeSpeakerLabel(value: string): string | null {
+  const compacted = value
+    .replace(/[\u0000-\u001F\u007F]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+  if (!compacted) {
+    return null;
+  }
+
+  const numberedSpeakerMatch = compacted.match(/^speaker\s+0*(\d+)$/i);
+  if (numberedSpeakerMatch) {
+    const speakerNumber = Number(numberedSpeakerMatch[1]);
+    if (Number.isSafeInteger(speakerNumber) && speakerNumber > 0) {
+      return `Speaker ${speakerNumber}`;
+    }
+    return null;
+  }
+
+  if (compacted.length <= MAX_SPEAKER_LABEL_LENGTH) {
+    return compacted;
+  }
+
+  return `${compacted.slice(0, MAX_SPEAKER_LABEL_LENGTH - 3)}...`;
+}
+
+export function speakerBadgeNumber(label: string): number {
+  const normalizedLabel = normalizeSpeakerLabel(label);
+  const match = normalizedLabel?.match(/^Speaker (\d+)$/);
+  const value = match ? Number(match[1]) : 1;
+  return Number.isSafeInteger(value) && value > 0 ? value : 1;
+}
+
+export function speakerBadgeLabel(label: string): string {
+  const value = speakerBadgeNumber(label);
+  return value > MAX_SPEAKER_BADGE_NUMBER
+    ? `S${MAX_SPEAKER_BADGE_NUMBER}+`
+    : `S${value}`;
+}
+
+export function speakerBadgeClass(label: string): string {
+  const value = speakerBadgeNumber(label);
+  const colorNumber = ((value - 1) % SPEAKER_BADGE_COLOR_COUNT) + 1;
+  return `speaker-${colorNumber}`;
+}
+
+export function isSafeSpeakerLabel(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim() === value &&
+    value.length > 0 &&
+    value.length <= MAX_SPEAKER_LABEL_LENGTH &&
+    !/[\u0000-\u001F\u007F]/.test(value)
+  );
 }
 
 export function voiceFeatureDistance(
@@ -197,8 +298,24 @@ function normalizeDifference(left: number, right: number, range: number): number
   if (range <= 0) {
     return 0;
   }
+  if (!Number.isFinite(left) || !Number.isFinite(right)) {
+    return 1;
+  }
 
   return Math.min(1, Math.abs(left - right) / range);
+}
+
+function normalizeVoiceFeatures(features: VoiceFeatures): VoiceFeatures {
+  return {
+    spectralCentroid: finiteOrZero(features.spectralCentroid),
+    rms: finiteOrZero(features.rms),
+    zeroCrossingRate: finiteOrZero(features.zeroCrossingRate),
+    pitch: finiteOrZero(features.pitch)
+  };
+}
+
+function finiteOrZero(value: number): number {
+  return Number.isFinite(value) ? value : 0;
 }
 
 function calculateSpectralCentroid(

@@ -6,6 +6,7 @@ import {
 import {
   MAX_AGENDA_ITEMS,
   MAX_EXPECTED_PARTICIPANTS,
+  MAX_FACILITATOR_OUTPUT_TEXT_LENGTH,
   MAX_HEARTBEAT_INTERVAL_SECONDS,
   MAX_PARTICIPANT_ENTRIES,
   MIN_HEARTBEAT_INTERVAL_SECONDS,
@@ -18,8 +19,15 @@ export const dynamic = "force-dynamic";
 const MAX_TIMESTAMP_FUTURE_SKEW_MS = 5 * 60 * 1000;
 
 export async function GET() {
-  const meetings = await listMeetingLogs();
-  return NextResponse.json({ meetings });
+  try {
+    const meetings = await listMeetingLogs();
+    return NextResponse.json({ meetings });
+  } catch (error) {
+    return NextResponse.json(
+      { error: routeErrorMessage(error, "Meeting log list failed") },
+      { status: 500 }
+    );
+  }
 }
 
 export async function POST(request: Request) {
@@ -52,7 +60,7 @@ export async function POST(request: Request) {
     return NextResponse.json(metadata, { status: 201 });
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Meeting log failed" },
+      { error: routeErrorMessage(error, "Meeting log failed") },
       { status: 500 }
     );
   }
@@ -84,7 +92,7 @@ function isMeeting(value: unknown): value is MeetingConfig {
 function isAgendaItem(value: unknown): boolean {
   return (
     isRecord(value) &&
-    isNonEmptyString(value.id) &&
+    isBoundedNonEmptyString(value.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH) &&
     isNonEmptyString(value.title) &&
     typeof value.done === "boolean"
   );
@@ -113,6 +121,13 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function isBoundedNonEmptyString(
+  value: unknown,
+  maxLength: number
+): value is string {
+  return isNonEmptyString(value) && value.length <= maxLength;
+}
+
 function isIntegerAtLeast(value: unknown, min: number): value is number {
   return (
     typeof value === "number" &&
@@ -137,4 +152,15 @@ function isValidTimestamp(value: number): boolean {
     !Number.isNaN(new Date(value).getTime()) &&
     value <= Date.now() + MAX_TIMESTAMP_FUTURE_SKEW_MS
   );
+}
+
+function routeErrorMessage(error: unknown, fallback: string): string {
+  return capText(
+    error instanceof Error ? error.message : fallback,
+    MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+  );
+}
+
+function capText(value: string, maxLength: number): string {
+  return value.length <= maxLength ? value : value.slice(0, maxLength);
 }
