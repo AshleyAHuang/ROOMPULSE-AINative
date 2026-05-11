@@ -1462,6 +1462,71 @@ describe("RoomPulseApp", () => {
       .toBeVisible();
   });
 
+  it("caps oversized heartbeat route errors before showing them in the room", async () => {
+    const oversizedError = "E".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH + 1);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url === "/api/meetings" && method === "GET") {
+        return Response.json({ meetings: [] });
+      }
+      if (url.includes("/api/review-document/init")) {
+        return Response.json({
+          source: "pi",
+          markdown: "# Heartbeat route error cap",
+          summary: "Initialized."
+        });
+      }
+      if (url === "/api/meetings" && method === "POST") {
+        return Response.json(
+          {
+            id: "heartbeat-error-cap-session",
+            title: "Heartbeat route error cap",
+            goal: "Keep route errors bounded.",
+            startedAt: Date.now(),
+            updatedAt: Date.now(),
+            endedAt: null,
+            status: "active",
+            isPaused: false,
+            eventCount: 0,
+            meeting: {},
+            state: null,
+            latestReviewMarkdown: "",
+            latestReviewVersionId: null
+          },
+          { status: 201 }
+        );
+      }
+      if (url === "/api/heartbeat") {
+        return Response.json(
+          { error: oversizedError, piRequired: true },
+          { status: 500 }
+        );
+      }
+      if (url.includes("/events")) {
+        return Response.json({ id: "event-1" }, { status: 201 });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /run heartbeat/i }));
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("E".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH))
+      ).toBeVisible();
+    });
+    expect(screen.queryByText(oversizedError)).not.toBeInTheDocument();
+  });
+
   it("versions the markdown produced by an update_review_document tool", async () => {
     const toolMarkdown = "# Tool markdown\n\nUpdated through the UI tool.";
     const fetchMock = vi.fn(

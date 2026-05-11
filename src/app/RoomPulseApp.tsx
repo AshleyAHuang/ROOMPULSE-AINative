@@ -747,7 +747,10 @@ export default function RoomPulseApp() {
       if (!shouldApplyHeartbeatResult()) {
         return;
       }
-      const message = error instanceof Error ? error.message : String(error);
+      const message = capText(
+        error instanceof Error ? error.message : String(error),
+        MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+      );
       setHeartbeatError(
         isAbortError(error)
           ? `Pi heartbeat timed out after ${getClientPiTimeoutMs()}ms`
