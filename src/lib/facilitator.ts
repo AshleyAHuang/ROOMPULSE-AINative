@@ -509,23 +509,27 @@ export function createHeartbeatInput({
 
 export function compactMeetingForAdapter(meeting: MeetingConfig): MeetingConfig {
   return {
-    title: capText(meeting.title, MAX_HEARTBEAT_INPUT_TEXT_LENGTH),
-    goal: capText(meeting.goal, MAX_HEARTBEAT_INPUT_TEXT_LENGTH),
-    context: capText(meeting.context, MAX_HEARTBEAT_INPUT_TEXT_LENGTH),
+    title: compactMeetingText(meeting.title),
+    goal: compactMeetingText(meeting.goal),
+    context: compactMeetingText(meeting.context),
     agenda: meeting.agenda.map((item) => ({
       id: capText(item.id, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH),
-      title: capText(item.title, MAX_HEARTBEAT_INPUT_TEXT_LENGTH),
+      title: compactMeetingText(item.title),
       done: item.done
     })),
     participants: meeting.participants.map((participant) => ({
-      name: capText(participant.name, MAX_HEARTBEAT_INPUT_TEXT_LENGTH),
+      name: compactMeetingText(participant.name),
       ...(participant.role === undefined
         ? {}
-        : { role: capText(participant.role, MAX_HEARTBEAT_INPUT_TEXT_LENGTH) })
+        : { role: compactMeetingText(participant.role) })
     })),
     expectedParticipants: meeting.expectedParticipants,
     heartbeatIntervalSeconds: meeting.heartbeatIntervalSeconds
   };
+}
+
+function compactMeetingText(value: string): string {
+  return capText(value.trim(), MAX_HEARTBEAT_INPUT_TEXT_LENGTH);
 }
 
 function compactTranscriptForHeartbeat(

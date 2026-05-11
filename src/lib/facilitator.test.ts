@@ -305,6 +305,42 @@ describe("heartbeat facilitation", () => {
     expect(input.transcript[0].text).toHaveLength(MAX_HEARTBEAT_INPUT_TEXT_LENGTH);
   });
 
+  it("trims meeting text before capping it for adapters and storage", () => {
+    const input = createHeartbeatInput({
+      meeting: {
+        ...meeting,
+        title: `${" ".repeat(MAX_HEARTBEAT_INPUT_TEXT_LENGTH + 5)}Recovered title`,
+        goal: `${" ".repeat(MAX_HEARTBEAT_INPUT_TEXT_LENGTH + 5)}Recovered goal`,
+        context: `${" ".repeat(MAX_HEARTBEAT_INPUT_TEXT_LENGTH + 5)}Recovered context`,
+        agenda: [
+          {
+            id: "a1",
+            title: `${" ".repeat(MAX_HEARTBEAT_INPUT_TEXT_LENGTH + 5)}Recovered agenda`,
+            done: false
+          }
+        ],
+        participants: [
+          {
+            name: `${" ".repeat(MAX_HEARTBEAT_INPUT_TEXT_LENGTH + 5)}Recovered name`,
+            role: `${" ".repeat(MAX_HEARTBEAT_INPUT_TEXT_LENGTH + 5)}Recovered role`
+          }
+        ]
+      },
+      transcript,
+      observedSpeakerLabels: ["Speaker 1"],
+      lastHeartbeatAt: 0,
+      now: 2_000,
+      priorInterventions: []
+    });
+
+    expect(input.meeting.title).toBe("Recovered title");
+    expect(input.meeting.goal).toBe("Recovered goal");
+    expect(input.meeting.context).toBe("Recovered context");
+    expect(input.meeting.agenda[0].title).toBe("Recovered agenda");
+    expect(input.meeting.participants[0].name).toBe("Recovered name");
+    expect(input.meeting.participants[0].role).toBe("Recovered role");
+  });
+
   it("strips extra fields before heartbeat adapters see compacted input", () => {
     const input = createHeartbeatInput({
       meeting: {
