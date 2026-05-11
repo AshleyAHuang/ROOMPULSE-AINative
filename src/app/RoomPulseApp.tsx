@@ -12,11 +12,14 @@ import MarkdownDocument from "./MarkdownDocument";
 import {
   MAX_AGENDA_ITEMS,
   MAX_EXPECTED_PARTICIPANTS,
+  MAX_FACILITATOR_OUTPUT_TEXT_LENGTH,
   MAX_HEARTBEAT_INTERVAL_SECONDS,
   MAX_HEARTBEAT_INPUT_TEXT_LENGTH,
+  MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH,
   MAX_PARTICIPANT_ENTRIES,
   MIN_HEARTBEAT_INTERVAL_SECONDS,
   capFacilitatorOutput,
+  compactReviewMarkdownForHeartbeat,
   createHeartbeatInput,
   createInitialReviewMarkdown,
   getAgendaProgress,
@@ -3852,14 +3855,16 @@ function normalizeInitialReviewDocument(
     source,
     markdown:
       typeof value.markdown === "string" && value.markdown.trim()
-        ? value.markdown
+        ? compactReviewMarkdownForHeartbeat(value.markdown)
         : createInitialReviewMarkdown(meeting),
     summary:
       typeof value.summary === "string" && value.summary.trim()
-        ? value.summary
+        ? capText(value.summary, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH)
         : "Initialized the meeting review document.",
     adapterNotice:
-      typeof value.adapterNotice === "string" ? value.adapterNotice : undefined
+      typeof value.adapterNotice === "string"
+        ? capText(value.adapterNotice, MAX_FACILITATOR_OUTPUT_TEXT_LENGTH)
+        : undefined
   };
 }
 
@@ -3935,9 +3940,11 @@ function parseParticipants(value: string) {
 }
 
 function capSetupText(value: string): string {
-  return value.length <= MAX_HEARTBEAT_INPUT_TEXT_LENGTH
-    ? value
-    : value.slice(0, MAX_HEARTBEAT_INPUT_TEXT_LENGTH);
+  return capText(value, MAX_HEARTBEAT_INPUT_TEXT_LENGTH);
+}
+
+function capText(value: string, maxLength: number): string {
+  return value.length <= maxLength ? value : value.slice(0, maxLength);
 }
 
 function clampFiniteNumber(

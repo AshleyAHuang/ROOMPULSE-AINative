@@ -419,6 +419,10 @@ function compactMiddleText(text: string, maxLength: number): string {
     .trimStart()}`;
 }
 
+export function compactReviewMarkdownForHeartbeat(markdown: string): string {
+  return compactMiddleText(markdown, MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH);
+}
+
 export interface CreateHeartbeatInputArgs {
   meeting: MeetingConfig;
   transcript: TranscriptLine[];
@@ -455,9 +459,8 @@ export function createHeartbeatInput({
   );
   const compactPriorInterventions = compactTimelineHistory(priorInterventions);
   const compactReviewVersions = compactReviewHistory(reviewVersions ?? []);
-  const compactReviewMarkdown = compactMiddleText(
-    currentReviewMarkdown ?? createInitialReviewMarkdown(compactMeeting),
-    MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH
+  const compactReviewMarkdown = compactReviewMarkdownForHeartbeat(
+    currentReviewMarkdown ?? createInitialReviewMarkdown(compactMeeting)
   );
 
   return {

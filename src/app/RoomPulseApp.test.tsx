@@ -17,6 +17,7 @@ import RoomPulseApp, {
 import {
   MAX_AGENDA_ITEMS,
   MAX_EXPECTED_PARTICIPANTS,
+  MAX_FACILITATOR_OUTPUT_TEXT_LENGTH,
   MAX_HEARTBEAT_INTERVAL_SECONDS,
   MAX_HEARTBEAT_INPUT_TEXT_LENGTH,
   MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH
@@ -781,6 +782,75 @@ describe("RoomPulseApp", () => {
         MAX_HEARTBEAT_INPUT_TEXT_LENGTH
       );
     });
+  });
+
+  it("caps oversized initial-review route output before rendering and logging", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url === "/api/meetings" && method === "GET") {
+        return Response.json({ meetings: [] });
+      }
+      if (url.includes("/api/review-document/init")) {
+        return Response.json({
+          source: "pi",
+          markdown: "R".repeat(MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH + 1),
+          summary: "S".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH + 1),
+          adapterNotice: "N".repeat(MAX_FACILITATOR_OUTPUT_TEXT_LENGTH + 1)
+        });
+      }
+      if (url === "/api/meetings" && method === "POST") {
+        return Response.json(
+          {
+            id: "initial-cap-session",
+            title: "Initial cap",
+            goal: "Keep initialization bounded.",
+            startedAt: Date.now(),
+            updatedAt: Date.now(),
+            endedAt: null,
+            status: "active",
+            isPaused: false,
+            eventCount: 0,
+            meeting: {},
+            state: null,
+            latestReviewMarkdown: "",
+            latestReviewVersionId: null
+          },
+          { status: 201 }
+        );
+      }
+      if (url.includes("/events")) {
+        events.push(JSON.parse(String(init?.body ?? "{}")));
+        return Response.json({ id: `event-${events.length}` }, { status: 201 });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RoomPulseApp />);
+    await openSetupScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /start meeting/i }));
+    });
+
+    await waitFor(() => {
+      const reviewEvent = events.find(
+        (event) => event.type === "review_initialized"
+      );
+      const reviewVersion = reviewEvent?.payload.reviewVersion as
+        | { markdown: string; summary: string }
+        | undefined;
+      expect(reviewVersion?.markdown).toHaveLength(
+        MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH
+      );
+      expect(reviewVersion?.summary).toHaveLength(
+        MAX_FACILITATOR_OUTPUT_TEXT_LENGTH
+      );
+    });
+    expect(screen.getByText(/document ready/i)).toBeVisible();
+    expect(screen.queryByText("R".repeat(MAX_HEARTBEAT_REVIEW_MARKDOWN_LENGTH + 1)))
+      .not.toBeInTheDocument();
   });
 
   it("moves now discussing to the next open agenda item when the active item is completed", async () => {
