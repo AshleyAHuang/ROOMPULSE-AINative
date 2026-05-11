@@ -1088,7 +1088,7 @@ def parse_positive_int_value(raw: object, default: int) -> int:
         return default
     try:
         value = int(raw)
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return default
     return value if value > 0 else default
 
@@ -1450,7 +1450,7 @@ def wespeaker_gpu_index() -> int:
 def parse_nonnegative_int_value(raw: object, default: int) -> int:
     try:
         value = int(raw)
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return default
     return value if value >= 0 else default
 
