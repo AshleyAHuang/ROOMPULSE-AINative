@@ -1,7 +1,7 @@
 {
   "name": "roompulse",
   "version": "1.0.0",
-  "description": "Room-visible AI meeting facilitator MVP.",
+  "description": "Room-visible AI meeting facilitator with local transcription, heartbeat reviews, and session exports.",
   "private": true,
   "type": "module",
   "engines": {
